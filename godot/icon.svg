@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128">
+  <rect width="128" height="128" fill="#1a1208"/>
+  <rect x="16" y="16" width="96" height="96" fill="#c4a35a" stroke="#7a5a20" stroke-width="4"/>
+  <text x="64" y="78" text-anchor="middle" font-size="48" font-family="serif" fill="#1a1208">U7</text>
+</svg>

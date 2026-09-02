@@ -1,0 +1,12 @@
+godot/.godot/
+godot/.vs/
+godot/*.csproj.user
+godot/.mono/
+**/.DS_Store
+Thumbs.db
+
+# Original game data, Exult source and extracted assets are not tracked.
+# See README.md for how to provide them.
+/u7/
+/exult/
+/assets/

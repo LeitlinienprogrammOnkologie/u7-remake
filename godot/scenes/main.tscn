@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3 uid="uid://c7u7mainscene01"]
+
+[ext_resource type="Script" path="res://scripts/Game/U7Game.cs" id="1_game"]
+
+[node name="U7Game" type="Node2D"]
+texture_filter = 0
+script = ExtResource("1_game")

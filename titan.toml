@@ -1,0 +1,9 @@
+[u7bg.game]
+base    = "C:/Users/wenzel/source/repos/u7-remake/u7"
+variant = "blackgate"
+
+[u7bg.paths]
+static  = "STATIC"
+shapes  = "STATIC/SHAPES.VGA"
+palette = "STATIC/PALETTES.FLX"
+gamedat = "GAMEDAT"
