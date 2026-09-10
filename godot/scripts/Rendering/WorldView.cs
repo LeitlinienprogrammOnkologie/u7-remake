@@ -22,7 +22,9 @@ public partial class WorldView : Node2D
     readonly Dictionary<Vector2I, Texture2D> _chunkFlats = new();
     readonly Queue<Vector2I> _chunkOrder = new();
     const int MaxCachedChunks = 220;
-    readonly List<U7Object> _drawList = new(512);
+    uint _renderSeq;
+    uint _frameNo;
+    int _paintCounter;
 
     public override void _Ready()
     {
@@ -44,6 +46,8 @@ public partial class WorldView : Node2D
 
         SkipAboveLift = Map.RoofHeight(Avatar.Tx, Avatar.Ty, Avatar.Tz);
         InDungeonLift = Map.DungeonHeight(Avatar.Tx, Avatar.Ty);
+        _frameNo++;
+        _paintCounter = 0;
 
         var cam = GetViewport().GetCamera2D();
         var view = GetViewport().GetVisibleRect().Size;
@@ -77,35 +81,40 @@ public partial class WorldView : Node2D
             }
         }
 
-        _drawList.Clear();
+        var ticks = Time.GetTicksMsec();
+
+        // Exult Game_render::paint_map: flat RLE objects for every chunk first ...
+        for (var cy = c0y; cy <= c1y; cy++)
+        {
+            for (var cx = c0x; cx <= c1x; cx++)
+            {
+                Map.EnsureChunkOrdered(cx, cy);
+                foreach (var obj in Map.ObjectsInChunk(cx, cy))
+                {
+                    if (obj.IsFlat && !obj.Removed && !obj.InvisibleEgg && obj.Container is null)
+                    {
+                        DrawObject(obj, ticks);
+                    }
+                }
+            }
+        }
+
+        // ... then non-flat objects chunk by chunk, each after its dependencies.
+        _renderSeq++;
         for (var cy = c0y; cy <= c1y; cy++)
         {
             for (var cx = c0x; cx <= c1x; cx++)
             {
                 var list = Map.ObjectsInChunk(cx, cy);
-                foreach (var obj in list)
+                for (var i = 0; i < list.Count; i++)
                 {
-                    if (obj.InvisibleEgg || obj.Tz >= SkipAboveLift)
+                    var obj = list[i];
+                    if (!obj.IsFlat && obj.RenderSeq != _renderSeq)
                     {
-                        continue;
+                        PaintObject(obj, ticks);
                     }
-
-                    _drawList.Add(obj);
                 }
             }
-        }
-
-        _drawList.Sort((a, b) => a.RenderOrder.CompareTo(b.RenderOrder));
-        var ticks = Time.GetTicksMsec();
-        foreach (var obj in _drawList)
-        {
-            if (obj.Removed || obj.Container is not null)
-            {
-                continue;
-            }
-
-            DrawObject(obj, ticks);
-            DrawBark(obj, ticks);
         }
 
         if (InDungeonLift != 0 && InDungeonLift >= SkipAboveLift)
@@ -124,34 +133,26 @@ public partial class WorldView : Node2D
             return null;
         }
 
-        SkipAboveLift = Map.RoofHeight(Avatar.Tx, Avatar.Ty, Avatar.Tz);
-        InDungeonLift = Map.DungeonHeight(Avatar.Tx, Avatar.Ty);
-
+        // Pick what is visibly on top: the object painted last in the most recent frame.
         var tile = WorldToTile(world);
         var cx = tile.Tx / U7Constants.TilesPerChunk;
         var cy = tile.Ty / U7Constants.TilesPerChunk;
         U7Object? best = null;
-        var bestOrder = int.MinValue;
+        var bestStamp = long.MinValue;
         for (var dy = -2; dy <= 2; dy++)
         {
             for (var dx = -2; dx <= 2; dx++)
             {
                 foreach (var obj in Map.ObjectsInChunk(cx + dx, cy + dy))
                 {
-                    if (obj.Removed || obj.Container is not null || obj.InvisibleEgg ||
-                        obj.Tz >= SkipAboveLift)
+                    if (!PaintedRecently(obj) || !SpriteContains(obj, world))
                     {
                         continue;
                     }
 
-                    if (!SpriteContains(obj, world))
+                    if (obj.PaintStamp >= bestStamp)
                     {
-                        continue;
-                    }
-
-                    if (obj.RenderOrder >= bestOrder)
-                    {
-                        bestOrder = obj.RenderOrder;
+                        bestStamp = obj.PaintStamp;
                         best = obj;
                     }
                 }
@@ -161,26 +162,24 @@ public partial class WorldView : Node2D
         return best ?? PickByTile(tile);
     }
 
+    /// <summary>Drawn in this or the previous frame (PickObject may run before this frame's _Draw).</summary>
+    bool PaintedRecently(U7Object obj) =>
+        !obj.Removed && obj.Container is null && (obj.PaintStamp >> 32) + 1 >= _frameNo;
+
     U7Object? PickByTile(TileCoord tile)
     {
         U7Object? best = null;
-        var bestOrder = int.MinValue;
+        var bestStamp = long.MinValue;
         foreach (var obj in Map.ObjectsInChunk(tile.ChunkX, tile.ChunkY))
         {
-            if (obj.Removed || obj.Container is not null || obj.InvisibleEgg ||
-                obj.Tz >= SkipAboveLift)
+            if (!PaintedRecently(obj) || !obj.Occupies(tile.Tx, tile.Ty))
             {
                 continue;
             }
 
-            if (!obj.Occupies(tile.Tx, tile.Ty))
+            if (obj.PaintStamp >= bestStamp)
             {
-                continue;
-            }
-
-            if (obj.RenderOrder >= bestOrder)
-            {
-                bestOrder = obj.RenderOrder;
+                bestStamp = obj.PaintStamp;
                 best = obj;
             }
         }
@@ -254,6 +253,35 @@ public partial class WorldView : Node2D
         DrawString(font, pos, obj.BarkText, HorizontalAlignment.Left, -1, 5, new Color(1f, 0.95f, 0.55f));
     }
 
+    /// <summary>Exult <c>Game_render::paint_object</c>: dependencies first, then the object.</summary>
+    void PaintObject(U7Object obj, ulong ticks)
+    {
+        if (obj.Tz >= SkipAboveLift)
+        {
+            return;
+        }
+
+        obj.RenderSeq = _renderSeq;
+        if (obj.Dependencies is { Count: > 0 } deps)
+        {
+            foreach (var dep in deps)
+            {
+                if (dep.RenderSeq != _renderSeq && !dep.Removed)
+                {
+                    PaintObject(dep, ticks);
+                }
+            }
+        }
+
+        if (obj.Removed || obj.Container is not null || obj.InvisibleEgg)
+        {
+            return;
+        }
+
+        DrawObject(obj, ticks);
+        DrawBark(obj, ticks);
+    }
+
     void DrawObject(U7Object obj, ulong ticks)
     {
         var info = Catalog[obj.Shape];
@@ -280,6 +308,7 @@ public partial class WorldView : Node2D
         var pos = new Vector2(hx - fi.XLeft, hy - fi.YAbove);
         var hit = ticks < obj.HitUntilMsec;
         DrawTexture(tex, pos, hit ? new Color(1f, 0.35f, 0.35f) : Colors.White);
+        obj.PaintStamp = ((long)_frameNo << 32) | (uint)(++_paintCounter);
     }
 
     void PaintDungeonBlackness(int c0x, int c0y, int c1x, int c1y)

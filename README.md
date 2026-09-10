@@ -14,7 +14,7 @@ source tree and the extracted assets are **not tracked** (see
 - Python 3.12 or newer
 - The `titan` CLI from the `titan-ultima` package: `pip install titan-ultima`
 - Ultima VII: The Black Gate from GOG (sold as *Ultima 7 Complete*)
-- The Exult 1.12.1 source release
+- The Exult 1.12.1 source release (optional, reference only)
 
 ## 1. Game data: `u7/`
 
@@ -34,14 +34,12 @@ exists, so the folder name and position are fixed.
 `titan.toml` at the repository root carries an absolute `base` path for
 the `titan` CLI. Point it at your own `u7/` directory.
 
-## 2. Exult source: `exult/exult-1.12.1/`
+## 2. Exult source: `exult/exult-1.12.1/` (optional)
 
-Unpack the Exult 1.12.1 source tarball so that
-`exult/exult-1.12.1/data/bg/paperdol_info.txt` exists. The tree is the
-port's reference, and the paper-doll layout is currently read from that
-file at runtime. Without it items still equip, but through a cruder
-fallback, so a checkout without the tree behaves differently in the
-inventory gump.
+Unpack the Exult 1.12.1 source tarball here if you want the port's
+reference at hand. Nothing reads it at runtime: the data tables the game
+needs (paper-doll layout, bodies) are copied into `godot/data/bg/` and
+`godot/scripts/Actors/Bodies.cs`, under Exult's GPL terms.
 
 ## 3. Extracted assets: `assets/`
 
@@ -58,6 +56,10 @@ disassembly and the CSV tables the game loads at startup
 scripts, `scripts/extract_endgame_flics.py` and `scripts/render_map.py`,
 produce the endgame frames and a full-map render and are not needed to
 play.
+
+Music plays through the Windows built-in MIDI synth from the MT-32 export
+in `assets/audio/music_mt32/`, converted to General MIDI at load with
+Exult's patch table; no soundfont or extra software is needed. On other platforms music is silent for now.
 
 ## 4. Run
 

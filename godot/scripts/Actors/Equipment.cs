@@ -84,10 +84,10 @@ public static class Equipment
             return false;
         }
 
-        UnequipSlot(actor, ReadySpot.Lhand);
+        UnequipSlot(actor, ReadySpot.Lhand, catalog);
         if (catalog[best.Shape].ReadyType == ReadySpot.BothHands)
         {
-            UnequipSlot(actor, ReadySpot.Rhand);
+            UnequipSlot(actor, ReadySpot.Rhand, catalog);
         }
 
         Equip(actor, best, ReadySpot.Lhand);
@@ -149,7 +149,7 @@ public static class Equipment
             return;
         }
 
-        UnequipSlot(actor, ReadySpot.Rhand);
+        UnequipSlot(actor, ReadySpot.Rhand, catalog);
         Equip(actor, best, ReadySpot.Rhand);
     }
 
@@ -179,7 +179,7 @@ public static class Equipment
     public static bool UsesNeck(U7Object actor, ShapeCatalog catalog)
     {
         if (GetReadied(actor, ReadySpot.Neck) is { } neck &&
-            catalog[neck.Shape].ReadyType == ReadySpot.Neck)
+            catalog[neck.Shape].ReadyType == ReadySpot.NeckFill)
         {
             return true;
         }
@@ -237,7 +237,8 @@ public static class Equipment
         var alt1 = rec.ReadyAlt1;
         var alt2 = rec.ReadyAlt2;
         var canScabbard = alt1 == ReadySpot.Scabbard || alt2 == ReadySpot.Scabbard;
-        var canNeck = rtype == ReadySpot.Neck || alt1 == ReadySpot.Neck || alt2 == ReadySpot.Neck;
+        // Exult: can_neck tests the 'neck' ready type (0x14), not the amulet spot.
+        var canNeck = rtype == ReadySpot.NeckFill || alt1 == ReadySpot.NeckFill || alt2 == ReadySpot.NeckFill;
         if (spot == ReadySpot.BothHands)
         {
             spot = ReadySpot.Lhand;
@@ -494,12 +495,32 @@ public static class Equipment
         obj.ReadySlot = slot;
     }
 
-    static void UnequipSlot(U7Object actor, int slot)
+    /// <summary>
+    /// Exult re-adds a displaced item with <c>add(obj, true)</c>: it lands in a
+    /// readied bag if one has room, otherwise loose in the main inventory with
+    /// a fresh gump position, never dangling at its old spot.
+    /// </summary>
+    static void UnequipSlot(U7Object actor, int slot, ShapeCatalog catalog)
     {
         var obj = GetReadied(actor, slot);
-        if (obj is not null)
+        if (obj is null)
         {
-            obj.ReadySlot = -1;
+            return;
+        }
+
+        obj.ReadySlot = -1;
+        obj.Tx = 255;
+        obj.Ty = 255;
+        foreach (var bagSlot in new[] { ReadySpot.Back, ReadySpot.Belt })
+        {
+            if (GetReadied(actor, bagSlot) is { } bag && bag != obj &&
+                Inventory.IsContainer(bag, catalog) && Inventory.CanAdd(bag, obj, catalog, true))
+            {
+                actor.Contents.Remove(obj);
+                obj.Container = bag;
+                bag.Contents.Add(obj);
+                return;
+            }
         }
     }
 

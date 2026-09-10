@@ -1,5 +1,6 @@
 using Godot;
 using U7.Actors;
+using U7.Audio;
 using U7.Core;
 using U7.Data;
 using U7.Gumps;
@@ -33,12 +34,15 @@ public partial class U7Game : Node2D
     GameClock _clock = null!;
     ScheduleRunner _schedules = null!;
     EggHatcher _eggs = null!;
+    MusicPlayer _music = null!;
+    PartyManager _party = null!;
     CombatEngine _combat = null!;
     List<U7Object?> _npcs = new();
     float _zoom = 4f;
     bool _ready;
     bool _debugOn;
     bool _suppressWalk;
+    int _lastSchunk = -1;
     string _statusExtra = "";
 
     public override void _Ready()
@@ -71,6 +75,10 @@ public partial class U7Game : Node2D
             try
             {
                 _npcs = NpcDat.Load(_map, avatar);
+                if (U7Constants.DebugStartOverride)
+                {
+                    _map.MoveObject(avatar, U7Constants.StartTileX, U7Constants.StartTileY, 0);
+                }
             }
             catch (Exception ex)
             {
@@ -79,13 +87,43 @@ public partial class U7Game : Node2D
             }
 
             _clock = new GameClock();
+            var gwin = SaveGame.ReadGwin(U7Paths.GameDatDir);
+            if (gwin is { } g0)
+            {
+                _clock.Set(g0.Day, g0.Hour, g0.Minute);
+            }
+
             var schedTable = ScheduleTable.Load();
             _schedules = new ScheduleRunner(_map, avatar, _npcs, schedTable, _clock);
+            _party = new PartyManager(_map, avatar, _npcs) { Schedules = _schedules };
+            _party.LinkParty();
+            _schedules.Party = _party;
+            _schedules.AvatarMoving = () => _avatar.IsPlayerMoving;
             _combat = new CombatEngine(_map, avatar, _catalog);
-            _eggs = new EggHatcher(_map, _clock) { Combat = _combat };
-            _avatar.Moved = (actor, fromTx, fromTy) => _eggs.Activate(actor, fromTx, fromTy);
+            _music = new MusicPlayer();
+            _eggs = new EggHatcher(_map, _clock) { Combat = _combat, Music = _music, Party = _party };
+            _avatar.Moved = (actor, fromTx, fromTy) =>
+            {
+                _eggs.Activate(actor, fromTx, fromTy);
+                _party.AvatarStepped(fromTx, fromTy);
+            };
             _combat.AvatarMoved = _avatar.Moved;
             _combat.Schedules = _schedules;
+            _combat.Party = _party;
+            _combat.Music = _music;
+            _combat.AdoptMonsters(NpcDat.LoadMonsters(_map));
+            if (gwin is { } g1)
+            {
+                if (g1.InCombat)
+                {
+                    _combat.SetInCombat(true);
+                }
+
+                if (g1.Track >= 0)
+                {
+                    _music.Start(g1.Track, g1.Repeat);
+                }
+            }
 
             _world = new WorldView
             {
@@ -197,7 +235,34 @@ public partial class U7Game : Node2D
             _usecode.Npcs = _npcs;
             _usecode.Clock = _clock;
             _usecode.Schedules = _schedules;
+            _usecode.Party = _party;
             _usecode.Combat = _combat;
+            _usecode.Music = _music;
+            _usecode.Eggs = _eggs;
+            _map.ScriptSaver = obj => _usecode.SaveScripts(obj);
+            foreach (var (obj, blob) in _map.PendingScripts)
+            {
+                _usecode.RestoreScript(obj, blob);
+            }
+
+            if (_map.PendingScripts.Count > 0)
+            {
+                GD.Print($"usecode scripts restored: {_map.PendingScripts.Count}");
+            }
+
+            _map.PendingScripts.Clear();
+            _usecode.AvatarMovedByScript = actor =>
+            {
+                _eggs.Activate(actor, actor.Tx, actor.Ty);
+                _party.AvatarStepped(actor.Tx, actor.Ty);
+            };
+            _combat.AvatarDied = () =>
+            {
+                _gumps.CloseAll(true);
+                _avatar.ClearPath();
+                GD.Print("avatar died: running death usecode 0x60E");
+                _usecode.Call(0x60E, avatar, UsecodeEvent.Weapon);
+            };
             _eggs.Usecode = _usecode;
             _usecode.Say += text => _say.Text = text;
             _usecode.AnswersChanged += RebuildAnswers;
@@ -267,7 +332,7 @@ public partial class U7Game : Node2D
             }
 
             GD.Print($"eggs within 80 tiles of avatar: {eggNear} (map total {_map.Eggs.Count})");
-            _eggs.Activate(avatar, -1, -1, must: true);
+            _eggs.Activate(avatar, -1, -1);
 
             _ready = true;
             GD.Print("Britannia loaded.");
@@ -284,11 +349,28 @@ public partial class U7Game : Node2D
         }
     }
 
+    public override void _ExitTree()
+    {
+        _music?.Dispose();
+    }
+
     public override void _Process(double delta)
     {
         if (!_ready)
         {
             return;
+        }
+
+        var avPos = _avatar.Avatar;
+        var schunk = (avPos.Ty / U7Constants.TilesPerSuperchunk) * 12 + avPos.Tx / U7Constants.TilesPerSuperchunk;
+        if (schunk != _lastSchunk)
+        {
+            _lastSchunk = schunk;
+            var gone = _map.CacheOut(avPos.Tx, avPos.Ty);
+            if (gone > 0)
+            {
+                GD.Print($"cache out: {gone} temporary objects");
+            }
         }
 
         Vector2I? click = null;
@@ -313,6 +395,7 @@ public partial class U7Game : Node2D
                     var fromTx = _avatar.Avatar.Tx;
                     var fromTy = _avatar.Avatar.Ty;
                     _map.MoveObject(_avatar.Avatar, tile.Tx, tile.Ty, _avatar.Avatar.Tz);
+                    _party.FollowTeleport();
                     _eggs.Activate(_avatar.Avatar, fromTx, fromTy);
                 }
             }
@@ -330,11 +413,22 @@ public partial class U7Game : Node2D
         var frozen = inUsecode || gumpBusy || _avatar.Avatar.IsDead;
         if (!inUsecode && !gumpBusy && !_avatar.Avatar.IsDead)
         {
-            _avatar.Update(delta, click, _combat.InCombat);
+            _avatar.Update(delta, click, _combat.IsAnimating(_avatar.Avatar));
         }
 
         _clock.Update(delta);
-        _world.Modulate = _world.Modulate.Lerp(_clock.WorldModulate, (float)Math.Min(1, delta * 2.5));
+        var targetModulate = _usecode is { FadedOut: true } ? Colors.Black : _clock.WorldModulate;
+        _world.Modulate = _world.Modulate.Lerp(targetModulate, (float)Math.Min(1, delta * 2.5));
+        _usecode?.TickScripts(delta);
+        if (_usecode is { RestartRequested: true })
+        {
+            _usecode.RestartRequested = false;
+            U7Paths.GameDatOverride = null;
+            GD.Print("restart requested by usecode");
+            GetTree().ReloadCurrentScene();
+            return;
+        }
+
         _schedules.Update(delta, frozen);
         _combat.Update(delta, frozen, _avatar.IsPlayerMoving);
 
@@ -368,8 +462,8 @@ public partial class U7Game : Node2D
         var extra = _usecode is { HudMessage.Length: > 0 } ? "" : _statusExtra;
         hud.Text =
             $"Ultima VII  {_clock.HudText()}  tile {av.Tx},{av.Ty}  lift {av.Tz}  zoom {_zoom:0.#}×\n" +
-            $"WASD/arrows walk · I inventory · C combat · F4 invincible · [ ] hour · click walk · double-click / E · F2 debug · F3 arena · Home Trinsic\n" +
-            $"hp {av.GetProp(ActorProp.Health)}  {(_combat.InCombat ? "combat" : "peace")}" +
+            $"WASD/arrows walk · I inventory · C combat · F4 invincible · [ ] hour · click walk · double-click / E · F2 debug · F3 arena · PgUp/PgDn lift · M music · F5/F9 save/load · F6 die · Home Trinsic\n" +
+            $"hp {av.GetProp(ActorProp.Health)}  {(_combat.InCombat ? "combat" : "peace")}{_party.HudText()}" +
             (av.IsDead ? "  dead" : "") +
             (_combat.AvatarInvincible ? "  invincible" : "") +
             $"  cursor {under.Tx},{under.Ty}  {name}" +
@@ -476,6 +570,7 @@ public partial class U7Game : Node2D
                     var fromTx = _avatar.Avatar.Tx;
                     var fromTy = _avatar.Avatar.Ty;
                     _map.MoveObject(_avatar.Avatar, U7Constants.StartTileX, U7Constants.StartTileY, 0);
+                    _party.FollowTeleport();
                     _eggs.Activate(_avatar.Avatar, fromTx, fromTy);
                     break;
                 }
@@ -513,8 +608,78 @@ public partial class U7Game : Node2D
                     _combat.SpawnArena();
                     _statusExtra = _combat.LastMessage;
                     break;
+                case Key.F6:
+                    // Debug: lethal hit on the avatar through the normal damage path.
+                    // Usecode 0x60E restarts the game unless global flag 0x57 is set;
+                    // with it set you wake up in the Fellowship shelter in Paws
+                    // (Feridwyn and Brita). Set it unless Shift is held.
+                    if (!key.ShiftPressed && _usecode is { } uc && 0x57 < uc.GFlags.Length)
+                    {
+                        uc.GFlags[0x57] = 1;
+                    }
+
+                    _combat.ReduceHealth(_avatar.Avatar, 1000, null, 0);
+                    _statusExtra = _combat.LastMessage;
+                    break;
+                case Key.F5:
+                    try
+                    {
+                        SaveGame.Write(SaveGame.QuickSlot, _map, _npcs, _usecode, _clock, _combat.InCombat, _music, _combat.Spawned);
+                        _statusExtra = "game saved";
+                    }
+                    catch (Exception ex)
+                    {
+                        GD.PushError("save failed: " + ex);
+                        _statusExtra = "save failed";
+                    }
+
+                    break;
+                case Key.F9:
+                    if (SaveGame.Exists(SaveGame.QuickSlot))
+                    {
+                        U7Paths.GameDatOverride = SaveGame.SlotDir(SaveGame.QuickSlot);
+                        GD.Print("loading " + U7Paths.GameDatOverride);
+                        GetTree().ReloadCurrentScene();
+                    }
+                    else
+                    {
+                        _statusExtra = "no saved game";
+                    }
+
+                    break;
+                case Key.M:
+                    _music.Enabled = !_music.Enabled;
+                    if (!_music.Enabled)
+                    {
+                        _music.Stop();
+                    }
+
+                    _statusExtra = _music.Enabled ? "music on" : "music off";
+                    break;
+                case Key.Pageup:
+                    ShiftLift(1);
+                    break;
+                case Key.Pagedown:
+                    ShiftLift(-1);
+                    break;
             }
         }
+    }
+
+    /// <summary>Debug: move the avatar one lift level up or down in place, then re-check eggs there.</summary>
+    void ShiftLift(int delta)
+    {
+        var av = _avatar.Avatar;
+        var tz = Math.Clamp(av.Tz + delta, 0, 15);
+        if (tz == av.Tz)
+        {
+            return;
+        }
+
+        _avatar.ClearPath();
+        _map.MoveObject(av, av.Tx, av.Ty, tz);
+        _statusExtra = $"lift {tz}";
+        _eggs.Activate(av, av.Tx, av.Ty);
     }
 
     bool HandleClickOnItem(int mx, int my, bool right)

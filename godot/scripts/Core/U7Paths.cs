@@ -12,7 +12,10 @@ public static class U7Paths
 {
     public static string RepoRoot { get; private set; } = "";
     public static string StaticDir => Path.Combine(RepoRoot, "u7", "STATIC");
-    public static string GameDatDir => Path.Combine(RepoRoot, "u7", "GAMEDAT");
+    /// <summary>When set, GAMEDAT files (IREG, NPC.DAT, FLAGINIT, GWIN.DAT) come from this saved game.</summary>
+    public static string? GameDatOverride { get; set; }
+    public static string GameDatDir => GameDatOverride ?? Path.Combine(RepoRoot, "u7", "GAMEDAT");
+    public static string SavesDir => Path.Combine(RepoRoot, "saves");
     public static string AssetsDir => Path.Combine(RepoRoot, "assets");
     public static string ShapesDir => Path.Combine(AssetsDir, "graphics", "shapes");
     public static string GumpsDir => Path.Combine(AssetsDir, "graphics", "gumps");

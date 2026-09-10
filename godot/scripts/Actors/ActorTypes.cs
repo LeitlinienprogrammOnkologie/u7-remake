@@ -162,4 +162,7 @@ public static class ObjFlag
     public const int Temporary = 18;
     public const int OkayToTake = 11;
     public const int InParty = 6;
+    public const int Asleep = 1;
+    public const int Paralyzed = 7;
+    public const int DontMove = 16;
 }

@@ -165,6 +165,15 @@ public static class Inventory
         var total = GetQuantity(dest, catalog) + GetQuantity(src, catalog);
         if (total > U7Constants.MaxQuantity)
         {
+            // Exult Container_game_object::add: fill the stack, keep the remainder.
+            var room = U7Constants.MaxQuantity - GetQuantity(dest, catalog);
+            if (room <= 0)
+            {
+                return false;
+            }
+
+            dest.Quality = U7Constants.MaxQuantity;
+            src.Quality = total - U7Constants.MaxQuantity;
             return false;
         }
 

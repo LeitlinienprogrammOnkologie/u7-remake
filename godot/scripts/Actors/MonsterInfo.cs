@@ -14,6 +14,7 @@ public sealed class MonsterRecord
     public int Alignment;
     public int Combat = 10;
     public int Armor;
+    /// <summary>Exult only reads this in the map editor; bare-hand damage is 1.</summary>
     public int Weapon;
     public int Reach = 3;
     public int Immune;

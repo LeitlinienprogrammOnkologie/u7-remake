@@ -41,7 +41,7 @@ public sealed class AvatarController
         }
     }
 
-    public void Update(double delta, Vector2I? clickTile, bool inCombat = false)
+    public void Update(double delta, Vector2I? clickTile, bool holdFrame = false)
     {
         if (clickTile is { } t)
         {
@@ -115,7 +115,7 @@ public sealed class AvatarController
             return;
         }
 
-        if (!inCombat)
+        if (!holdFrame)
         {
             ActorWalker.Stand(Avatar, _facing);
         }

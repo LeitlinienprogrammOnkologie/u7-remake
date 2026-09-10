@@ -55,7 +55,299 @@ public sealed class UsecodeMachine
     public List<U7Object?> Npcs { get; set; } = new();
     public U7.World.GameClock? Clock { get; set; }
     public U7.Actors.ScheduleRunner? Schedules { get; set; }
+    public U7.Actors.PartyManager? Party { get; set; }
     public U7.Actors.CombatEngine? Combat { get; set; }
+    public U7.Audio.MusicPlayer? Music { get; set; }
+    public U7.World.EggHatcher? Eggs { get; set; }
+    /// <summary>Called when a script steps the avatar, so eggs and followers react.</summary>
+    public Action<U7Object>? AvatarMovedByScript { get; set; }
+    /// <summary>Exult <c>fade_palette</c>: true while the screen is faded to black.</summary>
+    public bool FadedOut { get; set; }
+    /// <summary>Set by the restart_game intrinsic; the game reloads from the initial data.</summary>
+    public bool RestartRequested { get; set; }
+    public const double StdDelaySeconds = U7.Core.U7Constants.StandardDelayMs / 1000.0;
+
+    readonly List<UsecodeScript> _scripts = new();
+    public IReadOnlyList<UsecodeScript> Scripts => _scripts;
+
+    /// <summary>Exult <c>Usecode_internal::create_script</c> + <c>Usecode_script::start</c>.</summary>
+    public void StartScript(U7Object? obj, UsecodeValue code, double delaySeconds)
+    {
+        if (obj is null)
+        {
+            return;
+        }
+
+        var script = new UsecodeScript(this, obj, code, delaySeconds);
+        if (!script.NoHalt)
+        {
+            TerminateScripts(obj);
+        }
+
+        _scripts.Add(script);
+    }
+
+    /// <summary>Exult <c>Usecode_script::terminate</c>.</summary>
+    public void TerminateScripts(U7Object obj)
+    {
+        foreach (var s in _scripts)
+        {
+            if (s.Obj == obj)
+            {
+                s.Halt();
+            }
+        }
+    }
+
+    public bool HasScript(U7Object obj) => _scripts.Any(s => s.Obj == obj && !s.Done);
+
+    /// <summary>Exult <c>Usecode_script::save</c> for every running script on the object.</summary>
+    public IEnumerable<byte[]> SaveScripts(U7Object obj)
+    {
+        foreach (var s in _scripts)
+        {
+            if (s.Obj != obj || s.Done)
+            {
+                continue;
+            }
+
+            using var ms = new System.IO.MemoryStream();
+            using var w = new System.IO.BinaryWriter(ms);
+            w.Write((ushort)s.Count);
+            w.Write((ushort)Math.Max(0, s.Index));
+            var ok = true;
+            for (var j = 0; j < s.Count && ok; j++)
+            {
+                ok = SaveValue(w, s.Code.GetElem(j));
+            }
+
+            if (!ok)
+            {
+                continue;
+            }
+
+            w.Write((ushort)0); // frame_index
+            w.Write((ushort)(s.NoHalt ? 1 : 0));
+            w.Write((uint)Math.Max(0, (int)(s.Wait * 1000)));
+            w.Flush();
+            yield return ms.ToArray();
+        }
+    }
+
+    /// <summary>Exult <c>Usecode_script::restore</c>: recreate a script from a saved blob.</summary>
+    public void RestoreScript(U7Object obj, byte[] blob)
+    {
+        try
+        {
+            using var r = new System.IO.BinaryReader(new System.IO.MemoryStream(blob));
+            int cnt = r.ReadUInt16();
+            int index = r.ReadUInt16();
+            var code = UsecodeValue.FromArray(cnt);
+            for (var j = 0; j < cnt; j++)
+            {
+                var v = RestoreValue(r);
+                if (v is null)
+                {
+                    return;
+                }
+
+                code.PutElem(j, v);
+            }
+
+            if (r.BaseStream.Length - r.BaseStream.Position < 8)
+            {
+                return;
+            }
+
+            r.ReadUInt16(); // frame_index
+            var noHalt = r.ReadUInt16() != 0;
+            var delayMs = r.ReadUInt32();
+            _scripts.Add(new UsecodeScript(this, obj, code, index, noHalt, delayMs / 1000.0));
+        }
+        catch (Exception ex)
+        {
+            Godot.GD.Print($"script restore failed: {ex.Message}");
+        }
+    }
+
+    // Exult Usecode_value::save / restore (int 0, string 1, array 2, pointer 3).
+    static bool SaveValue(System.IO.BinaryWriter w, UsecodeValue v)
+    {
+        if (v.IsArray)
+        {
+            w.Write((byte)2);
+            w.Write((ushort)v.ArraySize);
+            for (var i = 0; i < v.ArraySize; i++)
+            {
+                if (!SaveValue(w, v.GetElem(i)))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        if (v.IsString)
+        {
+            var bytes = System.Text.Encoding.Latin1.GetBytes(v.StrValue ?? "");
+            w.Write((byte)1);
+            w.Write((ushort)bytes.Length);
+            w.Write(bytes);
+            return true;
+        }
+
+        if (v.IsPtr)
+        {
+            w.Write((byte)3);
+            w.Write((uint)0);
+            return true;
+        }
+
+        w.Write((byte)0);
+        w.Write((int)v.IntValue);
+        return true;
+    }
+
+    static UsecodeValue? RestoreValue(System.IO.BinaryReader r)
+    {
+        var type = r.ReadByte();
+        switch (type)
+        {
+            case 0:
+                return UsecodeValue.FromInt(r.ReadInt32());
+            case 1:
+            {
+                int len = r.ReadUInt16();
+                return UsecodeValue.FromString(System.Text.Encoding.Latin1.GetString(r.ReadBytes(len)));
+            }
+            case 2:
+            {
+                int n = r.ReadUInt16();
+                var arr = UsecodeValue.FromArray(n);
+                for (var i = 0; i < n; i++)
+                {
+                    var e = RestoreValue(r);
+                    if (e is null)
+                    {
+                        return null;
+                    }
+
+                    arr.PutElem(i, e);
+                }
+
+                return arr;
+            }
+            case 3:
+                r.ReadUInt32();
+                return UsecodeValue.FromObject(null);
+            default:
+                return null; // class types: not supported
+        }
+    }
+
+    /// <summary>
+    /// Advance running scripts (Exult's time queue). Paused while usecode is
+    /// executing or waiting on a conversation, since scripts call back into
+    /// the machine.
+    /// </summary>
+    public void TickScripts(double delta)
+    {
+        if (InUsecode || WaitingForChoice)
+        {
+            return;
+        }
+
+        for (var i = 0; i < _scripts.Count; i++)
+        {
+            var s = _scripts[i];
+            if (s.Done)
+            {
+                continue;
+            }
+
+            s.Wait -= delta;
+            if (s.Wait > 0)
+            {
+                continue;
+            }
+
+            s.Wait = s.Exec(finish: false);
+            if (InUsecode || WaitingForChoice)
+            {
+                break;
+            }
+        }
+
+        _scripts.RemoveAll(s => s.Done);
+    }
+
+    /// <summary>Exult <c>set_item_frame</c>: keep the reflection bit, reset the walk cycle for actors.</summary>
+    public void SetItemFrame(U7Object item, int frame)
+    {
+        item.Frame = (item.Frame & 32) | (frame & 31);
+        if (item.IsActor)
+        {
+            item.WalkFrameIndex = 0;
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::resurrect(body)</c>: give the NPC its items back, remove
+    /// the corpse, put the NPC where the corpse lay with full health, and
+    /// resume following or loitering.
+    /// </summary>
+    public U7Object? Resurrect(U7Object body)
+    {
+        var num = body.LiveNpcNum;
+        if (num <= 0 || num >= Npcs.Count || Npcs[num] is not { } npc || !npc.IsDead)
+        {
+            return null;
+        }
+
+        foreach (var item in body.Contents.ToList())
+        {
+            item.Container = npc;
+            item.ReadySlot = -1;
+            item.Tx = 255;
+            item.Ty = 255;
+            npc.Contents.Add(item);
+        }
+
+        body.Contents.Clear();
+        var tx = body.Tx;
+        var ty = body.Ty;
+        var tz = body.Tz;
+        Map.RemoveObject(body);
+        npc.SetProp(U7.Actors.ActorProp.Health, npc.GetProp(U7.Actors.ActorProp.Strength));
+        foreach (var flag in new[] { U7.Actors.ObjFlag.Dead, 8, U7.Actors.ObjFlag.Paralyzed, U7.Actors.ObjFlag.Asleep, 9, 3, 2 })
+        {
+            npc.ClearFlag(flag);
+        }
+
+        npc.Removed = false;
+        Map.PlaceInWorld(npc, tx, ty, tz);
+        U7.Actors.ActorWalker.Stand(npc, 4);
+        if (npc.GetFlag(U7.Actors.ObjFlag.InParty))
+        {
+            npc.ClearFlag(U7.Actors.ObjFlag.InParty);
+            Party?.AddToParty(npc);
+        }
+
+        Schedules?.Revive(npc);
+        var sched = Party?.IsInParty(npc) == true ? U7.Actors.ScheduleType.FollowAvatar : U7.Actors.ScheduleType.Loiter;
+        if (Schedules is { } s)
+        {
+            s.SetScheduleType(npc, sched);
+        }
+        else
+        {
+            npc.ScheduleType = sched;
+        }
+
+        Godot.GD.Print($"{npc.NpcName} is resurrected");
+        return npc;
+    }
 
     readonly UsecodeValue[] _stack = new UsecodeValue[StackSize];
     int _sp;

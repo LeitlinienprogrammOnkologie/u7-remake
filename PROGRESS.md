@@ -16,8 +16,11 @@ Last update: 2026-09-04.
 | Game clock + dusk/night modulate | Done (RGBA grade, not 8-bit palettes) |
 | Schedules (`assets/data/schedules.csv`) | Done (core types; rest stand-at-dest) |
 | Eggs | Done (teleport, usecode, jukebox, button, monster) |
-| Combat | Done (melee v1; no missiles / arrest / bodies) |
-| Audio, intro, barges, party-follow | Not started |
+| Combat | Done (melee, ranged, bodies, avatar death; no explosions / arrest) |
+| Save / load | Done (quick slot, Exult GAMEDAT layout) |
+| Music | Done (jukebox eggs → GM MIDI via Windows synth; no SFX/speech yet) |
+| Party | Done (join/leave, formation, follow, teleport, combat) |
+| Intro, barges | Not started |
 | Serpent Isle | Out of scope |
 
 `dotnet build` of `godot/U7.csproj` is clean.
@@ -37,6 +40,10 @@ Open the **`godot/`** project in Godot 4.6 (C# / .NET 8). Data root is the repo 
 | F4 | Toggle avatar invincibility (hits still flash / bark) |
 | [ ] | Skip −1 / +1 hour |
 | Home | Return to Trinsic start |
+| PgUp / PgDn | Debug: avatar lift +1 / -1 in place (re-checks eggs at the new lift) |
+| F5 / F9 | Save / load the quick slot (`saves/quick/`) |
+| F6 | Debug: lethal damage to the avatar with global flag 0x57 set, so usecode 0x60E puts the party in the Fellowship shelter in Paws (836,1733); Shift+F6 leaves the flag alone, in which case the original restarts the game |
+| M | Toggle music |
 | F2 | Usecode / gump debug |
 | F3 | Combat arena (heal, spawn 3 rats, combat on) |
 | Mouse wheel | Zoom 1–8× |
@@ -89,12 +96,50 @@ assets/          extracted PNGs, schedules.csv, usecode_disasm.txt (untracked; s
 exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 ```
 
+### Temporary objects (current)
+
+- Exult `Game_map::cache_out`: whenever the avatar enters a new superchunk, spawned monsters, their corpses and items flagged temporary outside the surrounding 3×3 superchunks are deleted (`GameMap.CacheOut`). Auto-reset monster eggs therefore respawn on a later visit, as in Exult.
+
+### Rendering order (current)
+
+- Mouse picking chooses the object painted last in the most recent frame at the cursor (`PaintStamp`), so clicks agree with what is drawn on top.
+- Paint order is Exult's: each chunk computes paint dependencies between its non-flat objects (and its neighbours') with a port of `Game_object::compare` the first time it is drawn, refreshed whenever an object moves. Flat objects paint first, then each chunk row-major with every object painted after its dependencies (`Game_render::paint_object`). The old single sort key survives only in `FindNearby`'s ordering.
+- Sleeping NPCs lie on top of the nearest free bed at bed lift + bed height in the sleep frame (Exult `Sleep_schedule`), unmake the bed on lying down and make it again on getting up.
+
 ### Eggs (current)
 
 - Hatchable IREG (shapes 200, 275, 305, 776, 777) parsed as eggs, not containers. 1×1 eggs (200/275) are hidden from paint/pick; moongates (305) still draw.
-- Avatar step, Shift-click, Home, and dropping an item hatch nearby eggs. After map load, eggs hatch with `from = -1` like Exult `activate_eggs`.
-- Implemented: **teleport** (coords or path-egg quality), **usecode** (`event 3`), **jukebox** (HUD track only), **button**, **monster** (spawn from IREG data). Missile / weather / sfx / voice log a stub once.
-- Party teleport moves the avatar only (no follow). Jukebox is not MIDI.
+- Eggs are indexed per chunk with 16 bits per tile (Exult `Chunk_cache::eggs`): solid-area criteria (cached-in, something-on, teleports) mark the whole area, everything else only its perimeter. A step looks up the bits of the tile entered instead of scanning objects within 40 tiles.
+- Each step first runs Exult `test_unhatch`/`unhatch` on the tile left: jukebox and sfx eggs clear their hatched flag (auto-reset) or are removed (once), so music no longer re-triggers on every tile inside the area. Once-only eggs of every other type, usecode included, are removed after hatching.
+- Teleport-in and map load use Exult `try_all_eggs`: every active egg within 32 tiles except jukebox and teleport, with the dice roll, guarded against recursion so chained teleports stop.
+- Implemented: **teleport** (coords or path-egg quality), **usecode** (`event 3`), **jukebox** (plays the track), **button**, **monster** (spawn from IREG data). Missile / weather / sfx / voice log a stub once.
+- Party teleport moves the avatar only (no follow).
+
+### Party (current)
+
+- `Actors/PartyManager` ports Exult `Party_manager`: up to 8 members, `add_to_party` (good alignment, in_party and okay_to_take flags) and `remove_from_party` via the usecode intrinsics 0x24/0x25; `get_party_list` returns avatar plus members. `link_party` rebuilds the party from the npc.dat in_party flags at load (NpcDat now keeps the object flags).
+- Each avatar step calls `get_followers`/`move_followers`: members walk in Exult's formation (two followers per member, behind-left and behind-right by the 4-way direction) with `Is_step_okay`, `Clear_to_leader`, `Get_cost` and `Take_best_step`. Members in combat, wait or loiter schedules stay put.
+- The follow-avatar schedule (`Follow_avatar_schedule` + `Actor::follow`) only acts once the avatar stops: members farther than 6 tiles path to an offset spot beside the avatar; farther than 40 tiles they are brought over like `approach_another`. Teleports (eggs, Home, Shift-click) move the party along (`teleport_party`, free spot within 8 tiles).
+- Combat: **C** (or getting hit, or attacking) switches every member between the combat and follow-avatar schedules like Exult `toggle_combat`; members chase and strike the nearest foe in sight, drop back to following when nothing is left, and monsters target the nearest party member instead of always the avatar. A member that dies leaves the party (no dead-party list or bodies yet).
+- Not yet: party items intrinsics, dead-party handling and resurrection, sleeping/paralysed members, attack modes other than nearest.
+
+### Usecode scripts (current)
+
+- `Usecode/UsecodeScript` ports Exult `Usecode_script` (ucsched.cc): the arrays handed to `execute_usecode_array` / `delayed_execute_usecode_array` (intrinsics 0x01/0x02) run against their object over time on 200 ms ticks: cont, reset, repeat/repeat2, delays (ticks, minutes, hours), wait_while_near/far, remove, rise/descend, frame and the NPC frame opcodes 0x61-0x70, next/prev frame, say, step (forced), face_dir, music, usecode/usecode2 calls, egg, set_egg, hit, resurrect. Speech, sfx, weather and attack are accepted but do nothing yet. Scripts pause while usecode runs or a conversation waits. They are saved with their object as Exult's IREG_SPECIAL/IREG_UCSCRIPT entries (`Usecode_script::save` layout) and restored on load.
+- Avatar death runs the game's death usecode 0x60E (event 4) after combat is switched off and gumps close; with global flag 0x57 set it revives the party in the Fellowship shelter in Paws, otherwise it restarts the game; the intrinsics it needs are in: play_music, fade_palette (world fades to black), get_dead_party, resurrect (Exult `Actor::resurrect`: items back, corpse gone, full health, follow or loiter), remove_npc, halt_scheduled, restart_game (reloads the initial game).
+
+### Save / load (current)
+
+- `Game/SaveGame` writes Exult's GAMEDAT layout into `saves/<slot>/`: `U7IREG00..8F` (Exult `write_ireg` / `write_ireg_objects`: plain 10-byte, container 12-byte and egg 12/14-byte entries, extended entries for shape ≥ 1024 or frame ≥ 64, contents terminated by 01, chunks by 00 00), `NPC.DAT` (Exult `Actor::write` layout with the extended magic/mana bytes, readied items marked `02 <spot>`), `FLAGINIT` (usecode global flags) and `GWIN.DAT` (day/hour/minute, music track, combat flag).
+- Loading sets `U7Paths.GameDatOverride` to the slot and reloads the scene, so the normal loaders pick up the saved files; `NpcDat` reads a raw `NPC.DAT` when present (both the original and Exult's magic/mana layouts) and keeps schedule destinations, type flags and the object flags. The party is rebuilt from the in_party flags.
+- Spawned monsters are saved to `MONSNPCS.DAT` (count + `Actor::write` records) and restored on load. Not saved: usecode timers/statics (usecode.dat, usevars), schedule changes made by usecode (schedule.dat), spellbook/virtue-stone extra bytes. Exult saves are zip files; a `saves/<slot>/` directory with the same files loads, the zip itself does not yet.
+
+### Music (current)
+
+
+- `Audio/MusicPlayer` sequences the MT-32 export in `assets/audio/music_mt32/NNNN_MT32MUS.MID` (track = jukebox egg `data1 & 0xff`), converting it at load exactly like Exult's `XMIDIFILE_CONVERT_MT32_TO_GM` (`mt32asgm` patch table, no patch changes on channel 10, bank selects dropped, volume curve, default CC7 90), on a background thread and sends it to the Windows MIDI mapper (built-in GS wavetable synth) with `winmm`, like Exult's Windows MIDI driver. Non-Windows is silent for now.
+- Jukebox semantics follow Exult `Jukebox_egg` / `MyMidiPlayer`: continuous eggs hold a repeat count; leaving the last one lets the track finish and stops the repeat. **M** mutes.
+- No SFX (the originals are AdLib/MT-32 data, Exult uses its own digital pack) and no speech playback yet, although speech is extracted as WAV.
 
 ### Combat (current)
 
@@ -102,10 +147,14 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - Spawned stats from `assets/data/monsters.csv` (`Randomize_initial_stat`); health = strength; alignment from the egg unless the egg is neutral.
 - Hostility: good↔evil/chaotic, evil↔good/chaotic, chaotic↔evil/good; **neutral never initiates**. Avatar is good.
 - Attacking a permanent NPC (or hitting one via usecode damage) engages it: it enters the combat schedule, chases and strikes like a spawned monster, and returns to its previous schedule when its target dies or moves out of sight (Exult `prev_schedule`).
+- A strike faces the target and plays Exult's fast-swing frames (ready, reach, strike, back to ready) one per 200 ms tick; frames the shape lacks fall back to standing. The avatar stands again once the swing ends instead of freezing mid-stride.
+- Battle music (Exult `start_battle` / `monster_died`): when the avatar gains a foe and none played in the last 30 s, track 11 or 12 plays once; when the last hostile dies, victory (15) or, after a long hard fight, battle-over (9).
+- Ranged and thrown weapons (Exult `Combat_schedule::attack_target` + `Projectile_effect`): a bow, crossbow, musket, wand or thrown axe fires a projectile when the target is beyond melee reach (or always, for `uses = ranged`). Ammunition comes from the quiver or any bag (`find_weapon_ammo`), charges from the wand's quality, thrown weapons consume themselves; the missile sprite flies along a straight line at the weapon's missile speed with Exult's 16-direction frames and rotation, then rolls to hit with the ranged bonus (+6, minus distance for thrown), applies weapon plus ammo damage with the ammo's damage type, drops the ammo by its drop rule, and returning weapons come straight back into the thrower's hands. Archers do not keep their distance (Exult has no such behaviour outside flee mode): they shoot from where they stand and only walk when the target is out of range. `assets/data/ammo.csv` is loaded as `Actors/AmmoTable`. Explosions, homing missiles and attacks on tiles are not ported.
+- Strike timing follows Exult `dex_to_attack`: each 200 ms tick in reach banks the actor's dexterity, and a swing costs 30 points (a dex-6 rat strikes about once a second). Unarmed damage is 1 plus the strength roll; the MONSTERS.DAT weapon byte is not used.
 - Nearby spawned hostiles (sight 24) chase and melee. **C** or the paperdoll combat button toggles avatar combat: the avatar walks to the nearest foe and auto-strikes at weapon reach (WASD/click still override). Double-click a hostile attacks. Getting hit turns combat on.
 - Hit/damage: Exult `roll_to_win` (30-sided) and `apply_damage` (str/3 + weapon − **worn + monster** armor). Readied `weapons.csv` item, else innate weapon, else monster weapon points. Worn `armor.csv` protection and immunities apply. Ranged weapons only if adjacent (no missiles).
 - Starting kit: IREG ready-slot index (`entlen==2`) is kept; then `ready_best_weapon` / best shield. Open inventory (**I**) for the paper doll.
-- Death: `Obj_flags::dead`; spawned monsters are removed. Avatar barks and cannot walk. No bodies, blood, arrest, or combat music.
+- Death (Exult `Actor::die`): shapes in Exult's `bodies.txt` (copied into `Actors/Bodies`) leave a corpse container (shape 400/414/762/778/892, frame per NPC, reflected like the NPC) holding the whole inventory, all okay to take; other shapes drop their items nearby. Dead permanent NPCs keep their record with the dead flag, are never placed or scheduled again, and the corpse is saved as Exult's 13-byte `Dead_body` entry with the NPC number. Avatar death still only barks. No blood, arrest, or combat music.
 - Trinsic start: cached-in monster egg at **1084, 2236** (dog, shape 496, **neutral** — spawn test, will not attack).
 - **F3** heals the avatar, spawns three chaotic rats (shape 523) six tiles out, and turns combat on. Press again to reset the wave. **F4** toggles invincibility (hits still flash red and bark the blocked damage). Shift-click to open ground first so they are not in the Trinsic street.
 
@@ -114,7 +163,7 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - Black Gate paper doll is Exult `Actor_gump`: GUMPS.VGA silhouette (shape 65) with **world item sprites** on the 12 ready spots. SI `Paperdoll_gump` / `PAPERDOL.VGA` is not in vanilla BG STATIC, so it is not used.
 - Containers (`Container_gump`) use GUMPS.VGA art and the same SHAPES.VGA sprites, packed into Exult’s object-area rects (chest, bag, crate, barrel, …). Double-click a bag in a gump opens it.
 - Drop: nest/combine on the item under the mouse, else the closest empty ready spot if `fits_in_spot` (READY.DAT + `paperdol_info.txt`), else auto-equip / bags (`Actor::add`). Chests refuse over-volume and over-weight (`2 × strength` stones).
-- Quantity shapes stack up to 100. Two-handed weapons paint GUMPS.VGA 48 over the right hand; weight `current/max` is font 2 at the feet. Halo and combat-mode buttons match Exult (save disk is still a no-op).
+- Quantity shapes stack up to 100; dropping onto a full stack fills it and keeps the remainder (Exult `add_quantity`). A displaced readied item goes into a readied bag with room or loose into the inventory with a fresh gump position (Exult `add(obj, true)`). Weapons count only in the left hand (`Actor::get_weapon`); monsters fall back to their own shape's weapon entry (`Monster_actor::get_weapon`). Lightning, ethereal and sonic damage ignore armour. Two-handed weapons paint GUMPS.VGA 48 over the right hand; weight `current/max` is font 2 at the feet. Halo and combat-mode buttons match Exult (save disk is still a no-op).
 
 ## Not done (on purpose)
 

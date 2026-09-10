@@ -1,0 +1,115 @@
+using System.IO;
+using Godot;
+using U7.Actors;
+using U7.Audio;
+using U7.Core;
+using U7.Data;
+using U7.Usecode;
+using U7.World;
+
+namespace U7.Game;
+
+/// <summary>
+/// Saved games in Exult's GAMEDAT layout: a directory with U7IREGxx, NPC.DAT,
+/// FLAGINIT and GWIN.DAT. Loading points <see cref="U7Paths.GameDatOverride"/>
+/// at the directory and restarts the scene, so the normal loaders read it.
+/// </summary>
+public static class SaveGame
+{
+    public const string QuickSlot = "quick";
+
+    public static string SlotDir(string slot) => Path.Combine(U7Paths.SavesDir, slot);
+
+    public static bool Exists(string slot) => File.Exists(Path.Combine(SlotDir(slot), "NPC.DAT"));
+
+    public static void Write(string slot, GameMap map, List<U7Object?> npcs, UsecodeMachine? usecode,
+        GameClock clock, bool inCombat, MusicPlayer? music, IEnumerable<U7Object>? monsters = null)
+    {
+        var dir = SlotDir(slot);
+        Directory.CreateDirectory(dir);
+        foreach (var old in Directory.GetFiles(dir, "U7IREG*"))
+        {
+            File.Delete(old);
+        }
+
+        map.WriteIregFiles(dir);
+        NpcDat.Save(dir, npcs, map);
+        NpcDat.SaveMonsters(dir, monsters ?? Array.Empty<U7Object>(), map);
+        if (usecode is not null)
+        {
+            File.WriteAllBytes(Path.Combine(dir, "FLAGINIT"), usecode.GFlags);
+        }
+
+        WriteGwin(Path.Combine(dir, "GWIN.DAT"), clock, inCombat, music);
+        var identity = Path.Combine(U7Paths.RepoRoot, "u7", "GAMEDAT", "IDENTITY");
+        if (File.Exists(identity))
+        {
+            File.Copy(identity, Path.Combine(dir, "IDENTITY"), overwrite: true);
+        }
+
+        GD.Print($"saved to {dir}");
+    }
+
+    /// <summary>Exult <c>Game_window::write_gwin</c>.</summary>
+    static void WriteGwin(string path, GameClock clock, bool inCombat, MusicPlayer? music)
+    {
+        using var w = new BinaryWriter(File.Create(path));
+        w.Write((ushort)0); // scrolltx
+        w.Write((ushort)0); // scrollty
+        w.Write((ushort)clock.Day);
+        w.Write((ushort)clock.Hour);
+        w.Write((ushort)clock.Minute);
+        w.Write((uint)0); // special light
+        var track = music?.CurrentTrack ?? -1;
+        w.Write(unchecked((uint)track));
+        w.Write((uint)((music is { Repeat: true } ? 1u : 0u) | ((uint)(music?.EggCount ?? 0) << 16)));
+        w.Write((byte)0); // armageddon
+        w.Write((byte)0); // ambient light
+        w.Write((byte)(inCombat ? 1 : 0));
+        w.Write((byte)0); // infravision
+    }
+
+    public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCombat, int Track, bool Repeat);
+
+    /// <summary>Exult <c>Game_window::read_gwin</c> (the parts we keep).</summary>
+    public static GwinState? ReadGwin(string dir)
+    {
+        var path = Path.Combine(dir, "GWIN.DAT");
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var r = new BinaryReader(File.OpenRead(path));
+            r.ReadUInt16();
+            r.ReadUInt16();
+            int day = r.ReadUInt16();
+            int hour = r.ReadUInt16();
+            int minute = r.ReadUInt16();
+            var track = -1;
+            var repeat = false;
+            var combat = false;
+            if (r.BaseStream.Length - r.BaseStream.Position >= 12)
+            {
+                r.ReadUInt32();
+                track = unchecked((int)r.ReadUInt32());
+                repeat = (r.ReadUInt32() & 1) != 0;
+                if (r.BaseStream.Length - r.BaseStream.Position >= 3)
+                {
+                    r.ReadByte();
+                    r.ReadByte();
+                    combat = r.ReadByte() != 0;
+                }
+            }
+
+            return new GwinState(day, hour, minute, combat, track, repeat);
+        }
+        catch (Exception ex)
+        {
+            GD.Print($"GWIN.DAT unreadable: {ex.Message}");
+            return null;
+        }
+    }
+}

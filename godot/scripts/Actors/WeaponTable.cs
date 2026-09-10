@@ -7,12 +7,29 @@ namespace U7.Actors;
 /// <summary>One <c>weapons.dat</c> row (Exult <c>Weapon_info</c>).</summary>
 public sealed class WeaponRecord
 {
+    public const int UsesMelee = 0, UsesPoorThrown = 1, UsesGoodThrown = 2, UsesRanged = 3;
+
     public int Shape;
     public int Damage = 1;
+    public int DamageType;
     public int Range = 3;
     public bool Lucky;
     public bool Autohit;
     public bool Melee = true;
+    /// <summary>Exult <c>Weapon_info::uses</c>: 0 melee, 1 poor thrown, 2 good thrown, 3 ranged.</summary>
+    public int Uses;
+    /// <summary>Exult <c>ammo</c>: -1 none, -2 charges (quality), -3 the weapon itself, else ammo family shape.</summary>
+    public int Ammo = -1;
+    /// <summary>Projectile shape, or -1; -3 = the weapon itself.</summary>
+    public int Projectile = -1;
+    public bool Returns;
+    public bool Explodes;
+    public bool NoBlocking;
+    public bool DeleteDepleted;
+    public int MissileSpeed = 4;
+    public int RotationSpeed;
+
+    public bool UsesCharges => Ammo == -2;
 }
 
 /// <summary>Loads <c>assets/data/weapons.csv</c>.</summary>
@@ -55,10 +72,20 @@ public sealed class WeaponTable
 
         var iShape = Col("shape");
         var iDmg = Col("damage");
+        var iType = Col("damage_type");
         var iRange = Col("range");
         var iLucky = Col("lucky");
         var iAuto = Col("autohit");
         var iUses = Col("uses_name");
+        var iUsesNum = Col("uses");
+        var iAmmo = Col("ammo");
+        var iProj = Col("projectile");
+        var iReturns = Col("returns");
+        var iExplodes = Col("explodes");
+        var iNoBlock = Col("no_blocking");
+        var iDelete = Col("delete_depleted");
+        var iSpeed = Col("missile_speed");
+        var iRot = Col("rotation_speed");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
         int Num(string[] c, int i, int fallback = 0) =>
@@ -76,15 +103,26 @@ public sealed class WeaponTable
             }
 
             var uses = Get(c, iUses);
+            var usesNum = Num(c, iUsesNum, 0);
             table._byShape[shape] = new WeaponRecord
             {
                 Shape = shape,
                 Damage = Math.Max(0, Num(c, iDmg, 1)),
+                DamageType = Num(c, iType),
                 Range = Math.Max(1, Num(c, iRange, 3)),
                 Lucky = Num(c, iLucky) != 0,
                 Autohit = Num(c, iAuto) != 0,
-                Melee = uses.Contains("melee", StringComparison.OrdinalIgnoreCase) ||
-                        string.IsNullOrEmpty(uses)
+                Melee = usesNum == 0 || uses.Contains("melee", StringComparison.OrdinalIgnoreCase) ||
+                        string.IsNullOrEmpty(uses),
+                Uses = usesNum,
+                Ammo = Num(c, iAmmo, -1),
+                Projectile = Num(c, iProj, -1),
+                Returns = Num(c, iReturns) != 0,
+                Explodes = Num(c, iExplodes) != 0,
+                NoBlocking = Num(c, iNoBlock) != 0,
+                DeleteDepleted = Num(c, iDelete) != 0,
+                MissileSpeed = Num(c, iSpeed, 4),
+                RotationSpeed = Num(c, iRot)
             };
         }
 

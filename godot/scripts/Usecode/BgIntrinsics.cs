@@ -1,3 +1,4 @@
+using Godot;
 using U7.Core;
 using U7.Data;
 
@@ -86,7 +87,19 @@ public sealed class BgIntrinsics
             0x20 => GetNpcProp(p),
             0x21 => SetNpcProp(p),
             0x22 => GetAvatarRef(),
+            0x01 => ExecuteUsecodeArray(p, delayed: false),
+            0x02 => ExecuteUsecodeArray(p, delayed: true),
+            0x1e => AddToParty(p),
+            0x1f => RemoveFromParty(p),
             0x23 => GetPartyList(),
+            0x2e => PlayMusic(p),
+            0x3f => RemoveNpc(p),
+            0x51 => ResurrectIntrinsic(p),
+            0x5c => HaltScheduled(p),
+            0x73 => RestartGame(),
+            0x83 => Zero(),
+            0x8c => FadePalette(p),
+            0x93 => GetDeadParty(p),
             0x27 => GetNpcName(p),
             0x28 => CountObjects(p),
             0x2a => GetContItems(p),
@@ -442,10 +455,173 @@ public sealed class BgIntrinsics
 
     UsecodeValue GetAvatarRef() => UsecodeValue.FromObject(_vm.Avatar);
 
+    /// <summary>Exult <c>UI_execute_usecode_array</c> / <c>UI_delayed_execute_usecode_array</c>.</summary>
+    UsecodeValue ExecuteUsecodeArray(UsecodeValue[] p, bool delayed)
+    {
+        var obj = _vm.GetItem(p[0]);
+        var code = p[1];
+        var ticks = 1;
+        if (delayed)
+        {
+            // Exult: BG infinite-loop guard for internal_exec + [.., .., 0x6f7].
+            if (_vm.LastEvent == (int)UsecodeEvent.InternalExec && code.ArraySize == 3 &&
+                code.GetElem(2).IntValue == 0x6f7)
+            {
+                return Zero();
+            }
+
+            ticks = (int)p[2].IntValue;
+        }
+
+        _vm.StartScript(obj, code, ticks * UsecodeMachine.StdDelaySeconds);
+        return UsecodeValue.FromInt(1);
+    }
+
+    /// <summary>Exult <c>UI_play_music(track, item)</c>: 0xff stops.</summary>
+    UsecodeValue PlayMusic(UsecodeValue[] p)
+    {
+        var val = (int)p[0].IntValue;
+        var track = val & 0xff;
+        if (track == 0xff)
+        {
+            _vm.Music?.Stop();
+        }
+        else
+        {
+            _vm.Music?.Start(track, ((val >> 8) & 1) != 0);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_remove_npc</c>: off the map, record kept.</summary>
+    UsecodeValue RemoveNpc(UsecodeValue[] p)
+    {
+        var npc = _vm.GetItem(p[0]);
+        if (npc is { IsActor: true })
+        {
+            if (_vm.Schedules is { } s)
+            {
+                s.SetScheduleType(npc, U7.Actors.ScheduleType.Wait);
+            }
+
+            _vm.Map.RemoveObject(npc);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_resurrect(body)</c>: schedules the resurrect script on the corpse.</summary>
+    UsecodeValue ResurrectIntrinsic(UsecodeValue[] p)
+    {
+        var body = _vm.GetItem(p[0]);
+        var num = body?.LiveNpcNum ?? -1;
+        if (body is null || num <= 0 || num >= _vm.Npcs.Count || _vm.Npcs[num] is not { } npc)
+        {
+            return UsecodeValue.FromObject(null);
+        }
+
+        _vm.StartScript(body, UsecodeValue.FromArray(1, UsecodeValue.FromInt(0x81)), UsecodeMachine.StdDelaySeconds);
+        return UsecodeValue.FromObject(npc);
+    }
+
+    UsecodeValue HaltScheduled(UsecodeValue[] p)
+    {
+        var obj = _vm.GetItem(p[0]);
+        if (obj is not null)
+        {
+            _vm.TerminateScripts(obj);
+        }
+
+        return Zero();
+    }
+
+    UsecodeValue RestartGame()
+    {
+        _vm.Music?.Stop();
+        _vm.RestartRequested = true;
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_fade_palette(cycles, 1, inout)</c>: 0 = to black, 1 = back.</summary>
+    UsecodeValue FadePalette(UsecodeValue[] p)
+    {
+        var inout = p.Length > 2 ? (int)p[2].IntValue : 1;
+        _vm.FadedOut = inout == 0;
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_get_dead_party(obj)</c>: corpses of party members within 50 tiles.</summary>
+    UsecodeValue GetDeadParty(UsecodeValue[] p)
+    {
+        var obj = _vm.GetItem(p[0]) ?? _vm.Avatar;
+        var bodies = new List<U7Object>();
+        foreach (var o in _vm.Map.FindNearby(new TileCoord(obj.Tx, obj.Ty, obj.Tz), U7Constants.AnyShape, 50))
+        {
+            if (o.LiveNpcNum > 0 && o.LiveNpcNum < _vm.Npcs.Count &&
+                _vm.Npcs[o.LiveNpcNum] is { } npc && npc.IsDead && npc.GetFlag(U7.Actors.ObjFlag.InParty))
+            {
+                bodies.Add(o);
+            }
+        }
+
+        var arr = UsecodeValue.FromArray(bodies.Count);
+        for (var i = 0; i < bodies.Count; i++)
+        {
+            arr.PutElem(i, UsecodeValue.FromObject(bodies[i]));
+        }
+
+        return arr;
+    }
+
+    /// <summary>Exult <c>Usecode_internal::get_party</c>: avatar first, then the members.</summary>
     UsecodeValue GetPartyList()
     {
-        var arr = UsecodeValue.FromArray(1, UsecodeValue.FromObject(_vm.Avatar));
+        var members = _vm.Party?.Members;
+        var count = members?.Count ?? 0;
+        var arr = UsecodeValue.FromArray(1 + count, UsecodeValue.FromObject(_vm.Avatar));
+        for (var i = 0; i < count; i++)
+        {
+            arr.PutElem(1 + i, UsecodeValue.FromObject(members![i]));
+        }
+
         return arr;
+    }
+
+    /// <summary>Exult <c>UI_add_to_party</c> (BG intrinsic 0x1e): join, follow the avatar, become good.</summary>
+    UsecodeValue AddToParty(UsecodeValue[] p)
+    {
+        var npc = _vm.GetItem(p[0]);
+        if (npc is null || _vm.Party is not { } party || !party.AddToParty(npc))
+        {
+            return Zero();
+        }
+
+        if (_vm.Schedules is { } schedules)
+        {
+            schedules.SetScheduleType(npc, U7.Actors.ScheduleType.FollowAvatar);
+        }
+        else
+        {
+            npc.ScheduleType = U7.Actors.ScheduleType.FollowAvatar;
+        }
+
+        npc.Alignment = U7.Actors.Alignment.Good;
+        GD.Print($"party: {npc.NpcName} joins");
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_remove_from_party</c>.</summary>
+    UsecodeValue RemoveFromParty(UsecodeValue[] p)
+    {
+        var npc = _vm.GetItem(p[0]);
+        if (npc is not null && _vm.Party is { } party && party.RemoveFromParty(npc))
+        {
+            npc.Alignment = U7.Actors.Alignment.Neutral;
+            GD.Print($"party: {npc.NpcName} leaves");
+        }
+
+        return Zero();
     }
 
     UsecodeValue GetNpcObject(UsecodeValue[] p)

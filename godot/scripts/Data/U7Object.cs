@@ -39,6 +39,14 @@ public sealed class U7Object
     /// <summary>Exult <c>Ready_type_Exult</c> index, or -1 if not worn.</summary>
     public int ReadySlot = -1;
     public bool Removed;
+    /// <summary>Exult render dependencies: objects that must paint before / after this one.</summary>
+    public HashSet<U7Object>? Dependencies;
+    public HashSet<U7Object>? Dependors;
+    public uint RenderSeq;
+    /// <summary>Frame number (high 32 bits) and paint index of the last draw; later paint = on top.</summary>
+    public long PaintStamp;
+    /// <summary>Exult "flat": lift 0 and no height; painted before every non-flat object.</summary>
+    public bool IsFlat => Tz == 0 && DimZ == 0;
     public string BarkText = "";
     public ulong BarkUntilMsec;
 
@@ -50,6 +58,10 @@ public sealed class U7Object
     public int Alignment;
     public string NpcName = "";
     public int WalkFrameIndex;
+    /// <summary>Exult actor type flags (walk/swim/fly...) from npc.dat, kept for saving.</summary>
+    public int TypeFlags;
+    /// <summary>For a corpse (Exult <c>Dead_body</c>): the NPC it belongs to, or -1.</summary>
+    public int LiveNpcNum = -1;
     public bool Unused;
     public int FaceNum;
     public int PendingSchedule = -1;

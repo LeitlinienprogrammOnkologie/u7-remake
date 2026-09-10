@@ -28,6 +28,8 @@ public static class U7Constants
     public const int AvatarShape = 721;
     public const int StartTileX = 1079; // Trinsic, from INITGAME npc.dat
     public const int StartTileY = 2214;
+    /// <summary>Debug: place the avatar at StartTile instead of the npc.dat position.</summary>
+    public static readonly bool DebugStartOverride = false;
     public const int StartLift = 0;
     public const int LastGflag = 2047;
     public const int AnyShape = -359;

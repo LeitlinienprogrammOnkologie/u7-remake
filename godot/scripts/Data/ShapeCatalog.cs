@@ -507,7 +507,8 @@ public sealed class ShapeCatalog
     /// </summary>
     void LoadPaperdollInfo()
     {
-        var path = Path.Combine(U7Paths.RepoRoot, "exult", "exult-1.12.1", "data", "bg", "paperdol_info.txt");
+        // Copied from Exult data/bg/paperdol_info.txt (GPL) so the Exult tree is not needed at runtime.
+        var path = Path.Combine(U7Paths.RepoRoot, "godot", "data", "bg", "paperdol_info.txt");
         if (!File.Exists(path))
         {
             return;

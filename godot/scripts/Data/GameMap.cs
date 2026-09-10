@@ -20,6 +20,18 @@ public sealed class GameMap
     public List<U7Object>[][] ChunkObjects { get; }
     public List<U7Object> Eggs { get; } = new();
     readonly Dictionary<int, List<U7Object>> _pathEggs = new();
+    /// <summary>
+    /// Exult <c>Chunk_cache::eggs</c>: per chunk, 16 bits per tile naming the
+    /// eggs whose active area (or its perimeter) covers that tile. Bit 15
+    /// stands for "egg index 15 and above".
+    /// </summary>
+    readonly ChunkEggs?[][] _chunkEggs;
+    /// <summary>Saved usecode scripts read with their objects, handed to the usecode machine once it exists.</summary>
+    public List<(U7Object Obj, byte[] Script)> PendingScripts { get; } = new();
+    /// <summary>Supplies the running scripts of an object when saving (Exult <c>write_scheduled</c>).</summary>
+    public Func<U7Object, IEnumerable<byte[]>>? ScriptSaver { get; set; }
+    /// <summary>Chunks whose paint dependencies have been computed (done lazily on first draw).</summary>
+    readonly bool[][] _chunkOrdered;
     readonly byte[]?[][] _dungeonLevels;
 
     public GameMap(ShapeCatalog catalog)
@@ -27,10 +39,14 @@ public sealed class GameMap
         Catalog = catalog;
         ChunkObjects = new List<U7Object>[U7Constants.NumChunks][];
         _dungeonLevels = new byte[]?[U7Constants.NumChunks][];
+        _chunkEggs = new ChunkEggs?[U7Constants.NumChunks][];
+        _chunkOrdered = new bool[U7Constants.NumChunks][];
         for (var x = 0; x < U7Constants.NumChunks; x++)
         {
+            _chunkOrdered[x] = new bool[U7Constants.NumChunks];
             ChunkObjects[x] = new List<U7Object>[U7Constants.NumChunks];
             _dungeonLevels[x] = new byte[]?[U7Constants.NumChunks];
+            _chunkEggs[x] = new ChunkEggs?[U7Constants.NumChunks];
             for (var y = 0; y < U7Constants.NumChunks; y++)
             {
                 ChunkObjects[x][y] = new List<U7Object>();
@@ -76,9 +92,13 @@ public sealed class GameMap
 
     public void AddObject(U7Object obj)
     {
-        var cx = U7Constants.WrapChunk(obj.Tx / U7Constants.TilesPerChunk);
-        var cy = U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk);
-        ChunkObjects[cx][cy].Add(obj);
+        InsertIntoChunk(obj);
+        if (obj.IsEgg && !Eggs.Contains(obj))
+        {
+            Eggs.Add(obj);
+            SetEggArea(obj);
+            UpdateEgg(obj, add: true);
+        }
     }
 
     /// <summary>
@@ -95,9 +115,7 @@ public sealed class GameMap
             return;
         }
 
-        var cx = U7Constants.WrapChunk(obj.Tx / U7Constants.TilesPerChunk);
-        var cy = U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk);
-        ChunkObjects[cx][cy].Remove(obj);
+        RemoveFromChunk(obj);
     }
 
     public void PlaceInWorld(U7Object obj, int tx, int ty, int tz)
@@ -132,20 +150,146 @@ public sealed class GameMap
 
     public void MoveObject(U7Object obj, int newTx, int newTy, int newTz)
     {
-        var ocx = U7Constants.WrapChunk(obj.Tx / U7Constants.TilesPerChunk);
-        var ocy = U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk);
+        if (obj.Removed)
+        {
+            // A removed object (dead NPC) keeps a position but never re-enters a chunk.
+            obj.Tx = U7Constants.WrapTile(newTx);
+            obj.Ty = U7Constants.WrapTile(newTy);
+            obj.Tz = newTz;
+            return;
+        }
+
+        RemoveFromChunk(obj);
+        if (obj.IsEgg)
+        {
+            UpdateEgg(obj, add: false);
+        }
+
         obj.Tx = U7Constants.WrapTile(newTx);
         obj.Ty = U7Constants.WrapTile(newTy);
         obj.Tz = newTz;
-        var ncx = obj.ChunkX;
-        var ncy = obj.ChunkY;
-        if (ocx == ncx && ocy == ncy)
+        if (obj.IsEgg)
+        {
+            SetEggArea(obj);
+            UpdateEgg(obj, add: true);
+        }
+
+        InsertIntoChunk(obj);
+    }
+
+    /// <summary>
+    /// Exult <c>Map_chunk::add</c>: append to the chunk list and, once the
+    /// chunk's ordering exists, compute paint dependencies against the chunk
+    /// and its neighbours.
+    /// </summary>
+    void InsertIntoChunk(U7Object obj)
+    {
+        var cx = U7Constants.WrapChunk(obj.Tx / U7Constants.TilesPerChunk);
+        var cy = U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk);
+        ChunkObjects[cx][cy].Add(obj);
+        if (_chunkOrdered[cx][cy] && !obj.IsFlat)
+        {
+            AddDependencies(obj, cx, cy, onlyEarlierInOwnChunk: false);
+        }
+    }
+
+    /// <summary>Exult <c>Map_chunk::remove</c>: drop from the list and clear dependencies.</summary>
+    void RemoveFromChunk(U7Object obj)
+    {
+        var cx = U7Constants.WrapChunk(obj.Tx / U7Constants.TilesPerChunk);
+        var cy = U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk);
+        ChunkObjects[cx][cy].Remove(obj);
+        ClearDependencies(obj);
+    }
+
+    /// <summary>
+    /// Compute paint dependencies for every non-flat object in the chunk the
+    /// first time it is drawn (Exult does this as chunks are read in).
+    /// </summary>
+    public void EnsureChunkOrdered(int cx, int cy)
+    {
+        cx = U7Constants.WrapChunk(cx);
+        cy = U7Constants.WrapChunk(cy);
+        if (_chunkOrdered[cx][cy])
         {
             return;
         }
 
-        ChunkObjects[ocx][ocy].Remove(obj);
-        ChunkObjects[ncx][ncy].Add(obj);
+        _chunkOrdered[cx][cy] = true;
+        var list = ChunkObjects[cx][cy];
+        for (var i = 0; i < list.Count; i++)
+        {
+            var obj = list[i];
+            if (!obj.IsFlat && !obj.Removed)
+            {
+                AddDependencies(obj, cx, cy, onlyEarlierInOwnChunk: true, ownIndex: i);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Map_chunk::add_dependencies</c> over the chunk and its eight
+    /// neighbours (Exult limits the neighbours by overlap flags; comparing
+    /// against all of them only adds dependencies Exult would also accept).
+    /// </summary>
+    void AddDependencies(U7Object obj, int cx, int cy, bool onlyEarlierInOwnChunk, int ownIndex = int.MaxValue)
+    {
+        const int Reach = 24; // tiles; sprites never extend further
+        var info = new RenderOrdering.Info(obj, Catalog);
+        for (var dy = -1; dy <= 1; dy++)
+        {
+            for (var dx = -1; dx <= 1; dx++)
+            {
+                var list = ObjectsInChunk(cx + dx, cy + dy);
+                var own = dx == 0 && dy == 0;
+                var end = own && onlyEarlierInOwnChunk ? Math.Min(ownIndex, list.Count) : list.Count;
+                for (var i = 0; i < end; i++)
+                {
+                    var other = list[i];
+                    if (other == obj || other.Removed || other.IsFlat ||
+                        Math.Abs(other.Tx - obj.Tx) > Reach || Math.Abs(other.Ty - obj.Ty) > Reach)
+                    {
+                        continue;
+                    }
+
+                    var cmp = RenderOrdering.Compare(info, new RenderOrdering.Info(other, Catalog));
+                    if (cmp == 1)
+                    {
+                        (obj.Dependencies ??= new HashSet<U7Object>()).Add(other);
+                        (other.Dependors ??= new HashSet<U7Object>()).Add(obj);
+                    }
+                    else if (cmp == -1)
+                    {
+                        (other.Dependencies ??= new HashSet<U7Object>()).Add(obj);
+                        (obj.Dependors ??= new HashSet<U7Object>()).Add(other);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>Exult <c>Game_object::clear_dependencies</c>.</summary>
+    static void ClearDependencies(U7Object obj)
+    {
+        if (obj.Dependencies is { } deps)
+        {
+            foreach (var d in deps)
+            {
+                d.Dependors?.Remove(obj);
+            }
+
+            deps.Clear();
+        }
+
+        if (obj.Dependors is { } dependors)
+        {
+            foreach (var d in dependors)
+            {
+                d.Dependencies?.Remove(obj);
+            }
+
+            dependors.Clear();
+        }
     }
 
     public void RemoveObject(U7Object obj)
@@ -159,11 +303,10 @@ public sealed class GameMap
             return;
         }
 
-        var cx = U7Constants.WrapChunk(obj.Tx / U7Constants.TilesPerChunk);
-        var cy = U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk);
-        ChunkObjects[cx][cy].Remove(obj);
+        RemoveFromChunk(obj);
         if (obj.IsEgg)
         {
+            UpdateEgg(obj, add: false);
             Eggs.Remove(obj);
             if (obj.EggType == U7.World.EggType.Path &&
                 _pathEggs.TryGetValue(obj.Quality, out var list))
@@ -173,10 +316,192 @@ public sealed class GameMap
         }
     }
 
+    /// <summary>
+    /// Eggs whose active area covers the tile, from the chunk egg bits. Returns
+    /// null when the tile has no egg bits (the common case on a step). Ports the
+    /// bit walk in Exult <c>Chunk_cache::activate_eggs</c>.
+    /// </summary>
+    public List<U7Object>? EggsAt(int tx, int ty)
+    {
+        const int T = U7Constants.TilesPerChunk;
+        tx = U7Constants.WrapTile(tx);
+        ty = U7Constants.WrapTile(ty);
+        var ce = _chunkEggs[tx / T][ty / T];
+        if (ce is null)
+        {
+            return null;
+        }
+
+        int bits = ce.Bits[(ty % T) * T + tx % T];
+        if (bits == 0)
+        {
+            return null;
+        }
+
+        var result = new List<U7Object>(4);
+        var n = ce.Eggs.Count;
+        for (var i = 0; i < 15 && i < n; i++)
+        {
+            if ((bits & (1 << i)) != 0 && ce.Eggs[i] is { Removed: false } egg)
+            {
+                result.Add(egg);
+            }
+        }
+
+        if ((bits & 0x8000) != 0)
+        {
+            for (var i = 15; i < n; i++)
+            {
+                if (ce.Eggs[i] is { Removed: false } egg)
+                {
+                    result.Add(egg);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Exult <c>Egg_object::set_area</c>: criteria/types whose whole area is egged.</summary>
+    static bool EggSolidArea(U7Object egg) =>
+        egg.EggCriteria is U7.World.EggCriteria.SomethingOn or U7.World.EggCriteria.CachedIn ||
+        egg.EggType is U7.World.EggType.Teleport or U7.World.EggType.Intermap;
+
+    /// <summary>Exult <c>Chunk_cache::update_egg</c>: whole area, or just its perimeter.</summary>
+    void UpdateEgg(U7Object egg, bool add)
+    {
+        var x = egg.EggAreaX;
+        var y = egg.EggAreaY;
+        var w = egg.EggAreaW;
+        var h = egg.EggAreaH;
+        if (w <= 0 || h <= 0)
+        {
+            return;
+        }
+
+        if (EggSolidArea(egg))
+        {
+            SetEggedRect(egg, x, y, w, h, add);
+            return;
+        }
+
+        SetEggedRect(egg, x, y, w, 1, add);
+        SetEggedRect(egg, x, y + h - 1, w, 1, add);
+        SetEggedRect(egg, x, y + 1, 1, h - 2, add);
+        SetEggedRect(egg, x + w - 1, y + 1, 1, h - 2, add);
+    }
+
+    /// <summary>
+    /// Walk the chunks a world rect intersects (Exult <c>Chunk_intersect_iterator</c>),
+    /// clipped to the world like <c>Egg_object::set_area</c>.
+    /// </summary>
+    void SetEggedRect(U7Object egg, int x, int y, int w, int h, bool add)
+    {
+        const int T = U7Constants.TilesPerChunk;
+        var x0 = Math.Max(0, x);
+        var y0 = Math.Max(0, y);
+        var x1 = Math.Min(U7Constants.NumTiles, x + w);
+        var y1 = Math.Min(U7Constants.NumTiles, y + h);
+        if (x1 <= x0 || y1 <= y0)
+        {
+            return;
+        }
+
+        for (var cy = y0 / T; cy <= (y1 - 1) / T; cy++)
+        {
+            for (var cx = x0 / T; cx <= (x1 - 1) / T; cx++)
+            {
+                SetEgged(cx, cy, egg,
+                    Math.Max(x0, cx * T) - cx * T, Math.Max(y0, cy * T) - cy * T,
+                    Math.Min(x1, cx * T + T) - cx * T, Math.Min(y1, cy * T + T) - cy * T,
+                    add);
+            }
+        }
+    }
+
+    /// <summary>Exult <c>Chunk_cache::set_egged</c> for one chunk; bounds are chunk-local, end exclusive.</summary>
+    void SetEgged(int cx, int cy, U7Object egg, int lx0, int ly0, int lx1, int ly1, bool add)
+    {
+        const int T = U7Constants.TilesPerChunk;
+        var ce = _chunkEggs[cx][cy];
+        if (ce is null)
+        {
+            if (!add)
+            {
+                return;
+            }
+
+            ce = _chunkEggs[cx][cy] = new ChunkEggs();
+        }
+
+        var eggnum = ce.Eggs.IndexOf(egg);
+        if (add)
+        {
+            if (eggnum < 0)
+            {
+                eggnum = ce.Eggs.IndexOf(null);
+                if (eggnum >= 0)
+                {
+                    ce.Eggs[eggnum] = egg;
+                }
+                else
+                {
+                    ce.Eggs.Add(egg);
+                    eggnum = ce.Eggs.Count - 1;
+                }
+            }
+
+            var bit = (ushort)(1 << Math.Min(eggnum, 15));
+            for (var ly = ly0; ly < ly1; ly++)
+            {
+                for (var lx = lx0; lx < lx1; lx++)
+                {
+                    ce.Bits[ly * T + lx] |= bit;
+                }
+            }
+
+            return;
+        }
+
+        if (eggnum < 0)
+        {
+            return;
+        }
+
+        ce.Eggs[eggnum] = null;
+        if (eggnum >= 15)
+        {
+            for (var i = 15; i < ce.Eggs.Count; i++)
+            {
+                if (ce.Eggs[i] is not null)
+                {
+                    return;
+                }
+            }
+
+            eggnum = 15;
+        }
+
+        var mask = (ushort)~(1 << eggnum);
+        for (var ly = ly0; ly < ly1; ly++)
+        {
+            for (var lx = lx0; lx < lx1; lx++)
+            {
+                ce.Bits[ly * T + lx] &= mask;
+            }
+        }
+    }
+
+    sealed class ChunkEggs
+    {
+        public readonly ushort[] Bits = new ushort[U7Constants.TilesPerChunk * U7Constants.TilesPerChunk];
+        public readonly List<U7Object?> Eggs = new();
+    }
+
     public List<U7Object> EggsNear(int tx, int ty, int dist)
     {
         var result = new List<U7Object>();
-        var chunks = Math.Max(1, (dist + 15) / 16 + 1);
+        var chunks = Math.Max(1, (dist + 15) / 16);
         var ocx = tx / U7Constants.TilesPerChunk;
         var ocy = ty / U7Constants.TilesPerChunk;
         for (var cy = ocy - chunks; cy <= ocy + chunks; cy++)
@@ -629,6 +954,7 @@ public sealed class GameMap
     void ParseIreg(byte[] data, ref int i, int scx, int scy, U7Object? container)
     {
         var readyIndex = -1;
+        U7Object? last = null;
         while (i < data.Length)
         {
             var entlen = data[i++];
@@ -674,7 +1000,13 @@ public sealed class GameMap
                     if (kind == 1 && i + 2 <= data.Length)
                     {
                         var len = BitConverter.ToUInt16(data, i);
-                        i += 2 + len;
+                        i += 2;
+                        if (last is not null && i + len <= data.Length)
+                        {
+                            PendingScripts.Add((last, data.AsSpan(i, len).ToArray()));
+                        }
+
+                        i += len;
                     }
                 }
 
@@ -724,13 +1056,13 @@ public sealed class GameMap
 
             if (info.IsHatchable)
             {
-                ReadIregEgg(entry, testlen, extended, scx, scy, cx, cy, tilex, tiley, shape, frame);
+                last = ReadIregEgg(entry, testlen, extended, scx, scy, cx, cy, tilex, tiley, shape, frame);
                 continue;
             }
 
             if (testlen is 12 or 13)
             {
-                ReadIregContainer(
+                last = ReadIregContainer(
                     data, ref i, entry, testlen, scx, scy, cx, cy,
                     tilex, tiley, shape, frame, container, readyIndex);
                 continue;
@@ -766,6 +1098,7 @@ public sealed class GameMap
                 nested.Container = container;
                 nested.ReadySlot = ActorReadySlot(container, readyIndex);
                 container.Contents.Add(nested);
+                last = nested;
             }
             else
             {
@@ -781,6 +1114,7 @@ public sealed class GameMap
                     ObjectKind.Ireg);
                 obj.Flags = flags;
                 ChunkObjects[wcx][wcy].Add(obj);
+                last = obj;
             }
         }
     }
@@ -788,7 +1122,7 @@ public sealed class GameMap
     static int ActorReadySlot(U7Object? container, int readyIndex) =>
         container is { IsActor: true } && readyIndex is >= 0 and < 12 ? readyIndex : -1;
 
-    void ReadIregContainer(
+    U7Object? ReadIregContainer(
         byte[] data, ref int i, ReadOnlySpan<byte> entry, int testlen,
         int scx, int scy, int cx, int cy, int tilex, int tiley,
         int shape, int frame, U7Object? parent, int readyIndex)
@@ -797,8 +1131,11 @@ public sealed class GameMap
         var skip = info.IsBargeClass ||
                    info.Name.Contains("jawbone", StringComparison.OrdinalIgnoreCase);
         var type = entry[4] + 256 * entry[5];
-        var lift = NibbleSwap(entry[9]) & 0xf;
+        // 13-byte entries are Exult Dead_body records: npc num at [8..9], lift at [10].
+        var isBody = testlen == 13;
+        var lift = NibbleSwap(entry[isBody ? 10 : 9]) & 0xf;
         var quality = entry.Length > 7 ? entry[7] : 0;
+        var liveNpc = isBody && entry.Length > 9 ? entry[8] | (entry[9] << 8) : -1;
         var flagByte = testlen == 13
             ? (entry.Length > 12 ? entry[12] : (byte)0)
             : (entry.Length > 11 ? entry[11] : (byte)0);
@@ -811,6 +1148,7 @@ public sealed class GameMap
             {
                 obj = MakeObject(tilex, tiley, lift, shape, frame, quality, ObjectKind.Ireg);
                 obj.Flags = flags;
+                obj.LiveNpcNum = liveNpc;
                 obj.Container = parent;
                 obj.ReadySlot = ActorReadySlot(parent, readyIndex);
                 parent.Contents.Add(obj);
@@ -825,6 +1163,7 @@ public sealed class GameMap
                         wcx * 16 + tilex, wcy * 16 + tiley, lift, shape, frame, quality,
                         ObjectKind.Ireg);
                     obj.Flags = flags;
+                    obj.LiveNpcNum = liveNpc;
                     ChunkObjects[wcx][wcy].Add(obj);
                 }
             }
@@ -834,16 +1173,18 @@ public sealed class GameMap
         {
             ParseIreg(data, ref i, scx, scy, obj ?? new U7Object());
         }
+
+        return obj;
     }
 
-    void ReadIregEgg(
+    U7Object? ReadIregEgg(
         ReadOnlySpan<byte> entry, int testlen, bool extended,
         int scx, int scy, int cx, int cy, int tilex, int tiley, int shape, int frame)
     {
         var off = extended ? 1 : 0;
         if (4 + off + 8 > entry.Length)
         {
-            return;
+            return null;
         }
 
         var itype = entry[4 + off] + 256 * entry[5 + off];
@@ -859,7 +1200,7 @@ public sealed class GameMap
         var wcy = scy + cy;
         if ((uint)wcx >= U7Constants.NumChunks || (uint)wcy >= U7Constants.NumChunks)
         {
-            return;
+            return null;
         }
 
         var egg = MakeObject(
@@ -869,6 +1210,7 @@ public sealed class GameMap
         FillEgg(egg, itype, prob, data1, data2, data3);
         ChunkObjects[wcx][wcy].Add(egg);
         Eggs.Add(egg);
+        UpdateEgg(egg, add: true);
         if (egg.EggType == U7.World.EggType.Path)
         {
             if (!_pathEggs.TryGetValue(egg.Quality, out var list))
@@ -879,6 +1221,287 @@ public sealed class GameMap
 
             list.Add(egg);
         }
+
+        return egg;
+    }
+
+    /// <summary>
+    /// Exult <c>Game_map::cache_out</c>: once the avatar is in a new superchunk,
+    /// temporary objects (spawned monsters, their corpses, temporary items)
+    /// outside the surrounding 3×3 superchunks are deleted. Returns the count.
+    /// </summary>
+    public int CacheOut(int avatarTx, int avatarTy)
+    {
+        const int T = U7Constants.TilesPerSuperchunk;
+        var sx = avatarTx / T;
+        var sy = avatarTy / T;
+        var removed = 0;
+        for (var cy = 0; cy < U7Constants.NumChunks; cy++)
+        {
+            var scy = cy / 16;
+            var dy = Math.Abs(scy - sy);
+            dy = Math.Min(dy, 12 - dy);
+            if (dy <= 1)
+            {
+                continue;
+            }
+
+            for (var cx = 0; cx < U7Constants.NumChunks; cx++)
+            {
+                var scx = cx / 16;
+                var dx = Math.Abs(scx - sx);
+                dx = Math.Min(dx, 12 - dx);
+                if (dx <= 1)
+                {
+                    continue;
+                }
+
+                var list = ChunkObjects[cx][cy];
+                for (var i = list.Count - 1; i >= 0; i--)
+                {
+                    var obj = list[i];
+                    var temp = obj.IsActor ? obj.NpcNum < 0 : obj.Kind == ObjectKind.Ireg && obj.GetFlag(U7.Actors.ObjFlag.Temporary);
+                    if (temp && !obj.Removed)
+                    {
+                        RemoveObject(obj);
+                        removed++;
+                    }
+                }
+            }
+        }
+
+        return removed;
+    }
+
+    // ------------------------------------------------------------------ saving
+
+    /// <summary>Exult <c>Game_map::write_ireg</c>: one U7IREGxx file per superchunk.</summary>
+    public void WriteIregFiles(string dir)
+    {
+        for (var schunk = 0; schunk < U7Constants.NumSuperchunks; schunk++)
+        {
+            var scy = 16 * (schunk / 12);
+            var scx = 16 * (schunk % 12);
+            using var ms = new MemoryStream();
+            using var w = new BinaryWriter(ms);
+            for (var cy = 0; cy < 16; cy++)
+            {
+                for (var cx = 0; cx < 16; cx++)
+                {
+                    foreach (var obj in ChunkObjects[scx + cx][scy + cy])
+                    {
+                        if (obj.Kind != ObjectKind.Ireg || obj.IsActor || obj.Removed || obj.Container is not null)
+                        {
+                            continue;
+                        }
+
+                        WriteIregObject(w, obj, contained: false);
+                    }
+
+                    w.Write((ushort)0); // end of chunk
+                }
+            }
+
+            w.Flush();
+            File.WriteAllBytes(Path.Combine(dir, $"U7IREG{schunk:X2}"), ms.ToArray());
+        }
+    }
+
+    /// <summary>Exult <c>Actor::write_contents</c>: readied items first with their spot, then the rest.</summary>
+    public void WriteActorContents(BinaryWriter w, U7Object actor)
+    {
+        foreach (var item in actor.Contents)
+        {
+            if (item.Removed || item.ReadySlot < 0)
+            {
+                continue;
+            }
+
+            w.Write((byte)2);
+            w.Write((ushort)item.ReadySlot);
+            WriteIregObject(w, item, contained: true);
+        }
+
+        foreach (var item in actor.Contents)
+        {
+            if (item.Removed || item.ReadySlot >= 0)
+            {
+                continue;
+            }
+
+            w.Write((byte)2);
+            w.Write((ushort)0xff);
+            WriteIregObject(w, item, contained: true);
+        }
+
+        w.Write((byte)1);
+    }
+
+    /// <summary>Exult <c>Game_map::write_scheduled</c>: IREG_SPECIAL + IREG_UCSCRIPT + length + script.</summary>
+    public void WriteScheduled(BinaryWriter w, U7Object obj)
+    {
+        if (ScriptSaver is null)
+        {
+            return;
+        }
+
+        foreach (var blob in ScriptSaver(obj))
+        {
+            if (blob.Length == 0 || blob.Length > ushort.MaxValue)
+            {
+                continue;
+            }
+
+            w.Write((byte)255);
+            w.Write((byte)1);
+            w.Write((ushort)blob.Length);
+            w.Write(blob);
+        }
+    }
+
+    /// <summary>Exult <c>Ireg_game_object</c> / <c>Container_game_object</c> / <c>Egg_object::write_ireg</c>.</summary>
+    void WriteIregObject(BinaryWriter w, U7Object obj, bool contained)
+    {
+        WriteIregEntry(w, obj, contained);
+        WriteScheduled(w, obj);
+    }
+
+    void WriteIregEntry(BinaryWriter w, U7Object obj, bool contained)
+    {
+        var info = Catalog[obj.Shape];
+        if (obj.IsEgg)
+        {
+            var sz = obj.EggData3 > 0 ? 14 : 12;
+            WriteCommonIreg(w, obj, sz, contained);
+            var flags = obj.EggFlags;
+            var tword = obj.EggType & 0xf;
+            tword |= (obj.EggCriteria & 7) << 4;
+            tword |= ((flags & U7.World.EggFlag.Nocturnal) != 0 ? 1 : 0) << 7;
+            tword |= ((flags & U7.World.EggFlag.Once) != 0 ? 1 : 0) << 8;
+            tword |= ((flags & U7.World.EggFlag.Hatched) != 0 ? 1 : 0) << 9;
+            tword |= (obj.EggDistance & 0x1f) << 10;
+            tword |= ((flags & U7.World.EggFlag.AutoReset) != 0 ? 1 : 0) << 15;
+            w.Write((ushort)tword);
+            w.Write((byte)obj.EggProbability);
+            w.Write((ushort)obj.EggData1);
+            w.Write((byte)NibbleSwap(obj.Tz));
+            w.Write((ushort)obj.EggData2);
+            if (obj.EggData3 > 0)
+            {
+                w.Write((ushort)obj.EggData3);
+            }
+
+            return;
+        }
+
+        var invisible = obj.GetFlag(0);
+        var okayToTake = obj.GetFlag(U7.Actors.ObjFlag.OkayToTake);
+        var flagByte = (byte)((invisible ? 1 : 0) | (okayToTake ? 1 << 3 : 0));
+        var live = obj.Contents.Where(c => !c.Removed).ToList();
+        if (U7.Actors.Bodies.IsBodyShape(obj.Shape))
+        {
+            // Exult Dead_body::write_ireg: 13-byte entry carrying the NPC number.
+            WriteCommonIreg(w, obj, 13, contained);
+            w.Write((ushort)(live.Count > 0 ? live[^1].Shape : 0));
+            w.Write((byte)0);
+            w.Write((byte)obj.Quality);
+            w.Write((ushort)(obj.LiveNpcNum < 0 ? 0xffff : obj.LiveNpcNum));
+            w.Write((byte)NibbleSwap(obj.Tz));
+            w.Write((byte)0); // hp
+            w.Write(flagByte);
+            if (live.Count > 0)
+            {
+                foreach (var item in live)
+                {
+                    WriteIregObject(w, item, contained: true);
+                }
+
+                w.Write((byte)1);
+            }
+
+            return;
+        }
+
+        if (info.IsContainerClass || live.Count > 0)
+        {
+            WriteCommonIreg(w, obj, 12, contained);
+            w.Write((ushort)(live.Count > 0 ? live[^1].Shape : 0));
+            w.Write((byte)0);
+            w.Write((byte)obj.Quality);
+            w.Write((byte)0);
+            w.Write((byte)NibbleSwap(obj.Tz));
+            w.Write((byte)0); // resistance
+            w.Write(flagByte);
+            if (live.Count > 0)
+            {
+                foreach (var item in live)
+                {
+                    WriteIregObject(w, item, contained: true);
+                }
+
+                w.Write((byte)1);
+            }
+
+            return;
+        }
+
+        WriteCommonIreg(w, obj, 10, contained);
+        w.Write((byte)NibbleSwap(obj.Tz));
+        var value = obj.Quality;
+        if (info.HasQualityFlags)
+        {
+            value = flagByte;
+        }
+        else if (okayToTake && info.HasQuantity)
+        {
+            value |= 0x80;
+        }
+
+        w.Write((byte)value);
+        w.Write((byte)(obj.GetFlag(U7.Actors.ObjFlag.Temporary) ? 1 : 0));
+        w.Write((byte)0);
+        w.Write((byte)0);
+        w.Write((byte)0);
+    }
+
+    /// <summary>Exult <c>Ireg_game_object::write_common_ireg</c>.</summary>
+    static void WriteCommonIreg(BinaryWriter w, U7Object obj, int normLen, bool contained)
+    {
+        byte x;
+        byte y;
+        if (contained)
+        {
+            x = (byte)obj.Tx;
+            y = (byte)obj.Ty;
+        }
+        else
+        {
+            x = (byte)((((obj.Tx / 16) % 16) << 4) | (obj.Tx % 16));
+            y = (byte)((((obj.Ty / 16) % 16) << 4) | (obj.Ty % 16));
+        }
+
+        if (obj.Shape >= 1024 || obj.Frame >= 64)
+        {
+            w.Write((byte)254); // IREG_EXTENDED
+            w.Write((byte)(normLen + 1));
+            w.Write(x);
+            w.Write(y);
+            w.Write((byte)(obj.Shape & 0xff));
+            w.Write((byte)(obj.Shape >> 8));
+            w.Write((byte)obj.Frame);
+            return;
+        }
+
+        if (obj.Tz > 15)
+        {
+            w.Write((byte)253); // IREG_EXTENDED2
+        }
+
+        w.Write((byte)normLen);
+        w.Write(x);
+        w.Write(y);
+        w.Write((byte)(obj.Shape & 0xff));
+        w.Write((byte)(((obj.Shape >> 8) & 3) | (obj.Frame << 2)));
     }
 
     static void FillEgg(U7Object egg, int itype, int prob, int data1, int data2, int data3)

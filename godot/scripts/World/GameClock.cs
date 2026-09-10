@@ -87,6 +87,15 @@ public sealed class GameClock
         }
     }
 
+    /// <summary>Restore the time of day from a saved game.</summary>
+    public void Set(int day, int hour, int minute)
+    {
+        Day = day;
+        Hour = Math.Clamp(hour, 0, 23);
+        Minute = Math.Clamp(minute, 0, 59);
+        Ticks = 0;
+    }
+
     public void SkipHours(int delta)
     {
         var oldSlot = Slot;

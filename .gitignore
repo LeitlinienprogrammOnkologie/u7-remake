@@ -10,3 +10,5 @@ Thumbs.db
 /u7/
 /exult/
 /assets/
+# Saved games (Exult GAMEDAT layout)
+/saves/

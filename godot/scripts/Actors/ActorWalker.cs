@@ -44,27 +44,48 @@ public static class ActorWalker
         var facing = DirIndex(dx, dy);
         var nx = U7Constants.WrapTile(actor.Tx + dx);
         var ny = U7Constants.WrapTile(actor.Ty + dy);
-        var nz = actor.Tz;
-        if (map.IsBlocked(nx, ny, nz))
+        if (!ResolveStep(map, nx, ny, actor.Tz, out var nz))
         {
-            if (!map.IsBlocked(nx, ny, nz + 1))
+            Stand(actor, facing);
+            return false;
+        }
+
+        MoveTo(map, actor, nx, ny, nz, facing);
+        return true;
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::is_blocked</c> for a one-tile step: where a step onto
+    /// (tx, ty) from lift <paramref name="fromZ"/> would land (up or down one
+    /// level), or false if the tile is blocked.
+    /// </summary>
+    public static bool ResolveStep(GameMap map, int tx, int ty, int fromZ, out int nz)
+    {
+        nz = fromZ;
+        if (map.IsBlocked(tx, ty, nz))
+        {
+            if (!map.IsBlocked(tx, ty, nz + 1))
             {
                 nz += 1;
+                return true;
             }
-            else
-            {
-                Stand(actor, facing);
-                return false;
-            }
+
+            return false;
         }
-        else if (nz > 0 && !map.IsBlocked(nx, ny, nz - 1) && !HasFloor(map, nx, ny, nz))
+
+        if (nz > 0 && !map.IsBlocked(tx, ty, nz - 1) && !HasFloor(map, tx, ty, nz))
         {
             nz -= 1;
         }
 
-        map.MoveObject(actor, nx, ny, nz);
-        AdvanceWalkFrame(actor, facing);
         return true;
+    }
+
+    /// <summary>Move one tile and advance the walk cycle in the given facing.</summary>
+    public static void MoveTo(GameMap map, U7Object actor, int tx, int ty, int tz, int facing)
+    {
+        map.MoveObject(actor, tx, ty, tz);
+        AdvanceWalkFrame(actor, facing);
     }
 
     public static void Stand(U7Object actor, int facing)
