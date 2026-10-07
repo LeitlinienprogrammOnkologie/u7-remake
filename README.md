@@ -1,6 +1,6 @@
 # Ultima VII: The Black Gate remake
 
-A Godot 4.6 / .NET 8 (C#) remake of Ultima VII: The Black Gate, ported
+A Godot 4.7 / .NET 8 (C#) remake of Ultima VII: The Black Gate, ported
 function by function from [Exult](https://exult.info) 1.12.1. Progress,
 controls and per-system notes live in [PROGRESS.md](PROGRESS.md).
 
@@ -10,7 +10,7 @@ source tree and the extracted assets are **not tracked** (see
 
 ## Prerequisites
 
-- Godot 4.6 with C# support and the .NET 8 SDK
+- Godot 4.7 with C# support and the .NET 8 SDK
 - Python 3.12 or newer
 - The `titan` CLI from the `titan-ultima` package: `pip install titan-ultima`
 - Ultima VII: The Black Gate from GOG (sold as *Ultima 7 Complete*)
@@ -63,7 +63,7 @@ Exult's patch table; no soundfont or extra software is needed. On other platform
 
 ## 4. Run
 
-Open the `godot/` project in Godot 4.6 and press Play, or build from the
+Open the `godot/` project in Godot 4.7 and press Play, or build from the
 command line:
 
 ```bash

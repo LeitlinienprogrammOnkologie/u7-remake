@@ -17,7 +17,7 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 config/name="Ultima VII Remake"
 config/description="Godot C# remake of Ultima VII: The Black Gate, reverse-engineered from Exult"
 run/main_scene="res://scenes/main.tscn"
-config/features=PackedStringArray("4.6", "C#", "Forward Plus")
+config/features=PackedStringArray("4.7", "C#", "Forward Plus")
 config/icon="res://icon.svg"
 
 [display]

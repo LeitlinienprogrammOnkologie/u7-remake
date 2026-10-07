@@ -2,7 +2,7 @@
 
 Black Gate in Godot 4 C#, driven by original `u7/STATIC` data and Exult 1.12.1 as source of truth. Not a full game yet: walk Britannia, open gumps, talk to NPCs, watch the clock, hatch eggs, fight.
 
-Last update: 2026-09-04.
+Last update: 2026-10-07.
 
 ## Status
 
@@ -27,7 +27,7 @@ Last update: 2026-09-04.
 
 ## How to run
 
-Open the **`godot/`** project in Godot 4.6 (C# / .NET 8). Data root is the repo (`u7/STATIC/U7MAP` must exist). `u7/`, `exult/` and `assets/` are not tracked; [README.md](README.md) explains how to provide them. Start tile is Trinsic **1079, 2214**, hour **6:00**.
+Open the **`godot/`** project in Godot 4.7 (C# / .NET 8). Data root is the repo (`u7/STATIC/U7MAP` must exist). `u7/`, `exult/` and `assets/` are not tracked; [README.md](README.md) explains how to provide them. Start tile is Trinsic **1079, 2214**, hour **6:00**.
 
 | Key / input | Action |
 |---|---|
@@ -57,6 +57,11 @@ Open the **`godot/`** project in Godot 4.6 (C# / .NET 8). Data root is the repo 
 5. **Eggs** — teleport, usecode, jukebox, button, monster spawn.
 6. **Combat** — melee v1.
 7. **Inventory** — BG paper doll + real container gumps.
+8. **Combat v2** — ranged/thrown weapons with projectiles and ammo, corpses, battle music, avatar death via usecode 0x60E.
+9. **Party** — Exult `Party_manager` port: join/leave, formation, follow, teleport, party combat.
+10. **Save / load** — Exult GAMEDAT layout, quick slot.
+11. **Usecode scripts** — Exult `Usecode_script` engine, saved with their objects.
+12. **Music** — jukebox eggs → GM MIDI on Windows.
 
 ### NPCs / clock / schedules (current)
 
@@ -113,7 +118,7 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - Each step first runs Exult `test_unhatch`/`unhatch` on the tile left: jukebox and sfx eggs clear their hatched flag (auto-reset) or are removed (once), so music no longer re-triggers on every tile inside the area. Once-only eggs of every other type, usecode included, are removed after hatching.
 - Teleport-in and map load use Exult `try_all_eggs`: every active egg within 32 tiles except jukebox and teleport, with the dice roll, guarded against recursion so chained teleports stop.
 - Implemented: **teleport** (coords or path-egg quality), **usecode** (`event 3`), **jukebox** (plays the track), **button**, **monster** (spawn from IREG data). Missile / weather / sfx / voice log a stub once.
-- Party teleport moves the avatar only (no follow).
+- Teleport eggs move the party along (`teleport_party`).
 
 ### Party (current)
 
@@ -152,9 +157,9 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - Ranged and thrown weapons (Exult `Combat_schedule::attack_target` + `Projectile_effect`): a bow, crossbow, musket, wand or thrown axe fires a projectile when the target is beyond melee reach (or always, for `uses = ranged`). Ammunition comes from the quiver or any bag (`find_weapon_ammo`), charges from the wand's quality, thrown weapons consume themselves; the missile sprite flies along a straight line at the weapon's missile speed with Exult's 16-direction frames and rotation, then rolls to hit with the ranged bonus (+6, minus distance for thrown), applies weapon plus ammo damage with the ammo's damage type, drops the ammo by its drop rule, and returning weapons come straight back into the thrower's hands. Archers do not keep their distance (Exult has no such behaviour outside flee mode): they shoot from where they stand and only walk when the target is out of range. `assets/data/ammo.csv` is loaded as `Actors/AmmoTable`. Explosions, homing missiles and attacks on tiles are not ported.
 - Strike timing follows Exult `dex_to_attack`: each 200 ms tick in reach banks the actor's dexterity, and a swing costs 30 points (a dex-6 rat strikes about once a second). Unarmed damage is 1 plus the strength roll; the MONSTERS.DAT weapon byte is not used.
 - Nearby spawned hostiles (sight 24) chase and melee. **C** or the paperdoll combat button toggles avatar combat: the avatar walks to the nearest foe and auto-strikes at weapon reach (WASD/click still override). Double-click a hostile attacks. Getting hit turns combat on.
-- Hit/damage: Exult `roll_to_win` (30-sided) and `apply_damage` (str/3 + weapon − **worn + monster** armor). Readied `weapons.csv` item, else innate weapon, else monster weapon points. Worn `armor.csv` protection and immunities apply. Ranged weapons only if adjacent (no missiles).
+- Hit/damage: Exult `roll_to_win` (30-sided) and `apply_damage` (str/3 + weapon − **worn + monster** armor). Readied `weapons.csv` item, else innate weapon, else monster weapon points. Worn `armor.csv` protection and immunities apply.
 - Starting kit: IREG ready-slot index (`entlen==2`) is kept; then `ready_best_weapon` / best shield. Open inventory (**I**) for the paper doll.
-- Death (Exult `Actor::die`): shapes in Exult's `bodies.txt` (copied into `Actors/Bodies`) leave a corpse container (shape 400/414/762/778/892, frame per NPC, reflected like the NPC) holding the whole inventory, all okay to take; other shapes drop their items nearby. Dead permanent NPCs keep their record with the dead flag, are never placed or scheduled again, and the corpse is saved as Exult's 13-byte `Dead_body` entry with the NPC number. Avatar death still only barks. No blood, arrest, or combat music.
+- Death (Exult `Actor::die`): shapes in Exult's `bodies.txt` (copied into `Actors/Bodies`) leave a corpse container (shape 400/414/762/778/892, frame per NPC, reflected like the NPC) holding the whole inventory, all okay to take; other shapes drop their items nearby. Dead permanent NPCs keep their record with the dead flag, are never placed or scheduled again, and the corpse is saved as Exult's 13-byte `Dead_body` entry with the NPC number. Avatar death runs usecode 0x60E (see Usecode scripts). No blood or arrest.
 - Trinsic start: cached-in monster egg at **1084, 2236** (dog, shape 496, **neutral** — spawn test, will not attack).
 - **F3** heals the avatar, spawns three chaotic rats (shape 523) six tiles out, and turns combat on. Press again to reset the wave. **F4** toggles invincibility (hits still flash red and bark the blocked damage). Shift-click to open ground first so they are not in the Trinsic street.
 
@@ -167,17 +172,18 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 
 ## Not done (on purpose)
 
-- Missile / weather eggs
-- Projectiles, bodies, blood, arrest, combat music
-- Party: `add_to_party`, follow-avatar (Iolo stands still)
+- Missile / weather / sfx / voice eggs
+- Explosions, homing missiles, attacks on tiles, blood, arrest
+- Party: dead-party list, party items intrinsics, sleeping/paralysed members, attack modes other than nearest
 - Full schedule classes (waiter, smith, farm, …) — stubbed as stand
 - Hunger, poison, barges, weather, dungeon lights
 - True 8-bit palette cycling (world PNGs are day-baked RGBA)
-- Intro / audio / endgame
+- Intro / endgame, SFX, speech playback, music on non-Windows
 - SI paperdolls (`PAPERDOL.VGA`), spellbook, save/load gumps
+- Save: usecode timers/statics, usecode schedule changes, Exult zip saves
 - Many BG intrinsics still log `stub UI_*` and return 0
 - Proximity usecode (`npc_proximity`) not on a timer
 
 ## Next milestone
 
-Audio mixer, intro, barges, and party-follow stay out. Arrest can wait.
+Not set. Candidates: full schedule classes, remaining BG intrinsics, `npc_proximity` timer. Intro, barges and arrest can wait.
