@@ -116,8 +116,10 @@ public partial class U7Game : Node2D
                 _eggs.Activate(actor, fromTx, fromTy);
                 _party.AvatarStepped(fromTx, fromTy);
             };
-            _combat.AvatarMoved = _avatar.Moved;
             _combat.Schedules = _schedules;
+            _schedules.Combat = _combat;
+            _schedules.AvatarMoved = _avatar.Moved;
+            _schedules.AvatarBusy = () => _avatar.IsPlayerMoving;
             _combat.Party = _party;
             _combat.Music = _music;
             _combat.AdoptMonsters(NpcDat.LoadMonsters(_map));
@@ -306,6 +308,18 @@ public partial class U7Game : Node2D
                 RunUsecode(obj); // Exult Game_object::activate, as a double-click.
                 return true;
             };
+            _schedules.CallUsecode = (fun, item) =>
+            {
+                if (_usecode.InUsecode || _usecode.WaitingForChoice)
+                {
+                    return false;
+                }
+
+                _usecode.Call(fun, item, UsecodeEvent.DoubleClick);
+                _conversation.Refresh();
+                return true;
+            };
+            _schedules.IsInUsecode = () => _usecode.InUsecode;
             _schedules.Say = _usecode.Bark;
             SitAction.Say = _usecode.Bark;
             _schedules.CanSpeak = _combat.CanSpeak;
@@ -465,7 +479,7 @@ public partial class U7Game : Node2D
         var frozen = inUsecode || gumpBusy || _avatar.Avatar.IsDead;
         if (canWalk)
         {
-            _avatar.Update(delta, _combat.IsAnimating(_avatar.Avatar),
+            _avatar.Update(delta, _schedules.AvatarActing,
                 _usecode?.InUsecodeControl(_avatar.Avatar) ?? false);
         }
 
@@ -483,7 +497,7 @@ public partial class U7Game : Node2D
         }
 
         _schedules.Update(delta, frozen);
-        _combat.Update(delta, frozen, _avatar.IsPlayerMoving);
+        _combat.Update(delta, frozen);
 
         var camera = _camera;
         var hud = _hud;
@@ -943,10 +957,8 @@ public partial class U7Game : Node2D
             return;
         }
 
-        if (obj.IsActor && CombatEngine.IsEnemy(_avatar.Avatar.Alignment, obj.Alignment))
+        if (_combat.InCombat && CombatClick(obj))
         {
-            _combat.Attack(_avatar.Avatar, obj);
-            _statusExtra = _combat.LastMessage;
             return;
         }
 
@@ -963,6 +975,29 @@ public partial class U7Game : Node2D
         }
 
         RunUsecode(obj);
+    }
+
+    /// <summary>
+    /// Exult <c>Game_window::double_clicked</c> in combat mode: anything but
+    /// a party member or a body is attacked, except unlocked doors and
+    /// containers, which open. False if it is used as usual.
+    /// </summary>
+    bool CombatClick(U7Object obj)
+    {
+        var info = _catalog[obj.Shape];
+        if ((obj.IsActor && _party.IsInParty(obj)) || Bodies.IsBodyShape(obj.Shape))
+        {
+            return false;
+        }
+
+        if ((info.Door && obj.Frame % 4 < 2) || (Inventory.IsContainer(obj, _catalog) && obj.Shape is not (522 or 798)))
+        {
+            return false;
+        }
+
+        _combat.AttackClicked(obj);
+        _statusExtra = _combat.LastMessage;
+        return true;
     }
 
     void RunUsecode(U7Object obj)

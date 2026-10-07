@@ -47,6 +47,18 @@ public static class TextMessages
     public const int LastCloseShutters = 0x73;
     public const int FirstOpenShutters = 0x74;
     public const int LastOpenShutters = 0x76;
+    /// <summary>Combat: coming to help a protected party member ("On my way!").</summary>
+    public const int FirstWillHelp = 0x34;
+    public const int LastWillHelp = 0x36;
+    /// <summary>Combat: running away ("Aiiieeee!"), or now and then something longer.</summary>
+    public const int FleeScreaming = 0x37;
+    public const int FirstFlee = 0x48;
+    public const int LastFlee = 0x52;
+    /// <summary>Combat: charging in ("To Battle!") and taunting ("Take this!").</summary>
+    public const int FirstToBattle = 0x39;
+    public const int LastToBattle = 0x3b;
+    public const int FirstTaunt = 0x53;
+    public const int LastTaunt = 0x59;
     /// <summary>A waiter taking an order ("What wilt thou have?").</summary>
     public const int FirstWaiterAsk = 0x1b;
     public const int LastWaiterAsk = 0x1f;

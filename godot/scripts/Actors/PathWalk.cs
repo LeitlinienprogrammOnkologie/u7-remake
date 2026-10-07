@@ -211,12 +211,14 @@ public sealed class PathWalk : IActorAction
         CreatePath(map, actor, Here(target), new ApproachPathClient(map, actor, target, dist));
 
     /// <summary>Exult <c>Path_walking_actor_action::create_path</c>: an A* walk with the given client; null if no path.</summary>
-    public static PathWalk? CreatePath(GameMap map, U7Object actor, TileCoord dest, PathClient client) =>
-        CreatePath(map, Here(actor), dest, client);
+    public static PathWalk? CreatePath(GameMap map, U7Object actor, TileCoord dest, PathClient client,
+        int maxBlocked = 3) =>
+        CreatePath(map, Here(actor), dest, client, maxBlocked);
 
     /// <summary>The same from another start, for a walk to follow a first one.</summary>
-    public static PathWalk? CreatePath(GameMap map, TileCoord src, TileCoord dest, PathClient client) =>
-        AstarSteps.Find(client, src, dest) is { } path ? new PathWalk(map, path, 3) : null;
+    public static PathWalk? CreatePath(GameMap map, TileCoord src, TileCoord dest, PathClient client,
+        int maxBlocked = 3) =>
+        AstarSteps.Find(client, src, dest) is { } path ? new PathWalk(map, path, maxBlocked) : null;
 
     /// <summary>
     /// Exult <c>walk_to_tile(actor, here, dest, 0, true)</c> on the walk under

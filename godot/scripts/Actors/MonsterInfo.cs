@@ -25,6 +25,34 @@ public sealed class MonsterRecord
     public bool NoBody;
     /// <summary>Exult <c>Monster_actor::create</c>: the fly/walk/swim/ethereal type flags it gets.</summary>
     public int MoveFlags = U7.Data.MoveFlags.Walk;
+    /// <summary>
+    /// Exult <c>m_attackmode</c>: the kind of fighter (0 noncombatant,
+    /// opportunist, unpredictable, tactician, 4 berserker), which picks its
+    /// attack mode when it is made.
+    /// </summary>
+    public int AttackModeClass = 2;
+}
+
+/// <summary>
+/// Exult <c>data/bg/shape_info.txt</c> <c>actor_flags</c>, which Exult
+/// hard-codes for Black Gate: who can teleport, summon or turn invisible in
+/// combat (mages, liches, ghosts, dragons, ...).
+/// </summary>
+public static class ActorFlags
+{
+    // shape: teleports, summons, turn_invis
+    static readonly Dictionary<int, (bool Teleports, bool Summons, bool TurnInvis)> Flags = new()
+    {
+        [154] = (true, true, true), [445] = (true, true, true), [446] = (true, true, true), // Mages.
+        [299] = (false, true, true), [317] = (false, true, true), // Ghosts.
+        [354] = (true, true, true), [519] = (true, true, true), // Liches.
+        [504] = (false, false, true), [511] = (false, false, true), // Dragons.
+        [382] = (false, true, false), [534] = (false, true, false)
+    };
+
+    public static bool CanTeleport(int shape) => Flags.TryGetValue(shape, out var f) && f.Teleports;
+    public static bool CanSummon(int shape) => Flags.TryGetValue(shape, out var f) && f.Summons;
+    public static bool CanBeInvisible(int shape) => Flags.TryGetValue(shape, out var f) && f.TurnInvis;
 }
 
 /// <summary>Loads <c>assets/data/monsters.csv</c>.</summary>
@@ -84,6 +112,7 @@ public sealed class MonsterTable
         var iCantDie = Col("cant_die");
         var iCantYell = Col("cant_yell");
         var iFlags = Col("move_flags");
+        var iMode = Col("attack_mode");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
         int Num(string[] c, int i, int fallback = 0) =>
@@ -116,7 +145,8 @@ public sealed class MonsterTable
                 CantDie = Num(c, iCantDie) != 0,
                 CantYell = Num(c, iCantYell) != 0,
                 NoBody = Get(c, iFlags).Contains("no_body", StringComparison.OrdinalIgnoreCase),
-                MoveFlags = ParseMoveFlags(Get(c, iFlags))
+                MoveFlags = ParseMoveFlags(Get(c, iFlags)),
+                AttackModeClass = Math.Clamp(Num(c, iMode, 2), 0, 4)
             };
             table._byShape[shape] = rec;
         }

@@ -225,6 +225,16 @@ public sealed class ApproachAction : IActorAction
             ? new ApproachAction(walk, dest, dist)
             : null;
 
+    /// <summary>Exult <c>new Approach_actor_action(path, dest, gdist)</c> on a path already found (it should stop when blocked).</summary>
+    public static ApproachAction FromPath(PathWalk walk, U7Object dest, int goalDist) => new(walk, dest, goalDist);
+
+    /// <summary>Called after every step (from x, y).</summary>
+    public Action<U7Object, int, int>? Stepped
+    {
+        get => _walk.Stepped;
+        set => _walk.Stepped = value;
+    }
+
     public int HandleEvent(U7Object actor)
     {
         var delay = _walk.HandleEvent(actor);

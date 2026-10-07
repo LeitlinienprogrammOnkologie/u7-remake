@@ -181,23 +181,20 @@ Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
 Exult's walking (blocking, A*, path following with doors, speeds, actors
 stepping aside), saves with timers, party order and restored NPC schedules,
-NPC proximity remarks and woken sleepers, all schedules but duel (street
-maintenance, patrol markers, crafts), and the agent console.
+NPC proximity remarks and woken sleepers, all of Black Gate's schedules
+(street maintenance, patrol markers, crafts, duels), combat as Exult's
+`Combat_schedule` for monsters, NPCs, the party and the avatar, and the agent
+console.
 
 Next, in priority order:
 
-1. **Combat as Exult's `Combat_schedule`:** every schedule but duel is
-   ported (`Actors/Schedules/`). Duel is `Combat_schedule` play-fighting, and
-   `CombatEngine` is a reduced port that does not run as a schedule (no
-   Monster pathfinder approach, `find_foe` modes, `back_off`, ...). Port
-   `Combat_schedule` (combat.cc), then Duel on top.
-2. **Remaining intrinsics:** 48 stubbed; the most-used are `sprite_effect`,
+1. **Remaining intrinsics:** 48 stubbed; the most-used are `sprite_effect`,
    `flash_mouse`, `set_to_attack`, `is_not_blocked` and `is_readied`.
-3. **Signs:** `display_runes` still uses the conversation panel; port
+2. **Signs:** `display_runes` still uses the conversation panel; port
    Exult's `Sign_gump` (runic signs, plaques, gravestones).
-4. **Walking follow-ups:** `Walk_to_schedule`'s off-screen legs, dormant
+3. **Walking follow-ups:** `Walk_to_schedule`'s off-screen legs, dormant
    NPCs, speed cursors.
-5. **Story:** continue to Britain (the Crown Jewel, the Man with the Hook,
+4. **Story:** continue to Britain (the Crown Jewel, the Man with the Hook,
    Lord British), played through the agent console from `quest4`.
 
 Known small gaps:

@@ -92,7 +92,10 @@ public sealed class U7Object
     /// <summary>1×1 hatchable (shapes 200/275). Hidden unless painting eggs.</summary>
     public bool InvisibleEgg => IsEgg && DimX <= 1 && DimY <= 1;
     public bool IsMonster;
+    /// <summary>Exult <c>Actor::target</c>: whom it fights.</summary>
     public U7Object? CombatTarget;
+    /// <summary>Exult <c>Actor::oppressor</c>: the numbered NPC (or avatar) attacking it, if any.</summary>
+    public U7Object? Oppressor;
     public ulong HitUntilMsec;
     public bool IsDead => GetFlag(U7.Actors.ObjFlag.Dead);
     /// <summary>Exult <c>Actor::Attack_mode</c> (combat-mode button).</summary>

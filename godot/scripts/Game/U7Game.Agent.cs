@@ -21,7 +21,7 @@ public partial class U7Game
         "look [r] | find <text> | npc <num|name> | state | inv [npcnum] | flags | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id> | wait <sec> | hour <h> | shot <name> | " +
-        "save <slot> | load <slot> | tile <x> <y> [z] | close";
+        "save <slot> | load <slot> | tile <x> <y> [z] | arena | combat [off] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
     static bool _agentStarted;
@@ -327,6 +327,15 @@ public partial class U7Game
                 };
                 break;
             }
+            case "arena":
+                // The F3 debug fight: three chaotic rats around the avatar, combat on.
+                _combat.SpawnArena();
+                AgentLog(_combat.LastMessage);
+                break;
+            case "combat":
+                _combat.SetInCombat(arg != "off");
+                AgentLog(_combat.LastMessage);
+                break;
             case "hour":
             {
                 var h = int.Parse(arg);
@@ -440,9 +449,10 @@ public partial class U7Game
 
     void AgentUse(U7Object obj)
     {
+        // The console attacks enemies straight away (a player turns combat on first).
         if (obj.IsActor && CombatEngine.IsEnemy(_avatar.Avatar.Alignment, obj.Alignment))
         {
-            _combat.Attack(_avatar.Avatar, obj);
+            _combat.AttackClicked(obj);
             AgentLog(_combat.LastMessage);
             return;
         }

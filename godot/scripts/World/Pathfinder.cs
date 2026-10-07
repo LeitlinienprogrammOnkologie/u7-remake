@@ -364,10 +364,18 @@ public class FastPathClient : PathClient
 /// cleverer it is (twice the estimate plus half its intelligence, 18 to
 /// three quarters of the screen's width).
 /// </summary>
-public sealed class MonsterPathClient(GameMap map, U7Object npc, TileCoord dest, int dist)
-    : FastPathClient(map, npc, dest, dist)
+public sealed class MonsterPathClient : FastPathClient
 {
-    readonly int _intelligence = npc.GetProp(ActorProp.Intelligence);
+    readonly int _intelligence;
+
+    public MonsterPathClient(GameMap map, U7Object npc, TileCoord dest, int dist)
+        : base(map, npc, dest, dist) =>
+        _intelligence = npc.GetProp(ActorProp.Intelligence);
+
+    /// <summary>Exult's combat client: to within <paramref name="reach"/> of the opponent's footprint.</summary>
+    public MonsterPathClient(GameMap map, U7Object attacker, U7Object opponent, int reach)
+        : base(map, attacker, opponent, reach) =>
+        _intelligence = attacker.GetProp(ActorProp.Intelligence);
 
     public override int GetMaxCost(int costToGoal) =>
         Math.Max(18, Math.Min(2 * costToGoal + _intelligence / 2, 3 * Pathfinder.ScreenTilesWide / 4));

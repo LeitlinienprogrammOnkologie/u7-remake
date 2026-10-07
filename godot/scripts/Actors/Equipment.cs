@@ -99,7 +99,7 @@ public static class Equipment
         (GetReadied(actor, ReadySpot.Lhand) is { } left && weapons[left.Shape] is not null) ||
         (GetReadied(actor, ReadySpot.Rhand) is { } right && weapons[right.Shape] is not null);
 
-    static void ReadyBestShield(
+    public static void ReadyBestShield(
         U7Object actor, ShapeCatalog catalog, WeaponTable weapons, ArmorTable armor)
     {
         if (GetReadied(actor, ReadySpot.Lhand) is { } left &&

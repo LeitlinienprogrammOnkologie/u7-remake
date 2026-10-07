@@ -14,9 +14,9 @@ Last update: 2026-10-07.
 | Gumps (inventory, containers, stats) | Done (BG paper doll, containers, weight/volume/stacks; no SI PAPERDOL.VGA / spellbook / save) |
 | NPCs from `INITGAME.DAT` `npc.dat` | Done (291 used of 356; unused skipped) |
 | Game clock + dusk/night modulate | Done (RGBA grade, not 8-bit palettes) |
-| Schedules (`assets/data/schedules.csv`) | Done but duel (it stands; needs Exult's Combat_schedule) |
+| Schedules (`assets/data/schedules.csv`) | Done (all Black Gate's, duel included) |
 | Eggs | Done (teleport, usecode, jukebox, button, monster) |
-| Combat | Done (melee, ranged, bodies, avatar death; no explosions / arrest) |
+| Combat | Done (Exult's Combat_schedule for everyone; no explosions / arrest / spellbooks) |
 | Save / load | Done (quick slot, Exult GAMEDAT layout with timers, party order, restored schedules; no zip saves) |
 | Music | Done (jukebox eggs → GM MIDI via Windows synth; no SFX/speech yet) |
 | Party | Done (join/leave, formation, follow, teleport, combat) |
@@ -132,8 +132,8 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - `Actors/PartyManager` ports Exult `Party_manager`: up to 8 members, `add_to_party` (good alignment, in_party and okay_to_take flags) and `remove_from_party` via the usecode intrinsics 0x24/0x25; `get_party_list` returns avatar plus members. `link_party` rebuilds the party from the npc.dat in_party flags at load (NpcDat now keeps the object flags).
 - Each avatar step calls `get_followers`/`move_followers`: members walk in Exult's formation (two followers per member, behind-left and behind-right by the 4-way direction) with `Is_step_okay`, `Clear_to_leader`, `Get_cost` and `Take_best_step`. Members in combat, wait or loiter schedules stay put.
 - The follow-avatar schedule (`Follow_avatar_schedule` + `Actor::follow`) only acts once the avatar stops: members farther than 6 tiles path to an offset spot beside the avatar; farther than 40 tiles they are brought over like `approach_another`. Teleports (eggs, Home, Shift-click) move the party along (`teleport_party`, free spot within 8 tiles).
-- Combat: **C** (or getting hit, or attacking) switches every member between the combat and follow-avatar schedules like Exult `toggle_combat`; members chase and strike the nearest foe in sight, drop back to following when nothing is left, and monsters target the nearest party member instead of always the avatar. A member that dies leaves the party (no dead-party list or bodies yet).
-- Not yet: party items intrinsics, dead-party handling and resurrection, sleeping/paralysed members, attack modes other than nearest.
+- Combat: **C** (or a party member being hit) switches every member and the avatar between the combat and follow-avatar schedules like Exult `toggle_combat`; members fight by their attack mode (see Combat) and drop back to following after five failures to find a foe. A member that dies leaves the party (no dead-party list or bodies yet).
+- Not yet: party items intrinsics, dead-party handling and resurrection, sleeping/paralysed members.
 
 ### Usecode scripts (current)
 
@@ -159,12 +159,15 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - Monster eggs hatch via Exult `Monster_egg` packing (`sched`/`align`/`cnt`, shape from d2/d3). NPC-class or `monsters.csv` shapes spawn; others drop a takeable temporary item.
 - Spawned stats from `assets/data/monsters.csv` (`Randomize_initial_stat`); health = strength; alignment from the egg unless the egg is neutral.
 - Hostility: good↔evil/chaotic, evil↔good/chaotic, chaotic↔evil/good; **neutral never initiates**. Avatar is good.
-- Attacking a permanent NPC (or hitting one via usecode damage) engages it: it enters the combat schedule, chases and strikes like a spawned monster, and returns to its previous schedule when its target dies or moves out of sight (Exult `prev_schedule`).
-- A strike faces the target and plays Exult's fast-swing frames (ready, reach, strike, back to ready) one per 200 ms tick; frames the shape lacks fall back to standing. The avatar stands again once the swing ends instead of freezing mid-stride.
-- Battle music (Exult `start_battle` / `monster_died`): when the avatar gains a foe and none played in the last 30 s, track 11 or 12 plays once; when the last hostile dies, victory (15) or, after a long hard fight, battle-over (9).
+- Fighting is Exult's `Combat_schedule` (`Actors/Schedules/CombatSchedule`), run like any schedule for monsters (each spawned or saved monster has a schedule brain; an egg's schedule 0 is combat, others loiter, wander, ...), for NPCs pulled into a fight, for party members in combat mode, and for the avatar: Exult runs the avatar's schedule whenever the player isn't walking it, so in combat mode it goes for foes by itself, and a walk of the player's replaces what the schedule was doing.
+- A fighter picks a foe among those near the screen (Exult `get_nearby_npcs`, the avatar included) by its attack mode: nearest (preferring foes nobody else attacks, not fleeing), weakest, strongest, random, berserk, protect (attackers of the party member under protection, "On my way!"), defend, flank; manual leaves it to the player. Party members also take on whoever attacks the party or is attacked by it. Monsters get their mode from their kind of fighter at birth (Exult `monster_modes`). It walks within reach with Exult's monster pathfinder (`Approach_actor_action`, stopping when blocked), strikes once 30 dexterity points have built up (Exult `dex_to_attack`), playing the weapon's attack frames (reach, raise, fast or slow swing, one- or two-handed), then the blow lands; with a ranged weapon in range it shoots; blocked from striking, it tries to get adjacent and steps aside. Battle cries and taunts ("To Battle!", "Take this!"). Out of ammunition it swaps to the weapon on its belt or back (Exult `Swap_weapons`), else fights bare-handed.
+- It flees when its attack mode says so or below 3 health (unless berserk or it can't die), screaming the first time. After five failures to find or reach a foe it gives up: party members follow again, good NPCs go back to the schedule of the hour (or the one they had), others wander a little. Mages, liches, ghosts and dragons (Exult's `actor_flags`) teleport near their target, summon (the spell's usecode) and turn invisible; the effects and sounds are not shown.
+- Getting hit (Exult `fight_back`): a party member brings the party into combat mode; an NPC without a target takes on its attacker. Exult `set_target` keeps each fighter's target and the numbered NPC attacking it (`oppressor`). The hit actor whose weapon reaches farther steps back a tile (`back_off`).
+- Double-click in combat mode attacks anything but party members and bodies (unlocked doors and containers open): the avatar targets it and everyone goes into combat (Exult `double_clicked`). Outside combat mode a double-click uses the thing as usual. The agent console's `use` on an enemy still attacks straight away, and `arena` / `combat [off]` spawn the F3 rats and toggle combat.
+- Duel (Exult `Duel_schedule`): the combat schedule play-fighting without damage or music, at an archery target with a bow and a couple of arrows (arrows stick in it, frame by frame), at a fencing dummy or against another duelist with a two-handed sword, breaking off every eighth blow. Verified in Jhelom's fighting school.
+- Battle music (Exult `start_battle` / `monster_died`): when the avatar's fight starts and none played in the last 30 s, track 11 or 12; when no hostile is left nearby, victory (15) or, after a long hard fight, battle-over (9); leaving combat with foes close by, running away (16).
 - Ranged and thrown weapons (Exult `Combat_schedule::attack_target` + `Projectile_effect`): a bow, crossbow, musket, wand or thrown axe fires a projectile when the target is beyond melee reach (or always, for `uses = ranged`). Ammunition comes from the quiver or any bag (`find_weapon_ammo`), charges from the wand's quality, thrown weapons consume themselves; the missile sprite flies along a straight line at the weapon's missile speed with Exult's 16-direction frames and rotation, then rolls to hit with the ranged bonus (+6, minus distance for thrown), applies weapon plus ammo damage with the ammo's damage type, drops the ammo by its drop rule, and returning weapons come straight back into the thrower's hands. Archers do not keep their distance (Exult has no such behaviour outside flee mode): they shoot from where they stand and only walk when the target is out of range. `assets/data/ammo.csv` is loaded as `Actors/AmmoTable`. Explosions, homing missiles and attacks on tiles are not ported.
-- Strike timing follows Exult `dex_to_attack`: each 200 ms tick in reach banks the actor's dexterity, and a swing costs 30 points (a dex-6 rat strikes about once a second). Unarmed damage is 1 plus the strength roll; the MONSTERS.DAT weapon byte is not used.
-- Nearby spawned hostiles (sight 24) chase and melee. **C** or the paperdoll combat button toggles avatar combat: the avatar walks to the nearest foe and auto-strikes at weapon reach (WASD/click still override). Double-click a hostile attacks. Getting hit turns combat on.
+- Unarmed damage is 1 plus the strength roll; the MONSTERS.DAT weapon byte is not used.
 - Hit/damage: Exult `roll_to_win` (30-sided) and `apply_damage` (str/3 + weapon − **worn + monster** armor). Readied `weapons.csv` item, else innate weapon, else monster weapon points. Worn `armor.csv` protection and immunities apply.
 - Starting kit: IREG ready-slot index (`entlen==2`) is kept; then `ready_best_weapon` / best shield. Open inventory (**I**) for the paper doll.
 - Death (Exult `Actor::die`): shapes in Exult's `bodies.txt` (copied into `Actors/Bodies`) leave a corpse container (shape 400/414/762/778/892, frame per NPC, reflected like the NPC) holding the whole inventory, all okay to take; other shapes drop their items nearby. Dead permanent NPCs keep their record with the dead flag, are never placed or scheduled again, and the corpse is saved as Exult's 13-byte `Dead_body` entry with the NPC number. Avatar death runs usecode 0x60E (see Usecode scripts). No blood or arrest.
@@ -183,7 +186,7 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - Missile / weather / sfx / voice eggs
 - Explosions, homing missiles, attacks on tiles, blood, arrest
 - Party: dead-party list, party items intrinsics, sleeping/paralysed members, attack modes other than nearest
-- The duel schedule (duelists stand): it is Exult's `Combat_schedule` playing at fighting (no damage, archery targets and fencing dummies, breaking off every 8 strikes), and combat here is not that schedule yet. Exult's arrest schedule and scripted (0x80+) schedules, `im_dormant`
+- Exult's arrest schedule and scripted (0x80+) schedules, `im_dormant`; in combat: spellbooks, explosions (powder kegs), breakable objects, guards called by witnesses (`fight_back`'s bully code), invisible actors not drawn, combat difficulty and pausing
 - Hunger, poison, barges, weather, dungeon lights
 - True 8-bit palette cycling (world PNGs are day-baked RGBA)
 - Intro / endgame, SFX, speech playback, music on non-Windows
@@ -191,7 +194,7 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - Save: spellbook/virtue-stone bytes, Exult zip saves
 - Many BG intrinsics still log `stub UI_*` and return 0
 - Signs (`display_runes`) show in the conversation panel, not Exult's `Sign_gump`
-- Walking: the follow schedule's blocked check, Exult's speed cursor arrows, walking with the right button, `Walk_to_schedule`'s off-screen legs and dormant NPCs, the Onecoord and Offscreen pathfinder clients (combat still approaches with a greedy step, not the Monster client), and `If_else_path_actor_action` (`path_run_usecode`)
+- Walking: the follow schedule's blocked check, Exult's speed cursor arrows, walking with the right button, `Walk_to_schedule`'s off-screen legs and dormant NPCs, the Onecoord and Offscreen pathfinder clients, and `If_else_path_actor_action` (`path_run_usecode`)
 
 ## Next milestone
 

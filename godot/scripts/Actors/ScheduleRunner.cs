@@ -18,6 +18,10 @@ public sealed class ScheduleRunner
     readonly ScheduleTable _table;
     readonly GameClock _clock;
     readonly Dictionary<int, NpcBrain> _brains = new();
+    /// <summary>Monsters (Exult <c>Monster_actor</c>s, numbered -1) and their schedules.</summary>
+    readonly Dictionary<U7Object, NpcBrain> _monsters = new();
+    /// <summary>The avatar's schedule: Exult runs it while the avatar has no action of the player's (combat mode).</summary>
+    NpcBrain? _avatarBrain;
     readonly HashSet<int> _loggedUnknown = new();
     readonly double _stepInterval = U7Constants.StandardDelayMs / 1000.0;
 
@@ -40,6 +44,17 @@ public sealed class ScheduleRunner
     public Action<U7Object>? ReadyBestWeapon { get; set; }
     /// <summary>The weapon table, for attack frames.</summary>
     public WeaponTable? Weapons { get; set; }
+    /// <summary>Combat (Exult's <c>Combat_schedule</c> statics, hits and missiles).</summary>
+    public CombatEngine? Combat { get; set; }
+    /// <summary>Exult <c>call_usecode(fun, item, double_click)</c>; false if usecode cannot run now.</summary>
+    public Func<int, U7Object, bool>? CallUsecode { get; set; }
+    /// <summary>Whether usecode is running (Exult <c>in_usecode</c>).</summary>
+    public Func<bool>? IsInUsecode { get; set; }
+    public bool InUsecode => IsInUsecode?.Invoke() ?? false;
+    /// <summary>True while the player is walking the avatar (an action of the player's).</summary>
+    public Func<bool>? AvatarBusy { get; set; }
+    /// <summary>The avatar stepped (from x, y): eggs and the party follow.</summary>
+    public Action<U7Object, int, int>? AvatarMoved { get; set; }
     /// <summary>Exult <c>Game_object::activate</c>: the object's usecode as a double-click; false if usecode cannot run now.</summary>
     public Func<U7Object, bool>? Activate { get; set; }
     /// <summary>Milliseconds of game play (Exult <c>Game::get_ticks</c>, for schedule timers).</summary>
@@ -88,7 +103,7 @@ public sealed class ScheduleRunner
     /// Exult has none for stand; wait does nothing; combat is the combat
     /// engine's.
     /// </summary>
-    Schedule Create(NpcBrain b, int type)
+    Schedule Create(NpcBrain b, int type, int prev = -1)
     {
         // Exult set_schedule_type: hands emptied for some, the best weapon readied for others.
         switch (type)
@@ -149,6 +164,10 @@ public sealed class ScheduleRunner
                 return new BakeSchedule(b);
             case ScheduleType.Blacksmith:
                 return new ForgeSchedule(b);
+            case ScheduleType.Combat when Combat is not null:
+                return new CombatSchedule(b, prev);
+            case ScheduleType.Duel when Combat is not null:
+                return new DuelSchedule(b);
             case ScheduleType.Wander:
                 return new WanderSchedule(b);
             case ScheduleType.Patrol:
@@ -239,7 +258,13 @@ public sealed class ScheduleRunner
 
     public void SetScheduleType(U7Object npc, int type)
     {
-        if (npc.NpcNum <= 0 || !_brains.TryGetValue(npc.NpcNum, out var b))
+        if (npc == Avatar)
+        {
+            SetAvatarSchedule(type);
+            return;
+        }
+
+        if (BrainOf(npc) is not { } b)
         {
             npc.ScheduleType = type;
             return;
@@ -247,6 +272,65 @@ public sealed class ScheduleRunner
 
         BeginType(b, type, b.Dest, alreadyThere: true);
     }
+
+    /// <summary>The brain running the actor's schedule: an NPC's, a monster's, or the avatar's.</summary>
+    public NpcBrain? BrainOf(U7Object npc)
+    {
+        if (npc == Avatar)
+        {
+            return _avatarBrain;
+        }
+
+        if (npc.NpcNum > 0)
+        {
+            return _brains.GetValueOrDefault(npc.NpcNum);
+        }
+
+        return _monsters.GetValueOrDefault(npc);
+    }
+
+    /// <summary>
+    /// Exult <c>Main_actor::set_schedule_type</c>: the avatar's schedule is
+    /// combat in combat mode; otherwise it has none of its own.
+    /// </summary>
+    void SetAvatarSchedule(int type)
+    {
+        _avatarBrain ??= new NpcBrain(this, Avatar) { WasNearby = true };
+        var b = _avatarBrain;
+        b.Schedule?.Ending(type);
+        b.CurrentAction = null;
+        b.ActionDone = null;
+        var prev = Avatar.ScheduleType;
+        Avatar.ScheduleType = type;
+        b.Schedule = type == ScheduleType.Combat ? new CombatSchedule(b, prev) : null;
+    }
+
+    /// <summary>A monster from an egg, usecode or a save: its schedule runs here (Exult <c>Monster_actor</c>).</summary>
+    public void AddMonster(U7Object monster)
+    {
+        if (_monsters.ContainsKey(monster) || monster.IsDead || monster.Removed)
+        {
+            return;
+        }
+
+        var b = new NpcBrain(this, monster) { WasNearby = true };
+        b.Schedule = Create(b, monster.ScheduleType);
+        _monsters[monster] = b;
+    }
+
+    /// <summary>Exult <c>Game_window::get_nearby_npcs</c>: the NPCs and monsters on or near the screen.</summary>
+    public IEnumerable<U7Object> NearbyNpcs() =>
+        _brains.Values.Concat(_monsters.Values).Where(b => b.OnScreen && !b.Npc.IsDead && !b.Npc.Removed)
+            .Select(b => b.Npc);
+
+    /// <summary>The schedules running (NPCs, monsters and the avatar's), for combat's checks.</summary>
+    public IEnumerable<NpcBrain> Brains =>
+        _avatarBrain is null
+            ? _brains.Values.Concat(_monsters.Values)
+            : _brains.Values.Concat(_monsters.Values).Append(_avatarBrain);
+
+    /// <summary>True while the avatar's own schedule has it doing something (a swing, an approach).</summary>
+    public bool AvatarActing => _avatarBrain?.CurrentAction is not null;
 
     /// <summary>
     /// Restore a schedule after combat. Unlike <see cref="SetScheduleType"/>
@@ -270,7 +354,7 @@ public sealed class ScheduleRunner
             return npc.PendingSchedule;
         }
 
-        if (npc.NpcNum > 0 && _brains.TryGetValue(npc.NpcNum, out var b) && b.Schedule is StreetMaintenanceSchedule s)
+        if (BrainOf(npc) is { Schedule: StreetMaintenanceSchedule s })
         {
             return s.PrevType; // Exult Street_maintenance_schedule::get_actual_type.
         }
@@ -291,6 +375,65 @@ public sealed class ScheduleRunner
             ProximityCheck(b, delta);
             Tick(b, delta);
         }
+
+        List<U7Object>? gone = null;
+        foreach (var b in _monsters.Values)
+        {
+            if (b.Npc.IsDead || b.Npc.Removed)
+            {
+                (gone ??= new List<U7Object>()).Add(b.Npc);
+                continue;
+            }
+
+            ProximityCheck(b, delta);
+            TickMonster(b, delta);
+        }
+
+        if (gone is not null)
+        {
+            foreach (var m in gone)
+            {
+                _monsters.Remove(m);
+            }
+        }
+
+        if (_avatarBrain is { } avatar)
+        {
+            TickAvatar(avatar, delta);
+        }
+    }
+
+    /// <summary>A monster acts while near the avatar; far off it waits (Exult: dormant).</summary>
+    void TickMonster(NpcBrain b, double delta)
+    {
+        if (Dist(b.Npc) > ActivityDist)
+        {
+            return;
+        }
+
+        RunBrain(b, delta);
+    }
+
+    /// <summary>
+    /// Exult <c>Main_actor::handle_event</c>: the avatar's schedule acts
+    /// only when the avatar has no action of the player's; a walk of the
+    /// player's replaces the schedule's.
+    /// </summary>
+    void TickAvatar(NpcBrain b, double delta)
+    {
+        if (Avatar.IsDead || (AvatarBusy?.Invoke() ?? false))
+        {
+            b.CurrentAction = null;
+            b.ActionDone = null;
+            return;
+        }
+
+        if (b.Schedule is null && b.CurrentAction is null)
+        {
+            return;
+        }
+
+        RunBrain(b, delta);
     }
 
     /// <summary>
@@ -305,7 +448,7 @@ public sealed class ScheduleRunner
         var npc = b.Npc;
         if (!b.OnScreen)
         {
-            if (!npc.IsDead && OnScreen(npc))
+            if (!npc.IsDead && NearScreen(npc))
             {
                 // Exult Game_window::add_nearby_npcs: it came into view.
                 b.OnScreen = true;
@@ -321,7 +464,7 @@ public sealed class ScheduleRunner
             return;
         }
 
-        if (!OnScreen(npc) || npc.IsDead)
+        if (!NearScreen(npc) || npc.IsDead)
         {
             b.OnScreen = false;
             return;
@@ -362,8 +505,26 @@ public sealed class ScheduleRunner
         return dx >= 0 && dx < w + w / 2 && dy >= 0 && dy < h + w / 2;
     }
 
+    /// <summary>Exult <c>add_dirty</c>'s answer: on the screen (the game window, centred on the avatar).</summary>
+    public bool OnScreen(U7Object obj)
+    {
+        var (w, h) = ScreenTiles;
+        var dx = U7Constants.TileDelta(Avatar.Tx - w / 2, obj.Tx);
+        var dy = U7Constants.TileDelta(Avatar.Ty - h / 2, obj.Ty);
+        return dx >= 0 && dx < w && dy >= 0 && dy < h;
+    }
+
+    /// <summary>Exult <c>Off_screen</c> (combat.cc): outside the window enlarged by 2 tiles.</summary>
+    public bool OffScreen(U7Object obj)
+    {
+        var (w, h) = ScreenTiles;
+        var dx = U7Constants.TileDelta(Avatar.Tx - w / 2 - 2, obj.Tx);
+        var dy = U7Constants.TileDelta(Avatar.Ty - h / 2 - 2, obj.Ty);
+        return !(dx >= 0 && dx < w + 4 && dy >= 0 && dy < h + 4);
+    }
+
     /// <summary>Exult: within the game window enlarged by 10 tiles.</summary>
-    bool OnScreen(U7Object npc)
+    bool NearScreen(U7Object npc)
     {
         var (w, h) = ScreenTiles;
         var dx = U7Constants.TileDelta(Avatar.Tx - w / 2 - 10, npc.Tx);
@@ -538,8 +699,9 @@ public sealed class ScheduleRunner
             return;
         }
 
-        // Followers never fall back to a stale slot destination.
-        var nearby = b.Npc.ScheduleType == ScheduleType.FollowAvatar || Dist(b.Npc) <= ActivityDist;
+        // Followers and fighters never fall back to a stale slot destination.
+        var nearby = b.Npc.ScheduleType is ScheduleType.FollowAvatar or ScheduleType.Combat ||
+                     Dist(b.Npc) <= ActivityDist;
         if (!nearby)
         {
             if (b.WasNearby)
@@ -564,6 +726,12 @@ public sealed class ScheduleRunner
             }
         }
 
+        RunBrain(b, delta);
+    }
+
+    /// <summary>Exult <c>Npc_actor::handle_event</c>: the action's next step, or the schedule's <c>now_what</c>.</summary>
+    void RunBrain(NpcBrain b, double delta)
+    {
         b.StepTimer -= delta;
         b.Pause -= delta;
         if (b.Pause > 0 || b.StepTimer > 0)
@@ -587,6 +755,19 @@ public sealed class ScheduleRunner
 
         if (b.CurrentAction is { } action)
         {
+            if (b == _avatarBrain)
+            {
+                // The avatar's own steps set off eggs and lead the party.
+                if (action is PathWalk { Stepped: null } walk)
+                {
+                    walk.Stepped = AvatarMoved;
+                }
+                else if (action is ApproachAction { Stepped: null } approach)
+                {
+                    approach.Stepped = AvatarMoved;
+                }
+            }
+
             // Exult Npc_actor::handle_event: the action's delay, then now_what once it is done.
             var d = action.HandleEvent(b.Npc);
             if (d != 0)
@@ -633,6 +814,7 @@ public sealed class ScheduleRunner
     /// </summary>
     public void BeginType(NpcBrain b, int type, TileCoord dest, bool alreadyThere)
     {
+        var prev = b.Npc.ScheduleType;
         b.Schedule?.Ending(type);
         b.Schedule = null;
         b.Dest = dest;
@@ -649,7 +831,7 @@ public sealed class ScheduleRunner
             return;
         }
 
-        b.Schedule = Create(b, type);
+        b.Schedule = Create(b, type, prev);
         b.Schedule.Begin();
     }
 
