@@ -13,6 +13,10 @@ public static class NpcDat
 {
     /// <summary>Count of fixed NPCs from the npc.dat header (needed when writing).</summary>
     public static int NumFixed { get; private set; }
+    /// <summary>Exult <c>Actor::tf_sex</c>.</summary>
+    const int TypeFlagSex = 9;
+    /// <summary>Record number <see cref="LoadMonsters"/> reads spawned monsters with.</summary>
+    const int MonsterNum = 1000;
 
     public static List<U7Object?> Load(GameMap map, U7Object avatar)
     {
@@ -208,7 +212,16 @@ public static class NpcDat
         r.Skip(4);
         var schedTx = r.U2();
         var schedTy = r.U2();
-        npc.TypeFlags = r.U2();
+        var tflags = r.U2();
+        // Exult Actor::read: the first time round these are garbage; everyone walks.
+        npc.TypeFlags = fixFirst
+            ? MoveFlags.Walk | ((tflags & (1 << TypeFlagSex)) != 0 ? 0 : 1 << TypeFlagSex)
+            : tflags;
+        if (num < MonsterNum && (npc.TypeFlags & MoveFlags.All) == 0)
+        {
+            // Saved before type flags were kept, with the new game's garbage: walk.
+            npc.TypeFlags |= MoveFlags.Walk;
+        }
         r.Skip(5);
         r.U1(); // next_schedule
         r.Skip(1);
@@ -330,7 +343,7 @@ public static class NpcDat
         for (var i = 0; i < count && r.I < r.D.Length; i++)
         {
             var m = new U7Object { NpcNum = -1, IsMonster = true };
-            ReadActor(r, m, 1000, map, fixFirst: false);
+            ReadActor(r, m, MonsterNum, map, fixFirst: false);
             m.NpcNum = -1;
             m.IsActor = true;
             m.Kind = ObjectKind.Actor;

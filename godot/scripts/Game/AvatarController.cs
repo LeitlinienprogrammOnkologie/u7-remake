@@ -2,33 +2,36 @@ using Godot;
 using U7.Actors;
 using U7.Core;
 using U7.Data;
-using U7.World;
 
 namespace U7.Game;
 
 /// <summary>
-/// Keyboard / click walking. Click-to-walk uses A*; keyboard is one tile
-/// at a time. Avatar frames: N 0–2, S 16–18, W 32–34, E 48–50.
+/// The player walking the avatar, as Exult's <c>Game_window</c> does it:
+/// holding the mouse button or a key steers a straight walk a few tiles ahead
+/// in that direction (<c>start_actor</c>), a click walks an A* path to the
+/// tile (<c>start_actor_along_path</c>), and letting go stops
+/// (<c>stop_actor</c>). The walk takes a step whenever its delay runs out,
+/// at the speed given (<see cref="WalkSpeed"/>).
 /// </summary>
 public sealed class AvatarController
 {
+    /// <summary>Exult <c>step_tile_delta</c>: how far ahead a steered walk aims.</summary>
+    const int StepTileDelta = 8;
+
     public U7Object Avatar { get; }
     readonly GameMap _map;
-    double _stepTimer;
-    readonly double _stepInterval = U7Constants.StandardDelayMs / 1000.0;
-    int _facing = 4;
-    Vector2I? _clickTarget;
-    List<Vector2I>? _path;
-    int _pathI;
-    /// <summary>The player walked or a swing played: stand once when that ends.</summary>
-    bool _settle;
+    PathWalk? _walk;
+    /// <summary>Milliseconds until the walk's next step.</summary>
+    double _waitMs;
+    /// <summary>Exult <c>rest_time</c>: idle milliseconds since the last step.</summary>
+    double _restMs;
+    int _steerDir = -1;
+    int _steerSpeed;
 
+    /// <summary>The avatar stepped (from x, y): eggs and followers react.</summary>
     public Action<U7Object, int, int>? Moved;
 
-    public bool IsPlayerMoving =>
-        KeyboardDir() is not null ||
-        (_path is { Count: > 0 } && _pathI < _path.Count) ||
-        _clickTarget is not null;
+    public bool IsPlayerMoving => _walk is not null;
 
     public AvatarController(U7Object avatar, GameMap map)
     {
@@ -43,154 +46,188 @@ public sealed class AvatarController
         }
     }
 
-    public void Update(double delta, Vector2I? clickTile, bool holdFrame = false, bool inUsecodeControl = false)
+    /// <summary>
+    /// Exult <c>Game_window::start_actor_alt</c>: walk straight toward
+    /// <paramref name="target"/> (world pixels), sidestepping one direction
+    /// if that way is blocked, aiming <see cref="StepTileDelta"/> tiles ahead.
+    /// Only re-aims when the direction or speed changes.
+    /// </summary>
+    public void Steer(Vector2 target, int speed)
     {
-        if (inUsecodeControl)
+        U7.Rendering.WorldView.ShapeLocation(Avatar.Tx, Avatar.Ty, Avatar.Tz, out var ax, out var ay);
+        var start = new TileCoord(Avatar.Tx, Avatar.Ty, Avatar.Tz);
+        var levitating = (Avatar.TypeFlags & MoveFlags.Levitate) != 0;
+        var blocked = new bool[8];
+        for (var d = 0; d < 8; d++)
         {
-            // Exult Game_window::start_actor: no walking while a script moves the avatar,
-            // and its frames are the script's.
-            _settle = false;
-            return;
+            var next = start.Neighbor(d);
+            blocked[d] = ActorWalker.IsBlocked(_map, Avatar, ref next, start, Avatar.TypeFlags) ||
+                         (!levitating && Math.Abs(start.Tz - next.Tz) > 1);
         }
 
-        if (clickTile is { } t)
+        var dir = ActorWalker.DirectionNoWrap(ay - Mathf.RoundToInt(target.Y), Mathf.RoundToInt(target.X) - ax);
+        if (blocked[dir])
         {
-            _clickTarget = t;
-            _path = Pathfinder.Find(_map, Avatar.Tx, Avatar.Ty, t.X, t.Y, Avatar.Tz);
-            _pathI = 0;
-            if (_path is null)
+            if (!blocked[(dir + 1) % 8])
             {
-                _path = new List<Vector2I>();
+                dir = (dir + 1) % 8;
             }
-        }
-
-        _stepTimer -= delta;
-        if (_stepTimer > 0)
-        {
-            return;
-        }
-
-        var dir = KeyboardDir();
-        if (dir is { } kb)
-        {
-            _path = null;
-            _clickTarget = null;
-            TryStep(kb.X, kb.Y);
-            _stepTimer = _stepInterval;
-            return;
-        }
-
-        if (_path is { Count: > 0 } && _pathI < _path.Count)
-        {
-            var next = _path[_pathI];
-            var dx = Math.Sign(U7Constants.TileDelta(Avatar.Tx, next.X));
-            var dy = Math.Sign(U7Constants.TileDelta(Avatar.Ty, next.Y));
-            if (dx == 0 && dy == 0)
+            else if (!blocked[(dir + 7) % 8])
             {
-                _pathI++;
-                return;
-            }
-
-            if (!TryStep(dx, dy))
-            {
-                _path = Pathfinder.Find(_map, Avatar.Tx, Avatar.Ty,
-                    _clickTarget?.X ?? next.X, _clickTarget?.Y ?? next.Y, Avatar.Tz);
-                _pathI = 0;
+                dir = (dir + 7) % 8;
             }
             else
             {
-                _pathI++;
-            }
-
-            _stepTimer = _stepInterval;
-            return;
-        }
-
-        if (_clickTarget is { } target)
-        {
-            var dx = Math.Sign(U7Constants.TileDelta(Avatar.Tx, target.X));
-            var dy = Math.Sign(U7Constants.TileDelta(Avatar.Ty, target.Y));
-            if (dx == 0 && dy == 0)
-            {
-                _clickTarget = null;
-                _settle = false;
-                ActorWalker.Stand(Avatar, _facing);
+                // (Exult first asks a blocking NPC to move aside; actors don't block here.)
+                Stop();
+                UnstickFromAir(start);
                 return;
             }
+        }
 
-            var step = Pathfinder.GreedyStep(_map, Avatar.Tx, Avatar.Ty, target.X, target.Y, Avatar.Tz);
-            dx = Math.Sign(U7Constants.TileDelta(Avatar.Tx, step.X));
-            dy = Math.Sign(U7Constants.TileDelta(Avatar.Ty, step.Y));
-            TryStep(dx, dy);
-            _stepTimer = _stepInterval;
+        if (_walk is not null && dir == _steerDir && speed == _steerSpeed)
+        {
             return;
         }
 
-        if (holdFrame)
+        var aim = start.Neighbor(dir);
+        var dest = new TileCoord(start.Tx + StepTileDelta * U7Constants.TileDelta(start.Tx, aim.Tx),
+            start.Ty + StepTileDelta * U7Constants.TileDelta(start.Ty, aim.Ty), start.Tz).Wrapped();
+        Start(PathWalk.Line(_map, Avatar, dest), speed);
+        _steerDir = dir;
+        _steerSpeed = speed;
+    }
+
+    /// <summary>Exult: if stuck up on something with nothing below to stand on, drop down.</summary>
+    void UnstickFromAir(TileCoord start)
+    {
+        if (Avatar.Tz % 5 == 0)
         {
-            _settle = true;
+            return;
         }
-        else if (_settle)
+
+        if (!_map.Blocking.IsBlocked(1, start.Tz, start.Tx, start.Ty, out var lift, MoveFlags.Walk, 100) &&
+            lift < start.Tz)
         {
-            _settle = false;
-            ActorWalker.Stand(Avatar, ActorWalker.FacingOfFrame(Avatar.Frame));
+            _map.MoveObject(Avatar, start.Tx, start.Ty, lift);
         }
     }
 
-    public void ClearPath()
+    /// <summary>
+    /// Exult <c>Game_window::start_actor_along_path</c>: an A* walk to the
+    /// tile at the avatar's lift; false if there is no way there.
+    /// </summary>
+    public bool PathTo(TileCoord dest, int speed)
     {
-        _path = null;
-        _clickTarget = null;
-    }
-
-    Vector2I? KeyboardDir()
-    {
-        var x = 0;
-        var y = 0;
-        if (Input.IsKeyPressed(Key.A) || Input.IsKeyPressed(Key.Left))
+        var walk = PathWalk.Astar(_map, Avatar, dest with { Tz = Avatar.Tz });
+        if (walk is null)
         {
-            x -= 1;
-        }
-
-        if (Input.IsKeyPressed(Key.D) || Input.IsKeyPressed(Key.Right))
-        {
-            x += 1;
-        }
-
-        if (Input.IsKeyPressed(Key.W) || Input.IsKeyPressed(Key.Up))
-        {
-            y -= 1;
-        }
-
-        if (Input.IsKeyPressed(Key.S) || Input.IsKeyPressed(Key.Down))
-        {
-            y += 1;
-        }
-
-        if (x == 0 && y == 0)
-        {
-            return null;
-        }
-
-        return new Vector2I(x, y);
-    }
-
-    bool TryStep(int dx, int dy)
-    {
-        _settle = true;
-        _facing = ActorWalker.DirIndex(dx, dy);
-        var fromTx = Avatar.Tx;
-        var fromTy = Avatar.Ty;
-        if (!ActorWalker.TryStep(_map, Avatar, dx, dy))
-        {
+            GD.Print("Couldn't find path for Avatar.");
+            Stop();
             return false;
         }
 
-        if (Avatar.Tx != fromTx || Avatar.Ty != fromTy)
+        Start(walk, speed);
+        _steerDir = -1;
+        return true;
+    }
+
+    /// <summary>Exult <c>Actor::start(speed, 0)</c>: the walk takes over; a running step timer is kept.</summary>
+    void Start(PathWalk? walk, int speed)
+    {
+        var moving = _walk is not null;
+        _walk = walk;
+        if (walk is null)
         {
-            Moved?.Invoke(Avatar, fromTx, fromTy);
+            return;
         }
 
-        return true;
+        walk.Stepped = (a, fx, fy) =>
+        {
+            _restMs = 0;
+            Moved?.Invoke(a, fx, fy);
+        };
+        Avatar.FrameTime = speed;
+        if (!moving)
+        {
+            _waitMs = 0;
+        }
+    }
+
+    /// <summary>Exult <c>Game_window::stop_actor</c>: stop and stand.</summary>
+    public void Stop()
+    {
+        if (_walk is { } walk)
+        {
+            walk.Stop(Avatar);
+        }
+
+        _walk = null;
+        _steerDir = -1;
+        Avatar.FrameTime = 0;
+    }
+
+    /// <summary>Drop the walk without changing the avatar's frame (teleports, combat).</summary>
+    public void ClearPath()
+    {
+        _walk = null;
+        _steerDir = -1;
+        Avatar.FrameTime = 0;
+    }
+
+    /// <summary>
+    /// Exult <c>Main_actor::handle_event</c>: take the walk's next step when
+    /// its delay is up. Idle for 2 s, the avatar stands (Exult <c>resting</c>),
+    /// unless a swing holds the frame.
+    /// </summary>
+    public void Update(double delta, bool holdFrame = false, bool inUsecodeControl = false)
+    {
+        if (inUsecodeControl)
+        {
+            // Exult: no walking while a script moves the avatar, and its frames are the script's.
+            ClearPath();
+            return;
+        }
+
+        if (_walk is null)
+        {
+            _restMs += delta * 1000;
+            if (_restMs > 2000 && !holdFrame)
+            {
+                StandAtRest();
+            }
+
+            return;
+        }
+
+        _waitMs -= delta * 1000;
+        while (_walk is { } walk && _waitMs <= 0)
+        {
+            var d = walk.HandleEvent(Avatar);
+            if (d == 0)
+            {
+                // Finished: the next walk waits one step (Exult keeps frame_time).
+                _walk = null;
+                _steerDir = -1;
+                _waitMs += Avatar.FrameTime > 0 ? Avatar.FrameTime : U7Constants.StandardDelayMs;
+                Avatar.FrameTime = 0;
+                break;
+            }
+
+            _waitMs += d;
+        }
+    }
+
+    /// <summary>Exult <c>Actor::stand_at_rest</c>.</summary>
+    void StandAtRest()
+    {
+        _restMs = 0;
+        var frame = Avatar.Frame & 0xf;
+        if (frame is 0 or ActorWalker.SitFrame or ActorWalker.SleepFrame || Avatar.IsDead || Avatar.GetFlag(ObjFlag.Asleep))
+        {
+            return;
+        }
+
+        ActorWalker.Stand(Avatar, ActorWalker.FacingOfFrame(Avatar.Frame));
     }
 }

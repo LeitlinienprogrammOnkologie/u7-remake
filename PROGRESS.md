@@ -9,7 +9,7 @@ Last update: 2026-10-07.
 | Area | State |
 |---|---|
 | Map (U7MAP / CHUNKS / IFIX / IREG) | Done |
-| Walker + click-to-walk A* | Done |
+| Walking (Exult blocking, A*, path following, speeds) | Done (actors don't block each other yet) |
 | Usecode VM (BG bytecode) | Done (many intrinsics still stub) |
 | Gumps (inventory, containers, stats) | Done (BG paper doll, containers, weight/volume/stacks; no SI PAPERDOL.VGA / spellbook / save) |
 | NPCs from `INITGAME.DAT` `npc.dat` | Done (291 used of 356; unused skipped) |
@@ -22,6 +22,7 @@ Last update: 2026-10-07.
 | Party | Done (join/leave, formation, follow, teleport, combat) |
 | Opening scene (moongate, Iolo, earthquake) | Done |
 | Conversation panel | Done (portraits, paging, click to continue, answers) |
+| Books and scrolls (`book_mode`) | Done (original gumps and font, Exult page layout) |
 | Intro movie, barges | Not started |
 | Serpent Isle | Out of scope |
 
@@ -33,8 +34,8 @@ Open the **`godot/`** project in Godot 4.7 (C# / .NET 8). Data root is the repo 
 
 | Key / input | Action |
 |---|---|
-| WASD / arrows | Walk |
-| Left click | Walk (A*) / drag items |
+| WASD / arrows | Walk while held (fast; Shift: medium) |
+| Left button | Hold on open ground to walk toward the cursor (speed by distance); a quick click walks a path there; drag items |
 | Shift+click | Teleport avatar to tile |
 | Double-click / E | Use object or run NPC usecode `0x400+id` |
 | I | Avatar inventory |
@@ -52,7 +53,7 @@ Open the **`godot/`** project in Godot 4.7 (C# / .NET 8). Data root is the repo 
 
 ### Agent console (automated play-testing)
 
-With the environment variable `U7_AGENT=<dir>` set, `Game/U7Game.Agent.cs` reads one command per line from `<dir>/cmd.txt` and appends results to `<dir>/out.txt`, each ending in `DONE <n>`. Game time is frozen between commands, music is off, and conversation text and barks are logged. Commands: `look [r]`, `find <text>`, `npc <num|name>`, `state`, `inv [npc]`, `flags`, `stubs`, `tile <x> <y> [z]`, `walk <x> <y>`, `walkto <id|npc:num>`, `tp <x> <y> [z]`, `talk`/`use <id|npc>`, `take <id>`, `close`, `cont [n|all]`, `choose <answer|#n>`, `num <n>`, `click <id>`, `wait <sec>`, `hour <h>`, `save`/`load <slot>`, `shot <name>` (windowed only). Object ids come from `look`/`find` output. Run headless: `godot --headless --path godot`. The Trinsic murder chapter (opening, stables, Finnigan, Spark, the chest, Gilberto, Gargan, the report and map quiz, Johnson's gate) was played through this way.
+With the environment variable `U7_AGENT=<dir>` set, `Game/U7Game.Agent.cs` reads one command per line from `<dir>/cmd.txt` and appends results to `<dir>/out.txt`, each ending in `DONE <n>`. Game time is frozen between commands, music is off, and conversation text and barks are logged. Commands: `look [r]`, `find <text>`, `npc <num|name>`, `state`, `inv [npc]`, `flags`, `stubs`, `tile <x> <y> [z]`, `walk <x> <y>`, `walkto <id|npc:num>`, `steer <dir> <sec> [ms]`, `tp <x> <y> [z]`, `talk`/`use <id|npc>`, `take <id>`, `close`, `cont [n|all]`, `choose <answer|#n>`, `num <n>`, `click <id>`, `wait <sec>`, `hour <h>`, `save`/`load <slot>`, `shot <name>` (windowed only). Object ids come from `look`/`find` output. Helpers: `pwsh scripts/agent/restart.ps1 [-Load <slot>]` starts it headless (I/O in `agent_io/`), `python scripts/agent/agent.py "<cmd>" ...` sends commands and prints the results. The Trinsic murder chapter (opening, stables, Finnigan, Spark, the chest, Gilberto, Gargan, the report and map quiz, Johnson's gate) was played through this way.
 
 ## Done milestones
 
@@ -76,7 +77,7 @@ With the environment variable `U7_AGENT=<dir>` set, `Game/U7Game.Agent.cs` reads
 - Double-click NPC → usecode **`0x400+npc_num`**, not shape-fun. Spark is **0x402**.
 - Clock: 25 ticks/minute, HUD `Day N  HH:MM`. WorldView modulate: day white, dusk warm, night dark blue. Gumps unmodulated.
 - Nearby NPCs (~32 tiles) walk; far ones sit on slot dest until approached. `wait` / `follow_avatar` are **not** overwritten from SCHEDULE.DAT (Iolo stays in Trinsic).
-- Pathfinding: wrap-around A*, cap 1024 nodes; used by NPCs and avatar click-to-walk.
+- Walking and pathfinding: see "Walking (current)".
 
 **Where people are at hour 6**
 
@@ -189,12 +190,14 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - Save: usecode timers (`get_timer`/`set_timer`) and statics, usecode schedule changes, Exult zip saves
 - Many BG intrinsics still log `stub UI_*` and return 0
 - Proximity usecode (`npc_proximity`) not on a timer
+- Signs (`display_runes`) show in the conversation panel, not Exult's `Sign_gump`
+- Walking: actors don't block one another (Exult's `move_aside` / `swap_positions`), Exult's speed cursor arrows, walking with the right button, `Walk_to_schedule`'s off-screen legs and dormant NPCs, the Onecoord / Offscreen / Fast / Monster pathfinder clients (combat still approaches with a greedy step), `Approach_actor_action` and `If_else_path_actor_action` (`path_run_usecode`)
 
 ## Next milestone
 
 Remaining BG intrinsics, then `npc_proximity` timer and full schedule classes. Intro, barges and arrest can wait.
 
-`python scripts/usecode_stub_report.py` ranks the stubbed intrinsics by static reachability (Trinsic NPCs by default, `--npcs` for others, plus all of USECODE). In game, every stub hit is counted and written to `stub_report.txt` (repo root, untracked) on exit. Nothing reachable from the Trinsic NPCs is stubbed any more; 49 intrinsics remain game-wide (top: `sprite_effect`, `flash_mouse`, `set_to_attack`, `is_not_blocked`, `is_readied`).
+`python scripts/usecode_stub_report.py` ranks the stubbed intrinsics by static reachability (Trinsic NPCs by default, `--npcs` for others, plus all of USECODE). In game, every stub hit is counted and written to `stub_report.txt` (repo root, untracked) on exit. Nothing reachable from the Trinsic NPCs is stubbed any more; 48 intrinsics remain game-wide (top: `sprite_effect`, `flash_mouse`, `set_to_attack`, `is_not_blocked`, `is_readied`).
 
 ### Opening scene (current)
 
@@ -216,3 +219,20 @@ Remaining BG intrinsics, then `npc_proximity` timer and full schedule classes. I
 - `count_objects` sums stack quantities (it counted objects before, so 50 gold read as 1) and counts the whole party for -357. `remove_party_items` / `add_party_items` work across the party like Exult; BG returns the receiving members and drops nothing on the ground.
 - `create_new_object` / `set_last_created` / `update_last_created` / `give_last_created` keep Exult's last_created stack. Monster shapes become neutral wait-schedule monsters that join the monster AI once placed.
 - `input_numeric_value` waits on a number box + OK in the answer column; `earthquake` jolts the camera ±4 px every 100 ms; `wearing_fellowship` checks the medallion (955 frame 1) on the neck; `get_timer`/`set_timer` count game hours (timers are **not saved** yet); `reset_conv_face`; both sound-effect intrinsics are silent no-ops.
+
+### Books and scrolls (current)
+
+- `book_mode` (0x55) ports Exult's: the says that follow go into a `Gumps/ScrollGump` (shape 797, GUMPS.VGA 55) or `Gumps/BookGump` (GUMPS.VGA 32) instead of the conversation (Exult `show_book` / `Text_gump::add_text`, which joins says with '~'). When usecode next shows pending text (RET, ABRT), the gump shows a page, or a pair of facing pages, and waits for a click per page (`UsecodeWait.BookPage`, Exult `show_pending_text`'s book loop); the book is dropped when the call ends (`call_usecode`'s `set_book(nullptr)`).
+- Layout is Exult's `Text_gump::paint_page` and `Font::paint_text_box` on FONTS.VGA font 4 (`Data/VgaFont`: glyph widths, `hor_lead`, line height from `calc_highlow`): '~' ends a line, '*' ends a page (a book fills the rest with blank lines), and Black Gate scrolls also break at " ~~" but keep going on the same page when the next block fits with two lines to spare. Pages are laid out once per page turn and painted from the cached lines.
+- The book is painted over everything at the largest whole scale that fits the window, centred (Exult `Gump::set_pos`), with the original art and font. A left-button release turns the page (not the release of the double-click that opened it); Esc stops reading (Exult `Get_click` returning false); Space and Enter also turn the page, as in conversations. The conversation panel hides meanwhile.
+- Exult's frame/quality usecode for books (`data/bg/shape_info.txt`, frame_usecode): books of quality 100-179 run 0x638 instead of 0x282 (`UsecodeMachine.GetItemFun`), e.g. the inn registers and THOU ART WHAT THEE EATS.
+- An ABRT/THROW with pending text now waits for it to be clicked away before aborting, as Exult's `show_pending_text` does (it used to drop the text).
+- Agent console: pages are logged as `BOOK book|scroll: line / line / ...`; `cont` turns pages, `close` stops reading. Verified on Christopher's note, ship deeds, the Honorable Hound register and three-spread books in Trinsic.
+
+### Walking (current)
+
+- Blocking is Exult's `Chunk_cache`: per chunk, tile and lift a count of solid objects with height (`Data/ChunkBlocking`), built per chunk on first use and updated as objects enter, leave or change shape. A wall counts in every chunk its footprint covers (before, walls reaching in from the next chunk east or south were missed). `is_blocked` is ported whole: a walker of its own height (humans 4 lifts) climbs at most one lift, drops at most one, needs headroom, and at lift 0 the terrain keeps walkers out of water and swimmers in it; the multi-tile-step variant serves big monsters. Actors use their type flags (walk, fly, swim, ethereal): npc.dat gets walk on a new game like Exult's `fix_first`, spawned monsters their monster info; saves from before these flags existed are given the same on load.
+- Pathfinding is Exult's `Find_path` (`World/Pathfinder`) with `Actor_pathfinder_client`: 3D tiles, every step costs 3, lift changes and closed doors add, swamp doubles, BG cobblestone is cheaper; the open set is Exult's per-cost chains, newest first. There is no node limit: it gives up past a cost ceiling of 3× the estimate, at least three screens wide, so a walk of 200+ tiles is one search (e.g. Trinsic's east gate to 1100,2000). As in Exult, a start estimate of 512 or more (about 250 tiles) finds nothing, and the destination must be at the walker's lift.
+- Walks follow Exult `Path_walking_actor_action` (`Actors/PathWalk`): one step per call at the walker's frame time; a blocked step stops the walker and is retried after 0.1-0.6 s up to 3 more times; a closed, unlocked door in the way is opened through its usecode (quality set to 0, as Exult does), walked past and closed behind (Exult's walker is stopped by then, so it hops the last tile past the door). Straight walks (`Zombie`) and A* walks share it. Walking frames follow Exult: the avatar cycles 1,2,1,2 and NPCs 1,0,2,0, diagonal steps use the east/west frames.
+- Speeds are Exult's: milliseconds per step, with no run animation. The avatar: by the cursor's distance in a square around it (`Mouse::set_speed_cursor`) slow 400, medium 200, fast 100; in combat 266, with a hostile nearby no fast; keys fast, Shift medium (`Game/WalkSpeed`). Holding the left button on open ground or a key steers a straight walk 8 tiles ahead in that direction, sidestepping a blocked direction (`start_actor_alt`); a quick click walks an A* path to the tile (`start_actor_along_path`, Exult's double right-click); letting go stops. Idle for 2 s the avatar stands. NPCs: walking to the next schedule spot 200 ms after up to 5 s (A* legs, a straight walk when no path, placed there after 2 failures or 40 legs), loiter 400 ms straight walks within 12 tiles, wander 200 ms A* legs of up to 32 tiles, catching up with the party 100 ms. Formation followers step with the avatar.
+- Agent console: `walk` uses the A* walk, `steer <dir> <sec> [ms]` holds a direction, `tile` lists the blocked lifts and where the avatar would stand.

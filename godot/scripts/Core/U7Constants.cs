@@ -51,12 +51,17 @@ public static class U7Constants
     public const int GumpHeart = 25;
     public const int GumpShipHold = 26;
     public const int GumpDrawer = 27;
+    /// <summary>Exult BG <c>gumps/book</c> and <c>gumps/scroll</c>.</summary>
+    public const int GumpBook = 32;
+    public const int GumpScroll = 55;
     public const int GumpCombat = 46;
     public const int GumpStats = 47;
     public const int GumpSpotOverlay = 48;
     public const int GumpBody = 53;
     public const int GumpActorMale = 65;
     public const int StatsFont = 2;
+    /// <summary>Exult <c>Text_gump</c>'s default font for books and scrolls.</summary>
+    public const int BookFont = 4;
     public const int MaxQuantity = 100;
 
     public const int MoveWalk = 1 << 5;

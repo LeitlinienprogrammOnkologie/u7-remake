@@ -37,6 +37,9 @@ public sealed class VgaShapeFile
         }
     }
 
+    public int FrameCount(int shape) =>
+        (uint)shape < (uint)_frames.Length && _frames[shape] is { } list ? list.Length : 0;
+
     public FrameInfo Get(int shape, int frame)
     {
         if ((uint)shape >= (uint)_frames.Length || _frames[shape] is not { Length: > 0 } list)

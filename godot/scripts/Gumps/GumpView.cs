@@ -16,6 +16,8 @@ public partial class GumpView : Node2D
     public ShapeCatalog Catalog = null!;
     public GameMap Map = null!;
     public float Zoom = 4f;
+    /// <summary>The book or scroll whose page the usecode waits on; Exult paints it over everything.</summary>
+    public Func<TextGump?>? ShownBook;
 
     public override void _Ready()
     {
@@ -50,6 +52,30 @@ public partial class GumpView : Node2D
         {
             DrawWorldShape(obj.Shape, obj.Frame, drag.PaintX, drag.PaintY);
         }
+
+        if (ShownBook?.Invoke() is { } book)
+        {
+            PaintBook(book);
+        }
+    }
+
+    /// <summary>
+    /// A book or scroll is read at the largest whole scale that fits the window,
+    /// whatever the map zoom, centred like Exult's <c>Gump::set_pos</c>.
+    /// </summary>
+    void PaintBook(TextGump book)
+    {
+        var view = GetViewport().GetVisibleRect().Size;
+        var fi = Shapes.GetGumpFrame(book.GumpShape, 0);
+        if (fi.Width <= 0 || fi.Height <= 0)
+        {
+            return;
+        }
+
+        var scale = Math.Max(1, (int)Math.Min(view.X * 0.95f / fi.Width, view.Y * 0.95f / fi.Height));
+        DrawSetTransform(Vector2.Zero, 0, new Vector2(scale, scale));
+        book.SetPos((int)(view.X / scale), (int)(view.Y / scale), fi);
+        book.Paint(this);
     }
 
     public void DrawGumpShape(int shape, int frame, int hx, int hy)
@@ -125,6 +151,31 @@ public partial class GumpView : Node2D
         }
 
         return image.GetPixel(px, py).A > 0.08f;
+    }
+
+    /// <summary>
+    /// Exult <c>Font::paint_text</c>: <paramref name="y"/> is the top of the line;
+    /// each glyph advances by its width plus the font's lead, and characters
+    /// the font has no glyph for are skipped.
+    /// </summary>
+    public void DrawFontText(VgaFont font, string text, int x, int y)
+    {
+        y += font.Baseline;
+        foreach (var ch in text)
+        {
+            if (!font.HasGlyph(ch))
+            {
+                continue;
+            }
+
+            if (Shapes.GetFontGlyph(font.Number, ch) is { } tex)
+            {
+                var fi = Shapes.GetFontFrame(font.Number, ch);
+                DrawTexture(tex, new Vector2(x - fi.XLeft, y - fi.YAbove));
+            }
+
+            x += font.CharWidth(ch);
+        }
     }
 
     public void DrawFontCentered(int font, string text, int x, int y, int width)

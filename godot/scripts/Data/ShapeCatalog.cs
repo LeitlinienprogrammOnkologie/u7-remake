@@ -31,6 +31,8 @@ public sealed class ShapeRecord
     public bool Transparent;
     public bool Translucent;
     public bool Door;
+    /// <summary>Exult <c>is_poisonous</c>: swamp tiles.</summary>
+    public bool Poisonous;
     public bool LightSource;
     public bool TileShape;
     public int ShapeClass;
@@ -198,6 +200,7 @@ public sealed class ShapeCatalog
         var iTrans = IndexOf(cols, "transparent");
         var iTluc = IndexOf(cols, "translucency");
         var iDoor = IndexOf(cols, "door");
+        var iPoison = IndexOf(cols, "poisonous");
         var iLight = IndexOf(cols, "light_source");
         var iClass = IndexOf(cols, "shape_class");
         var iWeight = IndexOf(cols, "weight");
@@ -224,6 +227,7 @@ public sealed class ShapeCatalog
             rec.Transparent = Get(c, iTrans) == "1";
             rec.Translucent = Get(c, iTluc) == "1";
             rec.Door = Get(c, iDoor) == "1";
+            rec.Poisonous = Get(c, iPoison) == "1";
             rec.LightSource = Get(c, iLight) == "1";
             rec.ShapeClass = ParseInt(Get(c, iClass), 0);
             rec.Weight = ParseInt(Get(c, iWeight), 0);

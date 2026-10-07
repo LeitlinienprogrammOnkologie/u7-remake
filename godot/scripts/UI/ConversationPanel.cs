@@ -175,7 +175,9 @@ public sealed partial class ConversationPanel : Control
         var choosing = wait is UsecodeWait.Converse or UsecodeWait.SelectMenu or UsecodeWait.SelectMenuIndex;
         var hasContent = conv.FaceCount > 0 || conv.NpcText.Length > 0 || (choosing && conv.Answers.Count > 0) ||
                          wait == UsecodeWait.NumericInput;
-        Visible = (vm.InUsecode || vm.WaitingForChoice) && wait != UsecodeWait.ClickOnItem && hasContent;
+        // A book or scroll page is painted over everything instead.
+        Visible = (vm.InUsecode || vm.WaitingForChoice) && wait is not (UsecodeWait.ClickOnItem or UsecodeWait.BookPage) &&
+                  hasContent;
         MouseFilter = Visible && wait == UsecodeWait.ClickToContinue ? MouseFilterEnum.Stop : MouseFilterEnum.Ignore;
         if (!Visible)
         {

@@ -224,7 +224,7 @@ public sealed class PartyManager
     /// <summary>Exult <c>Is_step_okay</c>: dz to the leader at most 2, and a clear line to them.</summary>
     bool IsStepOkay(U7Object npc, U7Object leader, int tx, int ty, out int nz)
     {
-        if (!ActorWalker.ResolveStep(_map, tx, ty, npc.Tz, out nz))
+        if (!ActorWalker.ResolveStep(_map, npc, tx, ty, npc.Tz, out nz))
         {
             return false;
         }
@@ -260,7 +260,7 @@ public sealed class PartyManager
                 Math.Sign(U7Constants.TileDelta(fy, leader.Ty)));
             var nx = U7Constants.WrapTile(fx + DirDx[d]);
             var ny = U7Constants.WrapTile(fy + DirDy[d]);
-            if (!ActorWalker.ResolveStep(_map, nx, ny, fz, out var nz))
+            if (!ActorWalker.ResolveStep(_map, npc, nx, ny, fz, out var nz))
             {
                 return false;
             }
@@ -277,7 +277,7 @@ public sealed class PartyManager
     /// <summary>Exult <c>Get_cost</c>: squared distance to the leader, plus a penalty when the way on is blocked.</summary>
     int Cost(U7Object npc, U7Object leader, int tx, int ty, out int nz)
     {
-        if (!ActorWalker.ResolveStep(_map, tx, ty, npc.Tz, out nz))
+        if (!ActorWalker.ResolveStep(_map, npc, tx, ty, npc.Tz, out nz))
         {
             return MaxCost;
         }

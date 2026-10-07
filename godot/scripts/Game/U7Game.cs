@@ -43,6 +43,13 @@ public partial class U7Game : Node2D
     bool _ready;
     bool _debugOn;
     bool _suppressWalk;
+    /// <summary>The left button went down while a book page was shown.</summary>
+    bool _bookPress;
+    /// <summary>The left button went down on open ground: holding it walks the avatar.</summary>
+    bool _walkPress;
+    ulong _walkPressMsec;
+    /// <summary>A walking key is held.</summary>
+    bool _keyWalking;
     int _lastSchunk = -1;
     string _statusExtra = "";
 
@@ -247,8 +254,21 @@ public partial class U7Game : Node2D
                 _usecode.Call(0x60E, avatar, UsecodeEvent.Weapon);
             };
             _eggs.Usecode = _usecode;
+            // Walkers open doors through the doors' own usecode (Exult Path_walking_actor_action::open_door).
+            PathWalk.ActivateDoor = door =>
+            {
+                if (_usecode.InUsecode || _usecode.WaitingForChoice)
+                {
+                    return false;
+                }
+
+                _usecode.Call(UsecodeMachine.GetItemFun(door), door, UsecodeEvent.DoubleClick);
+                return true;
+            };
+            PathWalk.IsSentient = _combat.IsSentient;
             _schedules.InUsecodeControl = _usecode.InUsecodeControl;
             _conversation.Machine = _usecode;
+            _gumpView.ShownBook = () => _usecode is { Wait: UsecodeWait.BookPage } vm ? vm.Book : null;
             _usecode.Say += _ => _conversation.Refresh();
             _usecode.AnswersChanged += _conversation.Refresh;
             _usecode.FacesChanged += _conversation.Refresh;
@@ -361,8 +381,9 @@ public partial class U7Game : Node2D
         }
 
         var dontMove = ObjFlag.DontMoveMode(_avatar.Avatar);
-        if (!inUsecode && !_suppressWalk && !gumpBusy && !_avatar.Avatar.IsDead && !dontMove &&
-            Input.IsMouseButtonPressed(MouseButton.Left) && _camera is not null)
+        var canWalk = !inUsecode && !gumpBusy && !_avatar.Avatar.IsDead && !dontMove;
+        Pathfinder.ScreenTilesWide = Math.Max(1, (int)(GetViewport().GetVisibleRect().Size.X / _zoom / U7Constants.TileSize));
+        if (canWalk && !_suppressWalk && Input.IsMouseButtonPressed(MouseButton.Left))
         {
             var world = _camera.GetGlobalMousePosition();
             var tile = WorldView.WorldToTile(world, _avatar.Avatar.Tz);
@@ -377,22 +398,29 @@ public partial class U7Game : Node2D
                     _eggs.Activate(_avatar.Avatar, fromTx, fromTy);
                 }
             }
-            else
+            else if (_walkPress)
             {
-                click = new Vector2I(tile.Tx, tile.Ty);
+                // Exult start_actor: holding the button steers toward the cursor.
+                _avatar.Steer(world, MouseWalkSpeed(world));
             }
         }
 
+        KeyboardWalk(canWalk);
         AgentUpdate(delta, ref click);
+        if (click is { } c)
+        {
+            _avatar.PathTo(new TileCoord(c.X, c.Y, _avatar.Avatar.Tz), WalkSpeed.Keyboard(false, false, false));
+        }
+
         if (!Input.IsMouseButtonPressed(MouseButton.Left))
         {
             _suppressWalk = false;
         }
 
         var frozen = inUsecode || gumpBusy || _avatar.Avatar.IsDead;
-        if (!inUsecode && !gumpBusy && !_avatar.Avatar.IsDead && !dontMove)
+        if (canWalk)
         {
-            _avatar.Update(delta, click, _combat.IsAnimating(_avatar.Avatar),
+            _avatar.Update(delta, _combat.IsAnimating(_avatar.Avatar),
                 _usecode?.InUsecodeControl(_avatar.Avatar) ?? false);
         }
 
@@ -470,6 +498,11 @@ public partial class U7Game : Node2D
 
         if (@event is InputEventMouseButton mb)
         {
+            if (HandleBookClick(mb))
+            {
+                return;
+            }
+
             var virt = _gumpView.MouseVirtual();
             if (mb.ButtonIndex == MouseButton.WheelUp && mb.Pressed)
             {
@@ -485,6 +518,11 @@ public partial class U7Game : Node2D
             }
             else if (mb.Pressed && mb.ButtonIndex is MouseButton.Left or MouseButton.Right)
             {
+                if (mb.ButtonIndex == MouseButton.Left)
+                {
+                    _walkPress = false;
+                }
+
                 if (HandleClickOnItem(virt.X, virt.Y, mb.ButtonIndex == MouseButton.Right))
                 {
                     _suppressWalk = true;
@@ -525,6 +563,11 @@ public partial class U7Game : Node2D
                         _suppressWalk = true;
                         GetViewport().SetInputAsHandled();
                     }
+                    else
+                    {
+                        _walkPress = true;
+                        _walkPressMsec = Time.GetTicksMsec();
+                    }
                 }
             }
             else if (!mb.Pressed && mb.ButtonIndex == MouseButton.Left)
@@ -535,6 +578,10 @@ public partial class U7Game : Node2D
                     _gumps.OnMouseUp(_gumpView, virt.X, virt.Y, tile.Tx, tile.Ty, _avatar.Avatar.Tz);
                     _suppressWalk = true;
                     GetViewport().SetInputAsHandled();
+                }
+                else if (_walkPress)
+                {
+                    EndWalkPress();
                 }
             }
         }
@@ -549,6 +596,16 @@ public partial class U7Game : Node2D
         }
         else if (@event is InputEventKey { Pressed: true, Echo: false } key)
         {
+            if (_usecode is { Wait: UsecodeWait.BookPage } reader &&
+                key.Keycode is Key.Escape or Key.Space or Key.Enter or Key.KpEnter)
+            {
+                // Exult Get_click: Esc stops reading. Space and Enter turn the page, as in conversations.
+                reader.TurnBookPage(stop: key.Keycode == Key.Escape);
+                _conversation.Refresh();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             // Exult restricts key actions in dont_move mode; debug, save, music and zoom stay.
             if (ObjFlag.DontMoveMode(_avatar.Avatar) &&
                 key.Keycode is Key.Home or Key.E or Key.I or Key.C or Key.F3 or Key.F6 or Key.Pageup or Key.Pagedown)
@@ -675,6 +732,114 @@ public partial class U7Game : Node2D
         _eggs.Activate(av, av.Tx, av.Ty);
     }
 
+    /// <summary>
+    /// Letting go of the walking button. Exult walks with the right button:
+    /// holding it steers and letting go stops, and a double right-click finds
+    /// a path to the spot. Here the left button does both: a quick click
+    /// finds a path (Exult <c>start_actor_along_path</c>), letting go after
+    /// holding stops (<c>stop_actor</c>).
+    /// </summary>
+    void EndWalkPress()
+    {
+        _walkPress = false;
+        var canWalk = _usecode is not ({ InUsecode: true } or { WaitingForChoice: true }) && !_gumps.GumpMode &&
+                      !_avatar.Avatar.IsDead && !ObjFlag.DontMoveMode(_avatar.Avatar);
+        if (!canWalk || Input.IsKeyPressed(Key.Shift))
+        {
+            return;
+        }
+
+        if (Time.GetTicksMsec() - _walkPressMsec < QuickClickMsec)
+        {
+            var world = _camera.GetGlobalMousePosition();
+            _avatar.PathTo(WorldView.WorldToTile(world, _avatar.Avatar.Tz), MouseWalkSpeed(world));
+        }
+        else
+        {
+            _avatar.Stop();
+        }
+    }
+
+    const ulong QuickClickMsec = 300;
+
+    /// <summary>Exult <c>Mouse::set_speed_cursor</c>'s speed for the cursor at this world point.</summary>
+    int MouseWalkSpeed(Vector2 world)
+    {
+        var av = _avatar.Avatar;
+        WorldView.ShapeLocation(av.Tx, av.Ty, av.Tz, out var ax, out var ay);
+        var game = GetViewport().GetVisibleRect().Size / _zoom;
+        return WalkSpeed.Mouse(new Vector2(ax, ay), world, game, _combat.InCombat, HostileNearby(), AvatarNoHaltScript());
+    }
+
+    /// <summary>Exult <c>is_hostile_nearby</c> over the visible part of the map.</summary>
+    bool HostileNearby()
+    {
+        var av = _avatar.Avatar;
+        var size = GetViewport().GetVisibleRect().Size / _zoom / U7Constants.TileSize;
+        var w = (int)size.X + 1;
+        var h = (int)size.Y + 1;
+        return _combat.IsHostileNearby(av.Tx - w / 2, av.Ty - h / 2, w, h);
+    }
+
+    /// <summary>Exult: an active no-halt usecode script on the avatar rules out walking fast.</summary>
+    bool AvatarNoHaltScript() =>
+        _usecode?.Scripts.Any(s => s.Obj == _avatar.Avatar && s.Activated && !s.Done && s.NoHalt) ?? false;
+
+    /// <summary>
+    /// Exult <c>ActionWalk</c> / <c>ActionStopWalking</c>: while WASD or an
+    /// arrow key is held the avatar steers that way (Shift: medium speed);
+    /// letting go stops.
+    /// </summary>
+    void KeyboardWalk(bool canWalk)
+    {
+        var x = (Input.IsKeyPressed(Key.D) || Input.IsKeyPressed(Key.Right) ? 1 : 0) -
+                (Input.IsKeyPressed(Key.A) || Input.IsKeyPressed(Key.Left) ? 1 : 0);
+        var y = (Input.IsKeyPressed(Key.S) || Input.IsKeyPressed(Key.Down) ? 1 : 0) -
+                (Input.IsKeyPressed(Key.W) || Input.IsKeyPressed(Key.Up) ? 1 : 0);
+        if (canWalk && (x != 0 || y != 0))
+        {
+            var av = _avatar.Avatar;
+            WorldView.ShapeLocation(av.Tx, av.Ty, av.Tz, out var ax, out var ay);
+            _avatar.Steer(new Vector2(ax + 50 * x, ay + 50 * y),
+                WalkSpeed.Keyboard(Input.IsKeyPressed(Key.Shift), _combat.InCombat, HostileNearby()));
+            _keyWalking = true;
+        }
+        else if (_keyWalking)
+        {
+            _keyWalking = false;
+            _avatar.Stop();
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Get_click</c> while a book page is shown: releasing the left
+    /// button turns the page, and no other click reaches the game. Only a
+    /// press made while reading counts, not the double-click that opened the book.
+    /// </summary>
+    bool HandleBookClick(InputEventMouseButton mb)
+    {
+        var reading = _usecode is { Wait: UsecodeWait.BookPage };
+        if (mb.ButtonIndex == MouseButton.Left)
+        {
+            var pressedWhileReading = _bookPress;
+            _bookPress = mb.Pressed && reading;
+            if (reading && !mb.Pressed && pressedWhileReading)
+            {
+                _usecode!.TurnBookPage();
+                _conversation.Refresh();
+            }
+        }
+
+        if (!reading || mb.ButtonIndex is not (MouseButton.Left or MouseButton.Right))
+        {
+            return false;
+        }
+
+        _suppressWalk = true;
+        GetViewport().SetInputAsHandled();
+        return true;
+    }
+
     bool HandleClickOnItem(int mx, int my, bool right)
     {
         if (_usecode is not { Wait: UsecodeWait.ClickOnItem } || right)
@@ -762,7 +927,7 @@ public partial class U7Game : Node2D
             return;
         }
 
-        var fun = obj.NpcNum >= 0 ? obj.GetUsecode() : UsecodeMachine.GetShapeFun(obj.Shape);
+        var fun = obj.NpcNum >= 0 ? obj.GetUsecode() : UsecodeMachine.GetItemFun(obj);
         if (fun < 0)
         {
             fun = UsecodeMachine.GetShapeFun(obj.Shape);

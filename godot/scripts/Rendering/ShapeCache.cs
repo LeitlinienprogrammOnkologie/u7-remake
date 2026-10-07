@@ -31,7 +31,7 @@ public sealed class ShapeCache
     {
         _catalog = catalog;
         _gumpsVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "GUMPS.VGA"));
-        _fontsVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "FONTS.VGA"));
+        _fontsVga = VgaFont.File;
         _facesVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "FACES.VGA"));
         _palette = U7Palette.DayRgb();
     }

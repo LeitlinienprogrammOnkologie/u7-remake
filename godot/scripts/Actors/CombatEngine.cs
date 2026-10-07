@@ -250,6 +250,7 @@ public sealed class CombatEngine
             DimY = rec.DimY,
             DimZ = rec.DimZ,
             Alignment = align == Alignment.Neutral ? inf.Alignment : align,
+            TypeFlags = inf.MoveFlags,
             ScheduleType = sched,
             NpcName = string.IsNullOrEmpty(rec.Name) ? $"shape {shape}" : rec.Name
         };
@@ -845,10 +846,40 @@ public sealed class CombatEngine
     }
 
     /// <summary>Restore spawned monsters from a saved game (MONSNPCS.DAT).</summary>
+    /// <summary>Exult <c>Actor::is_sentient</c>: monster intelligence 6 or more (opens doors, joins fights).</summary>
+    public bool IsSentient(U7Object actor) => _monsters[actor.Shape].Intelligence >= 6;
+
+    /// <summary>
+    /// Exult <c>Game_window::is_hostile_nearby</c>: an evil or chaotic actor
+    /// in the tile rectangle that is fighting (Exult: a combat schedule that
+    /// has started its battle; here, one with a target).
+    /// </summary>
+    public bool IsHostileNearby(int x0, int y0, int w, int h)
+    {
+        foreach (var npc in _spawned.Concat(_engaged))
+        {
+            if (!npc.IsDead && !npc.Removed && npc.Alignment >= Alignment.Evil &&
+                npc.ScheduleType == ScheduleType.Combat && npc.CombatTarget is not null &&
+                U7Constants.TileDelta(x0, npc.Tx) is var dx && dx >= 0 && dx < w &&
+                U7Constants.TileDelta(y0, npc.Ty) is var dy && dy >= 0 && dy < h)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public void AdoptMonsters(IEnumerable<U7Object> monsters)
     {
         foreach (var m in monsters)
         {
+            // Saves from before type flags were kept have none: use the monster's own.
+            if ((m.TypeFlags & MoveFlags.All) == 0)
+            {
+                m.TypeFlags |= _monsters[m.Shape].MoveFlags;
+            }
+
             if (!m.Removed && !m.IsDead)
             {
                 _spawned.Add(m);

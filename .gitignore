@@ -16,3 +16,5 @@ Thumbs.db
 /saves/
 # Runtime stub-intrinsic report (BgIntrinsics.WriteStubReport)
 /stub_report.txt
+# Agent console I/O (scripts/agent/restart.ps1)
+/agent_io/

@@ -21,6 +21,8 @@ public sealed class MonsterRecord
     public int Vulnerable;
     public bool CantDie;
     public bool NoBody;
+    /// <summary>Exult <c>Monster_actor::create</c>: the fly/walk/swim/ethereal type flags it gets.</summary>
+    public int MoveFlags = U7.Data.MoveFlags.Walk;
 }
 
 /// <summary>Loads <c>assets/data/monsters.csv</c>.</summary>
@@ -109,11 +111,30 @@ public sealed class MonsterTable
                 Immune = Num(c, iImm),
                 Vulnerable = Num(c, iVuln),
                 CantDie = Num(c, iCantDie) != 0,
-                NoBody = Get(c, iFlags).Contains("no_body", StringComparison.OrdinalIgnoreCase)
+                NoBody = Get(c, iFlags).Contains("no_body", StringComparison.OrdinalIgnoreCase),
+                MoveFlags = ParseMoveFlags(Get(c, iFlags))
             };
             table._byShape[shape] = rec;
         }
 
         return table;
+    }
+
+    static int ParseMoveFlags(string flags)
+    {
+        var result = 0;
+        foreach (var f in flags.Split('|'))
+        {
+            result |= f switch
+            {
+                "fly" => U7.Data.MoveFlags.Fly,
+                "walk" => U7.Data.MoveFlags.Walk,
+                "swim" => U7.Data.MoveFlags.Swim,
+                "ethereal" => U7.Data.MoveFlags.Ethereal,
+                _ => 0
+            };
+        }
+
+        return result;
     }
 }

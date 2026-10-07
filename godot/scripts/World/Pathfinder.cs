@@ -1,102 +1,369 @@
 using Godot;
+using U7.Actors;
 using U7.Core;
 using U7.Data;
 
 namespace U7.World;
 
+/// <summary>Exult <c>Pathfinder_client</c>: step costs, the estimate, and when the search may stop.</summary>
+public abstract class PathClient
+{
+    /// <summary>Exult <c>Pathfinder_client::get_max_cost</c>: give up at 3× the estimate, at least 74.</summary>
+    public virtual int GetMaxCost(int costToGoal) => Math.Max(74, 3 * costToGoal);
+
+    /// <summary>Cost of stepping onto <paramref name="to"/>, or -1 if blocked; may change its lift.</summary>
+    public abstract int GetStepCost(TileCoord from, ref TileCoord to);
+
+    public abstract int EstimateCost(TileCoord from, TileCoord to);
+
+    /// <summary>Exult <c>Pathfinder_client::at_goal</c>: the goal's tile, at its lift unless that is -1.</summary>
+    public virtual bool AtGoal(TileCoord tile, TileCoord goal) =>
+        tile.Tx == goal.Tx && tile.Ty == goal.Ty && (goal.Tz == -1 || tile.Tz == goal.Tz);
+}
+
 /// <summary>
-/// A* on the 3072×3072 wrap-around tile grid. Cost 1 per step; diagonals
-/// only when both cardinals are free. NPCs are not solid.
+/// Exult <c>Actor_pathfinder_client</c>: an actor walking, with its own size
+/// and movement flags. Every step costs 3; climbing or dropping a lift adds
+/// 3, a closed unlocked door 3 (it gets opened on the way), swamp doubles the
+/// cost and Black Gate's cobblestone road takes 1 off.
+/// </summary>
+public sealed class ActorPathClient(GameMap map, U7Object npc, int dist = 0) : PathClient
+{
+    /// <summary>Exult: at least three screens' width.</summary>
+    public override int GetMaxCost(int costToGoal) => Math.Max(3 * costToGoal, Pathfinder.ScreenTilesWide * 2 * 3);
+
+    /// <summary>
+    /// Exult <c>Actor_pathfinder_client::check_blocking</c>: a blocked tile is
+    /// still worth trying if a closed, unlocked door blocks it, away from the
+    /// door's ends and not from inside the doorway. (Actors never block here.)
+    /// </summary>
+    int CheckBlocking(TileCoord from, TileCoord to)
+    {
+        if (map.FindDoor(to) is not { } door || !map.IsClosedDoor(door) || door.Frame % 4 >= 2)
+        {
+            return -1;
+        }
+
+        var footX = door.Tx - door.DimX + 1;
+        var footY = door.Ty - door.DimY + 1;
+        if (door.DimY == 1 && (to.Tx == footX || to.Tx == U7Constants.WrapTile(footX + door.DimX - 1)))
+        {
+            return -1;
+        }
+
+        if (door.DimX == 1 && (to.Ty == footY || to.Ty == U7Constants.WrapTile(footY + door.DimY - 1)))
+        {
+            return -1;
+        }
+
+        var inX = U7Constants.TileDelta(footX, from.Tx) is var dx && dx >= 0 && dx < door.DimX;
+        var inY = U7Constants.TileDelta(footY, from.Ty) is var dy && dy >= 0 && dy < door.DimY;
+        return inX && inY ? -1 : 1;
+    }
+
+    /// <summary>Exult <c>Actor_pathfinder_client::get_step_cost</c>.</summary>
+    public override int GetStepCost(TileCoord from, ref TileCoord to)
+    {
+        var cost = 1;
+        var flat = map.GetFlat(to.Tx, to.Ty);
+        var poison = map.Catalog[flat.Shape].Poisonous;
+        var oldLift = to.Tz;
+        if (ActorWalker.IsBlocked(map, npc, ref to, from))
+        {
+            var ret = CheckBlocking(from, to);
+            if (ret < 0)
+            {
+                return -1;
+            }
+
+            cost += ret;
+        }
+
+        if (oldLift != to.Tz)
+        {
+            cost++;
+        }
+
+        // Exult means "50% more on the diagonal", but every neighbour differs in x or y.
+        cost *= 3;
+        if (poison && to.Tz == 0)
+        {
+            cost *= 2;
+        }
+
+        if (flat.Shape == 24 && flat.Frame <= 1)
+        {
+            cost--; // Cobblestone path.
+        }
+
+        return cost;
+    }
+
+    /// <summary>Exult <c>Actor_pathfinder_client::estimate_cost</c>: straight 2, diagonal 3.</summary>
+    public override int EstimateCost(TileCoord from, TileCoord to)
+    {
+        var dx = Unwrap(to.Tx - from.Tx);
+        var dy = Unwrap(to.Ty - from.Ty);
+        return 2 * Math.Max(dx, dy) + Math.Min(dx, dy);
+    }
+
+    // Exult only wraps the negative side.
+    static int Unwrap(int d) => d < -U7Constants.NumTiles / 2 ? d + U7Constants.NumTiles : Math.Abs(d);
+
+    public override bool AtGoal(TileCoord tile, TileCoord goal) =>
+        (goal.Tz == -1 ? tile.Distance2d(goal) : tile.Distance(goal)) <= dist;
+}
+
+/// <summary>
+/// Exult <c>Find_path</c> (pathfinder/path.cc): A* over tiles and lifts. The
+/// open set is Exult's: a chain per total cost, newest first. There is no
+/// node limit; the search gives up once nothing under the client's cost
+/// ceiling is left.
 /// </summary>
 public static class Pathfinder
 {
-    static readonly (int Dx, int Dy)[] Dirs =
-    [
-        (0, -1), (1, 0), (0, 1), (-1, 0),
-        (1, -1), (1, 1), (-1, 1), (-1, -1)
-    ];
+    /// <summary>Exult <c>gwin->get_width() / c_tilesize</c>: the game window's width in tiles.</summary>
+    public static int ScreenTilesWide { get; set; } = 40;
 
-    public static List<Vector2I>? Find(GameMap map, int sx, int sy, int gx, int gy, int lift,
-        int maxNodes = U7Constants.PathMaxNodes)
+    // Exult Neighbor_iterator: NW, N, NE, W, E, SW, S, SE.
+    static readonly int[] Coords = [-1, -1, 0, -1, 1, -1, -1, 0, 1, 0, -1, 1, 0, 1, 1, 1];
+
+    sealed class Node(TileCoord tile, int startCost, int goalCost, Node? parent)
     {
-        sx = U7Constants.WrapTile(sx);
-        sy = U7Constants.WrapTile(sy);
-        gx = U7Constants.WrapTile(gx);
-        gy = U7Constants.WrapTile(gy);
-        if (sx == gx && sy == gy)
+        public readonly TileCoord Tile = tile;
+        public int StartCost = startCost;
+        public int GoalCost = goalCost;
+        public int TotalCost = startCost + goalCost;
+        public Node? Parent = parent;
+        public Node? PriorityNext;
+
+        public bool IsOpen => PriorityNext is not null;
+
+        public void Update(int startCost, int goalCost, Node parent)
         {
-            return new List<Vector2I>();
+            StartCost = startCost;
+            GoalCost = goalCost;
+            TotalCost = startCost + goalCost;
+            Parent = parent;
         }
 
-        if (map.IsBlocked(gx, gy, lift))
+        /// <summary>Exult <c>Search_node::add_to_chain</c>: insert after 'last', i.e. first in line.</summary>
+        public void AddToChain(ref Node? last)
         {
-            var alt = FindNearbyOpen(map, gx, gy, lift);
-            if (alt is { } a)
+            if (last is not null)
             {
-                gx = a.X;
-                gy = a.Y;
+                PriorityNext = last.PriorityNext;
+                last.PriorityNext = this;
+            }
+            else
+            {
+                last = this;
+                PriorityNext = this;
             }
         }
 
-        var start = Pack(sx, sy);
-        var goal = Pack(gx, gy);
-        var open = new PriorityQueue<int, int>();
-        var gScore = new Dictionary<int, int> { [start] = 0 };
-        var came = new Dictionary<int, int>();
-        var closed = new HashSet<int>();
-        open.Enqueue(start, Heuristic(sx, sy, gx, gy));
-        var expanded = 0;
-        while (open.Count > 0 && expanded < maxNodes)
+        public void RemoveFromChain(ref Node? last)
         {
-            var cur = open.Dequeue();
-            if (!closed.Add(cur))
+            if (PriorityNext == this)
             {
-                continue;
+                last = null;
             }
-
-            expanded++;
-            if (cur == goal)
+            else
             {
-                return Reconstruct(came, cur, start);
-            }
-
-            Unpack(cur, out var x, out var y);
-            var g = gScore[cur];
-            for (var i = 0; i < Dirs.Length; i++)
-            {
-                var nx = U7Constants.WrapTile(x + Dirs[i].Dx);
-                var ny = U7Constants.WrapTile(y + Dirs[i].Dy);
-                if (i >= 4)
+                var prev = last!;
+                do
                 {
-                    var cx = U7Constants.WrapTile(x + Dirs[i].Dx);
-                    var cy = y;
-                    var rx = x;
-                    var ry = U7Constants.WrapTile(y + Dirs[i].Dy);
-                    if (map.IsBlocked(cx, cy, lift) || map.IsBlocked(rx, ry, lift))
+                    var next = prev.PriorityNext!;
+                    if (next == this)
                     {
-                        continue;
+                        break;
                     }
-                }
 
-                if (map.IsBlocked(nx, ny, lift) && !(nx == gx && ny == gy))
+                    prev = next;
+                } while (prev != last);
+
+                prev.PriorityNext = PriorityNext;
+                if (last == this)
+                {
+                    last = PriorityNext;
+                }
+            }
+
+            PriorityNext = null;
+        }
+
+        public static Node RemoveFirstFromChain(ref Node? last)
+        {
+            var first = last!.PriorityNext!;
+            if (first == last)
+            {
+                last = null;
+            }
+            else
+            {
+                last.PriorityNext = first.PriorityNext;
+            }
+
+            first.PriorityNext = null;
+            return first;
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>A_star_queue</c>. It starts with 512 empty cost buckets and
+    /// 'best' just past them, so (as in Exult) a start estimate of 512 or more
+    /// (some 250 tiles) finds nothing.
+    /// </summary>
+    sealed class OpenSet
+    {
+        const int InitialBuckets = 512;
+        readonly List<Node?> _open = new(new Node?[InitialBuckets]);
+        readonly Dictionary<TileCoord, Node> _lookup = new(1000);
+        int _best = InitialBuckets;
+
+        Node? Last(int pri) => pri < _open.Count ? _open[pri] : null;
+
+        void SetLast(int pri, Node? node)
+        {
+            while (pri >= _open.Count)
+            {
+                _open.Add(null);
+            }
+
+            _open[pri] = node;
+        }
+
+        void SkipEmpty()
+        {
+            for (_best++; _best < _open.Count && _open[_best] is null; _best++)
+            {
+            }
+        }
+
+        public void AddBack(Node nd)
+        {
+            var last = Last(nd.TotalCost);
+            nd.AddToChain(ref last);
+            SetLast(nd.TotalCost, last);
+            _best = Math.Min(_best, nd.TotalCost);
+        }
+
+        public void Add(Node nd)
+        {
+            _lookup[nd.Tile] = nd;
+            AddBack(nd);
+        }
+
+        public void RemoveFromOpen(Node nd)
+        {
+            if (!nd.IsOpen)
+            {
+                return;
+            }
+
+            var last = Last(nd.TotalCost);
+            if (last is not null)
+            {
+                nd.RemoveFromChain(ref last);
+                SetLast(nd.TotalCost, last);
+            }
+
+            if (last is null && nd.TotalCost == _best)
+            {
+                SkipEmpty();
+            }
+        }
+
+        public Node? Pop()
+        {
+            var last = Last(_best);
+            if (last is null)
+            {
+                return null;
+            }
+
+            var node = Node.RemoveFirstFromChain(ref last);
+            SetLast(_best, last);
+            if (last is null)
+            {
+                SkipEmpty();
+            }
+
+            return node;
+        }
+
+        public Node? Find(TileCoord tile) => _lookup.GetValueOrDefault(tile);
+    }
+
+    /// <summary>
+    /// Exult <c>Find_path</c>: the tiles from just after <paramref name="start"/>
+    /// to the goal (empty if already there), or null if there is no way within
+    /// the client's cost ceiling.
+    /// </summary>
+    public static List<TileCoord>? FindPath(PathClient client, TileCoord start, TileCoord goal)
+    {
+        var nodes = new OpenSet();
+        var maxCost = client.EstimateCost(start, goal);
+        nodes.Add(new Node(start, 0, maxCost, null));
+        maxCost = client.GetMaxCost(maxCost);
+        while (nodes.Pop() is { } node)
+        {
+            var cur = node.Tile;
+            if (client.AtGoal(cur, goal))
+            {
+                return CreatePath(node);
+            }
+
+            for (var i = 0; i < Coords.Length; i += 2)
+            {
+                var ntile = new TileCoord(U7Constants.WrapTile(cur.Tx + Coords[i]), U7Constants.WrapTile(cur.Ty + Coords[i + 1]),
+                    cur.Tz);
+                var stepCost = client.GetStepCost(cur, ref ntile);
+                if (stepCost == -1)
                 {
                     continue;
                 }
 
-                var np = Pack(nx, ny);
-                var ng = g + 1;
-                if (gScore.TryGetValue(np, out var old) && ng >= old)
+                var newCost = node.StartCost + stepCost;
+                var next = nodes.Find(ntile);
+                if (next is not null && next.StartCost <= newCost)
                 {
                     continue;
                 }
 
-                gScore[np] = ng;
-                came[np] = cur;
-                open.Enqueue(np, ng + Heuristic(nx, ny, gx, gy));
+                var newGoalCost = client.EstimateCost(ntile, goal);
+                if (newCost + newGoalCost >= maxCost)
+                {
+                    continue;
+                }
+
+                if (next is null)
+                {
+                    nodes.Add(new Node(ntile, newCost, newGoalCost, node));
+                }
+                else
+                {
+                    nodes.RemoveFromOpen(next);
+                    next.Update(newCost, newGoalCost, node);
+                    nodes.AddBack(next);
+                }
             }
         }
 
         return null;
+    }
+
+    /// <summary>Exult <c>Search_node::create_path</c>: the tiles after the start, in order.</summary>
+    static List<TileCoord> CreatePath(Node goal)
+    {
+        var path = new List<TileCoord>();
+        for (var n = goal; n.Parent is not null; n = n.Parent)
+        {
+            path.Add(n.Tile);
+        }
+
+        path.Reverse();
+        return path;
     }
 
     public static Vector2I GreedyStep(GameMap map, int sx, int sy, int gx, int gy, int lift)
@@ -134,63 +401,5 @@ public static class Pathfinder
         }
 
         return new Vector2I(sx, sy);
-    }
-
-    static Vector2I? FindNearbyOpen(GameMap map, int gx, int gy, int lift)
-    {
-        for (var r = 1; r <= 3; r++)
-        {
-            for (var dy = -r; dy <= r; dy++)
-            {
-                for (var dx = -r; dx <= r; dx++)
-                {
-                    if (Math.Abs(dx) != r && Math.Abs(dy) != r)
-                    {
-                        continue;
-                    }
-
-                    var x = U7Constants.WrapTile(gx + dx);
-                    var y = U7Constants.WrapTile(gy + dy);
-                    if (!map.IsBlocked(x, y, lift))
-                    {
-                        return new Vector2I(x, y);
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
-    static List<Vector2I> Reconstruct(Dictionary<int, int> came, int cur, int start)
-    {
-        var rev = new List<Vector2I>();
-        while (cur != start)
-        {
-            Unpack(cur, out var x, out var y);
-            rev.Add(new Vector2I(x, y));
-            if (!came.TryGetValue(cur, out cur))
-            {
-                break;
-            }
-        }
-
-        rev.Reverse();
-        return rev;
-    }
-
-    static int Heuristic(int x, int y, int gx, int gy)
-    {
-        var dx = Math.Abs(U7Constants.TileDelta(x, gx));
-        var dy = Math.Abs(U7Constants.TileDelta(y, gy));
-        return Math.Max(dx, dy);
-    }
-
-    static int Pack(int x, int y) => (y << 12) | x;
-
-    static void Unpack(int p, out int x, out int y)
-    {
-        x = p & 0xfff;
-        y = p >> 12;
     }
 }

@@ -4,33 +4,40 @@ using U7.Data;
 namespace U7.Actors;
 
 /// <summary>
-/// Shared one-tile step + walk frames. Avatar uses a 3-frame cycle;
-/// NPCs use Exult's 5-frame <c>{0,1,0,2,0}</c> per cardinal.
+/// Shared one-tile step + walk frames (Exult <c>Frames_sequence</c>): the
+/// avatar's 3-frame <c>{0,1,2}</c> and NPCs' 5-frame <c>{0,1,0,2,0}</c> per
+/// cardinal; frame 0 is the resting frame and the cycle skips it.
 /// </summary>
 public static class ActorWalker
 {
+    /// <summary>Exult <c>Actor::sit_frame</c> and <c>sleep_frame</c>.</summary>
+    public const int SitFrame = 10;
+    public const int SleepFrame = 13;
+
+    // By 8-way direction. Exult picks walking frames by Get_direction4, which
+    // turns a diagonal step into east or west.
     static readonly int[][] AvatarFrames =
     [
         [0, 1, 2],
-        [0, 1, 2],
+        [48, 49, 50],
+        [48, 49, 50],
         [48, 49, 50],
         [16, 17, 18],
-        [16, 17, 18],
-        [16, 17, 18],
         [32, 33, 34],
-        [0, 1, 2]
+        [32, 33, 34],
+        [32, 33, 34]
     ];
 
     static readonly int[][] NpcFrames =
     [
         [0, 1, 0, 2, 0],
-        [0, 1, 0, 2, 0],
+        [48, 49, 48, 50, 48],
+        [48, 49, 48, 50, 48],
         [48, 49, 48, 50, 48],
         [16, 17, 16, 18, 16],
-        [16, 17, 16, 18, 16],
-        [16, 17, 16, 18, 16],
         [32, 33, 32, 34, 32],
-        [0, 1, 0, 2, 0]
+        [32, 33, 32, 34, 32],
+        [32, 33, 32, 34, 32]
     ];
 
     public static bool TryStep(GameMap map, U7Object actor, int dx, int dy)
@@ -42,43 +49,64 @@ public static class ActorWalker
         }
 
         var facing = DirIndex(dx, dy);
-        var nx = U7Constants.WrapTile(actor.Tx + dx);
-        var ny = U7Constants.WrapTile(actor.Ty + dy);
-        if (!ResolveStep(map, nx, ny, actor.Tz, out var nz))
+        var to = new TileCoord(U7Constants.WrapTile(actor.Tx + dx), U7Constants.WrapTile(actor.Ty + dy), actor.Tz);
+        if (!CanStep(map, actor, ref to))
         {
             Stand(actor, facing);
             return false;
         }
 
-        MoveTo(map, actor, nx, ny, nz, facing);
+        MoveTo(map, actor, to.Tx, to.Ty, to.Tz, facing);
         return true;
     }
 
     /// <summary>
-    /// Exult <c>Actor::is_blocked</c> for a one-tile step: where a step onto
-    /// (tx, ty) from lift <paramref name="fromZ"/> would land (up or down one
-    /// level), or false if the tile is blocked.
+    /// Exult <c>Actor::step</c>'s test: the tile is free for the actor
+    /// (<see cref="IsBlocked"/>) and at most one lift up or down
+    /// (<c>is_really_blocked</c>; actors do not block one another here).
+    /// <paramref name="to"/>.Tz becomes the lift it lands on.
     /// </summary>
-    public static bool ResolveStep(GameMap map, int tx, int ty, int fromZ, out int nz)
+    public static bool CanStep(GameMap map, U7Object actor, ref TileCoord to) =>
+        !IsBlocked(map, actor, ref to) && Math.Abs(to.Tz - actor.Tz) <= 1;
+
+    /// <summary>
+    /// Exult <c>Actor::is_blocked</c>: whether the actor, with its own 3D size
+    /// for its frame and its type flags (walk, swim, fly), cannot stand on
+    /// <paramref name="t"/> stepping from <paramref name="from"/> (default:
+    /// where it is). <paramref name="t"/>.Tz becomes the lift it would be on.
+    /// </summary>
+    public static bool IsBlocked(GameMap map, U7Object actor, ref TileCoord t, TileCoord? from = null,
+        int moveFlags = 0)
     {
-        nz = fromZ;
-        if (map.IsBlocked(tx, ty, nz))
+        var info = map.Catalog[actor.Shape];
+        var reflected = (actor.Frame & 32) != 0;
+        var xtiles = Math.Max(1, reflected ? info.DimY : info.DimX);
+        var ytiles = Math.Max(1, reflected ? info.DimX : info.DimY);
+        var ztiles = info.DimZ;
+        var flags = moveFlags | actor.TypeFlags;
+        t = t.Wrapped();
+        if (xtiles == 1 && ytiles == 1)
         {
-            if (!map.IsBlocked(tx, ty, nz + 1))
-            {
-                nz += 1;
-                return true;
-            }
-
-            return false;
+            var blocked = map.Blocking.IsBlocked(ztiles, t.Tz, t.Tx, t.Ty, out var newLift, flags);
+            t = t with { Tz = newLift };
+            return blocked;
         }
 
-        if (nz > 0 && !map.IsBlocked(tx, ty, nz - 1) && !HasFloor(map, tx, ty, nz))
-        {
-            nz -= 1;
-        }
+        return map.Blocking.IsBlockedStep(xtiles, ytiles, ztiles, from ?? new TileCoord(actor.Tx, actor.Ty, actor.Tz),
+            ref t, flags);
+    }
 
-        return true;
+    /// <summary>
+    /// Where the actor would land stepping onto (tx, ty) from lift
+    /// <paramref name="fromZ"/> (Exult <c>npc->is_blocked(to)</c> in the party
+    /// code), or false if it cannot.
+    /// </summary>
+    public static bool ResolveStep(GameMap map, U7Object actor, int tx, int ty, int fromZ, out int nz)
+    {
+        var to = new TileCoord(tx, ty, fromZ);
+        var blocked = IsBlocked(map, actor, ref to);
+        nz = to.Tz;
+        return !blocked;
     }
 
     /// <summary>Move one tile and advance the walk cycle in the given facing.</summary>
@@ -113,6 +141,41 @@ public static class ActorWalker
         _ => 2
     };
 
+    /// <summary>
+    /// Exult <c>Get_direction_NoWrap</c>: one of 8 directions (0 north,
+    /// clockwise) for a slope; <paramref name="dy"/> grows northwards.
+    /// </summary>
+    public static int DirectionNoWrap(int dy, int dx)
+    {
+        if (dx == 0)
+        {
+            return dy > 0 ? 0 : 4;
+        }
+
+        var dydx = 1024 * dy / dx;
+        if (dydx >= 0)
+        {
+            return dx >= 0
+                ? dydx <= 424 ? 2 : dydx <= 2472 ? 1 : 0
+                : dydx <= 424 ? 6 : dydx <= 2472 ? 5 : 4;
+        }
+
+        return dx >= 0
+            ? dydx >= -424 ? 2 : dydx >= -2472 ? 3 : 4
+            : dydx >= -424 ? 6 : dydx >= -2472 ? 7 : 0;
+    }
+
+    /// <summary>Exult <c>Get_direction4</c>: north, east, south or west (0, 2, 4, 6); <paramref name="dy"/> grows northwards.</summary>
+    public static int Direction4(int dy, int dx)
+    {
+        if (dx >= 0)
+        {
+            return dy > dx ? 0 : dy < -dx ? 4 : 2;
+        }
+
+        return dy > -dx ? 0 : dy < dx ? 4 : 6;
+    }
+
     public static int DirIndex(int dx, int dy) => (dx, dy) switch
     {
         (0, -1) => 0,
@@ -130,7 +193,8 @@ public static class ActorWalker
     {
         var frames = actor.NpcNum > 0 ? NpcFrames : AvatarFrames;
         var cycle = frames[facing];
-        actor.WalkFrameIndex = (actor.WalkFrameIndex + 1) % cycle.Length;
+        // Exult Frames_sequence::get_next: wrap to 1, past the resting frame.
+        actor.WalkFrameIndex = actor.WalkFrameIndex + 1 >= cycle.Length ? 1 : actor.WalkFrameIndex + 1;
         actor.Frame = cycle[actor.WalkFrameIndex];
     }
 
@@ -144,23 +208,5 @@ public static class ActorWalker
             2 => 2,
             _ => 3
         };
-    }
-
-    static bool HasFloor(GameMap map, int tx, int ty, int lift)
-    {
-        foreach (var obj in map.ObjectsInChunk(tx / 16, ty / 16))
-        {
-            if (obj.IsActor || obj.Removed)
-            {
-                continue;
-            }
-
-            if (obj.Occupies(tx, ty) && obj.Tz + obj.DimZ == lift)
-            {
-                return true;
-            }
-        }
-
-        return lift <= 0;
     }
 }

@@ -19,7 +19,7 @@ public partial class U7Game
 {
     const string AgentHelp =
         "look [r] | find <text> | npc <num|name> | state | inv [npcnum] | flags | stubs | " +
-        "walk <x> <y> | walkto <id|npc:num> | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | " +
+        "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id> | wait <sec> | hour <h> | shot <name> | " +
         "save <slot> | load <slot> | tile <x> <y> [z] | close";
 
@@ -63,6 +63,9 @@ public partial class U7Game
         _agentFlags0 = (byte[])_usecode.GFlags.Clone();
         _usecode.Say += text => AgentLog("SAY " + text.Replace('\n', ' '));
         _usecode.ItemSay += (obj, text) => AgentLog($"BARK {AgentName(obj)}: {text}");
+        _usecode.BookPageShown += book =>
+            AgentLog($"BOOK {(book is U7.Gumps.ScrollGump ? "scroll" : "book")}: " +
+                     string.Join(" / ", book.Lines.Select(l => l.Text.Trim())));
         Engine.TimeScale = 0;
         if (_agentStarted)
         {
@@ -176,7 +179,7 @@ public partial class U7Game
             case "npc":
                 if (AgentNpc(arg) is { } npcObj)
                 {
-                    AgentLog(AgentDescribe(npcObj));
+                    AgentLog(AgentDescribe(npcObj) + $" typeflags 0x{npcObj.TypeFlags:X}");
                 }
 
                 break;
@@ -235,9 +238,17 @@ public partial class U7Game
             case "cont":
             {
                 var n = arg == "all" ? 60 : parts.Length > 1 ? int.Parse(parts[1]) : 1;
-                for (var i = 0; i < n && _usecode is { Wait: UsecodeWait.ClickToContinue }; i++)
+                for (var i = 0; i < n && _usecode is { Wait: UsecodeWait.ClickToContinue or UsecodeWait.BookPage }; i++)
                 {
-                    _conversation.Advance();
+                    if (_usecode.Wait == UsecodeWait.BookPage)
+                    {
+                        _usecode.TurnBookPage();
+                        _conversation.Refresh();
+                    }
+                    else
+                    {
+                        _conversation.Advance();
+                    }
                 }
 
                 break;
@@ -275,6 +286,32 @@ public partial class U7Game
                 _agentBusy = () => _usecode is not { WaitingForChoice: true };
                 break;
             }
+            case "steer":
+            {
+                // Hold a walking direction (n, ne, e, ...) for a while, like a held key or button.
+                var dir = Array.IndexOf(["n", "ne", "e", "se", "s", "sw", "w", "nw"], parts[1]);
+                var secs = double.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture);
+                var speed = parts.Length > 3 ? int.Parse(parts[3]) : WalkSpeed.Keyboard(false, false, false);
+                var step = new TileCoord(0, 0, 0).Neighbor(dir);
+                var (dx, dy) = (U7Constants.TileDelta(0, step.Tx), U7Constants.TileDelta(0, step.Ty));
+                _gumps.CloseAll();
+                Engine.TimeScale = 4;
+                _agentElapsed = 0;
+                _agentLimit = secs + 1;
+                _agentBusy = () =>
+                {
+                    if (_agentElapsed >= secs)
+                    {
+                        _avatar.Stop();
+                        return false;
+                    }
+
+                    U7.Rendering.WorldView.ShapeLocation(av.Tx, av.Ty, av.Tz, out var ax, out var ay);
+                    _avatar.Steer(new Vector2(ax + 50 * dx, ay + 50 * dy), speed);
+                    return true;
+                };
+                break;
+            }
             case "hour":
             {
                 var h = int.Parse(arg);
@@ -299,7 +336,12 @@ public partial class U7Game
                 var tx = int.Parse(parts[1]);
                 var ty = int.Parse(parts[2]);
                 var tz = parts.Length > 3 ? int.Parse(parts[3]) : av.Tz;
-                AgentLog($"tile {tx},{ty},{tz}: blocked={_map.IsBlocked(tx, ty, tz)} flat={_map.GetFlat(tx, ty).Shape}");
+                var column = _map.Blocking.Column(tx, ty);
+                var lifts = string.Join(",", Enumerable.Range(0, ChunkBlocking.MaxLifts).Where(z => ((column >> z) & 1) != 0));
+                var probe = new TileCoord(tx, ty, tz);
+                var avatarBlocked = ActorWalker.IsBlocked(_map, av, ref probe);
+                AgentLog($"tile {tx},{ty},{tz}: blocked={_map.IsBlocked(tx, ty, tz)} flat={_map.GetFlat(tx, ty).Shape} " +
+                         $"lifts [{lifts}] avatar {(avatarBlocked ? "blocked" : $"stands at {probe.Tz}")}");
                 foreach (var o in _map.ObjectsInChunk(tx / U7Constants.TilesPerChunk, ty / U7Constants.TilesPerChunk)
                              .Concat(_map.ObjectsInChunk(tx / U7Constants.TilesPerChunk + 1, ty / U7Constants.TilesPerChunk))
                              .Concat(_map.ObjectsInChunk(tx / U7Constants.TilesPerChunk, ty / U7Constants.TilesPerChunk + 1))
@@ -314,6 +356,14 @@ public partial class U7Game
                 break;
             }
             case "close":
+                if (_usecode is { Wait: UsecodeWait.BookPage })
+                {
+                    // Esc: stop reading.
+                    _usecode.TurnBookPage(stop: true);
+                    _conversation.Refresh();
+                    break;
+                }
+
                 _gumps.CloseAll();
                 break;
             case "save":

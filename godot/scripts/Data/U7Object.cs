@@ -60,6 +60,8 @@ public sealed class U7Object
     public int WalkFrameIndex;
     /// <summary>Exult actor type flags (walk/swim/fly...) from npc.dat, kept for saving.</summary>
     public int TypeFlags;
+    /// <summary>Exult <c>Actor::frame_time</c>: milliseconds per step while walking, 0 when not moving.</summary>
+    public int FrameTime;
     /// <summary>For a corpse (Exult <c>Dead_body</c>): the NPC it belongs to, or -1.</summary>
     public int LiveNpcNum = -1;
     public bool Unused;
@@ -108,16 +110,9 @@ public sealed class U7Object
         return tx >= x0 && tx <= Tx && ty >= y0 && ty <= Ty;
     }
 
-    public bool BlocksAt(int tx, int ty, int lift)
-    {
-        if (!Solid || !Occupies(tx, ty))
-        {
-            return false;
-        }
-
-        var top = Tz + Math.Max(DimZ, 1) - 1;
-        return lift >= Tz && lift <= top;
-    }
+    /// <summary>Whether this object counts in <see cref="ChunkBlocking"/> at the tile and lift: solid, with height.</summary>
+    public bool BlocksAt(int tx, int ty, int lift) =>
+        Solid && DimZ > 0 && Occupies(tx, ty) && lift >= Tz && lift < Tz + DimZ;
 
     /// <summary>
     /// Approximate Exult paint order: south-east and higher lift draw later.

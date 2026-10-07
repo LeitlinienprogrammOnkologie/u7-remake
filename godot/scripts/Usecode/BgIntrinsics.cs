@@ -156,6 +156,7 @@ public sealed class BgIntrinsics
             0x66 => SetTimer(p),
             0x67 => WearingFellowship(),
             0x91 => ResetConvFace(),
+            0x55 => BookMode(p),
             _ => Stub(id, p, n)
         };
 
@@ -357,13 +358,7 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
-        item.Shape = (int)p[1].IntValue;
-        var info = _vm.Catalog[item.Shape];
-        var reflected = (item.Frame & 32) != 0;
-        item.DimX = reflected ? info.DimY : info.DimX;
-        item.DimY = reflected ? info.DimX : info.DimY;
-        item.DimZ = info.DimZ;
-        item.Solid = info.Solid;
+        _vm.Map.SetShape(item, (int)p[1].IntValue);
         return Zero();
     }
 
@@ -911,6 +906,24 @@ public sealed class BgIntrinsics
         _vm.ShowText(shown);
         _vm.Conv.TextFace = -1;
         _vm.RequestWait(UsecodeWait.ClickToContinue);
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>book_mode(item)</c>: the following says fill a scroll gump
+    /// (shape 797) or a book gump instead of the conversation, shown when the
+    /// usecode next shows pending text. Exult's serpentine-script shapes 705
+    /// and 707 are Serpent Isle's; no Black Gate usecode opens them.
+    /// </summary>
+    UsecodeValue BookMode(UsecodeValue[] p)
+    {
+        var obj = _vm.GetItem(p[0]);
+        if (obj is null)
+        {
+            return Zero();
+        }
+
+        _vm.SetBook(obj.Shape == 797 ? new U7.Gumps.ScrollGump() : new U7.Gumps.BookGump());
         return Zero();
     }
 

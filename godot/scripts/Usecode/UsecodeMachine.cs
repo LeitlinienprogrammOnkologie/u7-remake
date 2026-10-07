@@ -18,7 +18,9 @@ public enum UsecodeWait
     /// <summary>input_numeric_value: resume with <see cref="UsecodeMachine.ResumeWait"/> and the chosen number.</summary>
     NumericInput,
     /// <summary>Exult <c>click_to_continue</c>: text is shown; resume with <see cref="UsecodeMachine.ContinueText"/>.</summary>
-    ClickToContinue
+    ClickToContinue,
+    /// <summary>Exult <c>show_pending_text</c> in book mode: a book or scroll page is shown; resume with <see cref="UsecodeMachine.TurnBookPage"/>.</summary>
+    BookPage
 }
 
 /// <summary>
@@ -57,6 +59,10 @@ public sealed class UsecodeMachine
     public event Action<U7Object, string>? ItemSay;
     public event Action? AnswersChanged;
     public event Action? FacesChanged;
+    /// <summary>A book or scroll page was laid out and now waits for a click.</summary>
+    public event Action<TextGump>? BookPageShown;
+    /// <summary>Exult <c>Usecode_internal::book</c>: while set (by book_mode), says go into this book or scroll.</summary>
+    public TextGump? Book { get; private set; }
     public GumpManager? Gumps { get; set; }
     public List<U7Object?> Npcs { get; set; } = new();
     public U7.World.GameClock? Clock { get; set; }
@@ -378,6 +384,8 @@ public sealed class UsecodeMachine
     bool _exitRun;
     bool _aborted;
     bool _pendingCallisPush;
+    /// <summary>An ABRT/THROW waits for its pending text before it aborts.</summary>
+    bool _abortAfterText;
     readonly Random _rng = new();
     readonly BgIntrinsics _intrinsics;
 
@@ -409,6 +417,15 @@ public sealed class UsecodeMachine
 
     public static int GetShapeFun(int shape) => shape < 0x400 ? shape : 0x1000 + (shape - 0x400);
 
+    /// <summary>
+    /// Exult <c>Game_object::get_usecode</c> for an item: frame- or
+    /// quality-dependent usecode before the shape's function. Black Gate's only
+    /// entries (<c>data/bg/shape_info.txt</c>, frame_usecode) send books of
+    /// quality 100-179 to 0x638; the book function 0x282 ends at quality 99.
+    /// </summary>
+    public static int GetItemFun(U7Object item) =>
+        item.Shape == 642 && item.Quality is >= 100 and <= 179 ? 0x638 : GetShapeFun(item.Shape);
+
     public static bool IsObjectFun(int n) => n < 0x800;
 
     public int Call(int id, U7Object? item, UsecodeEvent ev)
@@ -421,6 +438,7 @@ public sealed class UsecodeMachine
         UserChoice = null;
         _foundAnswer = false;
         _pendingCallisPush = false;
+        _abortAfterText = false;
         _textQueue.Clear();
         if (!CallFunction(id, (int)ev, item, entrypoint: true))
         {
@@ -428,7 +446,25 @@ public sealed class UsecodeMachine
             return -1;
         }
 
-        return Run();
+        var rc = Run();
+        FinishIfDone();
+        return rc;
+    }
+
+    /// <summary>
+    /// Exult <c>call_usecode</c> after its run: once nothing waits any more,
+    /// drop the book and remove the faces left hanging.
+    /// </summary>
+    void FinishIfDone()
+    {
+        if (InUsecode || WaitingForChoice)
+        {
+            return;
+        }
+
+        SetBook(null);
+        Conv.InitFaces();
+        FacesChanged?.Invoke();
     }
 
     public void Choose(string answer, int index = -1)
@@ -457,11 +493,7 @@ public sealed class UsecodeMachine
 
         _foundAnswer = false;
         Run();
-        if (!InUsecode && !WaitingForChoice)
-        {
-            Conv.InitFaces();
-            FacesChanged?.Invoke();
-        }
+        FinishIfDone();
     }
 
     public void ResumeWait(UsecodeValue result)
@@ -479,11 +511,7 @@ public sealed class UsecodeMachine
         }
 
         Run();
-        if (!InUsecode && !WaitingForChoice)
-        {
-            Conv.InitFaces();
-            FacesChanged?.Invoke();
-        }
+        FinishIfDone();
     }
 
     public int Run()
@@ -922,6 +950,13 @@ public sealed class UsecodeMachine
                     Pop();
                 }
 
+                if (Wait != UsecodeWait.None)
+                {
+                    // Exult shows the pending text first: abort once it has been clicked away.
+                    _abortAfterText = true;
+                    return true;
+                }
+
                 Abort();
                 return true;
             case UsecodeOp.ConverseLoc:
@@ -1175,8 +1210,18 @@ public sealed class UsecodeMachine
         StringReg += str;
     }
 
+    /// <summary>
+    /// Exult <c>show_pending_text</c>: in book mode, page through the book's
+    /// unread text; otherwise say what is left in the string register.
+    /// </summary>
     public void ShowPendingText()
     {
+        if (Book is not null)
+        {
+            NextBookPage();
+            return;
+        }
+
         if (StringReg.Length == 0)
         {
             return;
@@ -1185,15 +1230,86 @@ public sealed class UsecodeMachine
         SayString();
     }
 
+    /// <summary>Exult <c>set_book</c>.</summary>
+    public void SetBook(TextGump? book) => Book = book;
+
+    /// <summary>Exult <c>show_pending_text</c>'s book loop, one page per click: show the next page and wait.</summary>
+    void NextBookPage()
+    {
+        if (Book is not { } book || !book.ShowNextPage())
+        {
+            return;
+        }
+
+        Wait = UsecodeWait.BookPage;
+        BookPageShown?.Invoke(book);
+        AnswersChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// The player clicked the book page: show the next one, or carry on
+    /// running. With <paramref name="stop"/> (Esc, Exult <c>Get_click</c>
+    /// returning false) the rest is left unread.
+    /// </summary>
+    public void TurnBookPage(bool stop = false)
+    {
+        if (Wait != UsecodeWait.BookPage)
+        {
+            return;
+        }
+
+        Wait = UsecodeWait.None;
+        if (!stop)
+        {
+            NextBookPage();
+            if (Wait != UsecodeWait.None)
+            {
+                return;
+            }
+        }
+
+        ResumeAfterText();
+    }
+
+    /// <summary>The text was clicked away: carry on running, or finish the abort that waited for it.</summary>
+    void ResumeAfterText()
+    {
+        if (_pendingCallisPush)
+        {
+            _pendingCallisPush = false;
+            Push(UsecodeValue.FromInt(0));
+        }
+
+        if (_abortAfterText)
+        {
+            _abortAfterText = false;
+            Abort();
+        }
+        else
+        {
+            Run();
+        }
+
+        FinishIfDone();
+    }
+
     /// <summary>
     /// Exult <c>Usecode_internal::say_string</c>: show the text up to each '~'
     /// ("~~" counts once) and wait for a click after every piece; a '*' at the
-    /// start of a piece is one more click.
+    /// start of a piece is one more click. In book mode the text goes into the
+    /// book instead (<c>show_book</c>).
     /// </summary>
     public void SayString()
     {
         if (StringReg.Length == 0)
         {
+            return;
+        }
+
+        if (Book is not null)
+        {
+            Book.AddText(StringReg);
+            StringReg = "";
             return;
         }
 
@@ -1266,18 +1382,7 @@ public sealed class UsecodeMachine
             return;
         }
 
-        if (_pendingCallisPush)
-        {
-            _pendingCallisPush = false;
-            Push(UsecodeValue.FromInt(0));
-        }
-
-        Run();
-        if (!InUsecode && !WaitingForChoice)
-        {
-            Conv.InitFaces();
-            FacesChanged?.Invoke();
-        }
+        ResumeAfterText();
     }
 
     /// <summary>Text for the conversation panel, spoken by the face shown last (Exult <c>last_face_shown</c>).</summary>
@@ -1332,7 +1437,9 @@ public sealed class UsecodeMachine
         _aborted = false;
         Wait = UsecodeWait.None;
         _pendingCallisPush = false;
+        _abortAfterText = false;
         _textQueue.Clear();
+        SetBook(null);
         UserChoice = null;
         StringReg = "";
         Conv.ClearAnswers();

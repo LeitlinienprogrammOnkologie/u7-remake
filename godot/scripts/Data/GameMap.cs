@@ -33,10 +33,13 @@ public sealed class GameMap
     /// <summary>Chunks whose paint dependencies have been computed (done lazily on first draw).</summary>
     readonly bool[][] _chunkOrdered;
     readonly byte[]?[][] _dungeonLevels;
+    /// <summary>Exult <c>Chunk_cache</c> blocked flags: what solid objects occupy, per tile and lift.</summary>
+    public ChunkBlocking Blocking { get; }
 
     public GameMap(ShapeCatalog catalog)
     {
         Catalog = catalog;
+        Blocking = new ChunkBlocking(this);
         ChunkObjects = new List<U7Object>[U7Constants.NumChunks][];
         _dungeonLevels = new byte[]?[U7Constants.NumChunks][];
         _chunkEggs = new ChunkEggs?[U7Constants.NumChunks][];
@@ -187,6 +190,7 @@ public sealed class GameMap
         var cx = U7Constants.WrapChunk(obj.Tx / U7Constants.TilesPerChunk);
         var cy = U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk);
         ChunkObjects[cx][cy].Add(obj);
+        Blocking.Update(obj, add: true);
         if (_chunkOrdered[cx][cy] && !obj.IsFlat)
         {
             AddDependencies(obj, cx, cy, onlyEarlierInOwnChunk: false);
@@ -198,7 +202,11 @@ public sealed class GameMap
     {
         var cx = U7Constants.WrapChunk(obj.Tx / U7Constants.TilesPerChunk);
         var cy = U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk);
-        ChunkObjects[cx][cy].Remove(obj);
+        if (ChunkObjects[cx][cy].Remove(obj))
+        {
+            Blocking.Update(obj, add: false);
+        }
+
         ClearDependencies(obj);
     }
 
@@ -603,33 +611,91 @@ public sealed class GameMap
         return result;
     }
 
-    public bool IsBlocked(int tx, int ty, int lift)
+    /// <summary>
+    /// Whether a solid object occupies the tile at this lift (Exult
+    /// <c>is_tile_occupied</c>), or it is water at ground level.
+    /// </summary>
+    public bool IsBlocked(int tx, int ty, int lift) =>
+        Blocking.Test(tx, ty, lift) || (lift <= 0 && Catalog[GetFlat(tx, ty).Shape].Water);
+
+    /// <summary>Exult <c>Game_object::blocks</c>: a solid object with height covers the tile at its lift.</summary>
+    public static bool Blocks(U7Object obj, TileCoord tile)
     {
-        tx = U7Constants.WrapTile(tx);
-        ty = U7Constants.WrapTile(ty);
-        var flat = GetFlat(tx, ty);
-        var info = Catalog[flat.Shape];
-        if (info.Water && lift <= 0)
+        if (obj.Tx < tile.Tx || obj.Ty < tile.Ty || obj.Tz > tile.Tz || !obj.Solid || obj.DimZ <= 0)
         {
-            return true;
+            return false;
         }
 
-        var cx = tx / U7Constants.TilesPerChunk;
-        var cy = ty / U7Constants.TilesPerChunk;
-        foreach (var obj in ChunkObjects[cx][cy])
-        {
-            if (obj.Removed || obj.IsActor || obj.IsEgg)
-            {
-                continue;
-            }
+        return tile.Tx > obj.Tx - obj.DimX && tile.Ty > obj.Ty - obj.DimY && tile.Tz < obj.Tz + obj.DimZ;
+    }
 
-            if (obj.BlocksAt(tx, ty, lift))
+    /// <summary>Exult <c>Game_object::find_blocking</c>: an object of the tile's chunk that blocks it.</summary>
+    public U7Object? FindBlocking(TileCoord tile)
+    {
+        tile = tile.Wrapped();
+        foreach (var obj in ObjectsInChunk(tile.ChunkX, tile.ChunkY))
+        {
+            if (!obj.Removed && Blocks(obj, tile))
             {
-                return true;
+                return obj;
             }
         }
 
-        return false;
+        return null;
+    }
+
+    /// <summary>Exult <c>Game_object::find_door</c>: a door of the tile's chunk that blocks it.</summary>
+    public U7Object? FindDoor(TileCoord tile)
+    {
+        tile = tile.Wrapped();
+        foreach (var obj in ObjectsInChunk(tile.ChunkX, tile.ChunkY))
+        {
+            if (!obj.Removed && Catalog[obj.Shape].Door && Blocks(obj, tile))
+            {
+                return obj;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Exult <c>Game_object::is_closed_door</c>: a door with something solid at both ends of its long side.</summary>
+    public bool IsClosedDoor(U7Object door)
+    {
+        if (!Catalog[door.Shape].Door)
+        {
+            return false;
+        }
+
+        var (before, after) = door.DimX > door.DimY
+            ? (new TileCoord(door.Tx - door.DimX, door.Ty, door.Tz), new TileCoord(door.Tx + 1, door.Ty, door.Tz))
+            : (new TileCoord(door.Tx, door.Ty - door.DimY, door.Tz), new TileCoord(door.Tx, door.Ty + 1, door.Tz));
+        return Blocking.Test(before.Tx, before.Ty, before.Tz) && Blocking.Test(after.Tx, after.Ty, after.Tz);
+    }
+
+    /// <summary>
+    /// Change a world object's shape (and footprint) in place, keeping the
+    /// blocking flags right (Exult removes and re-adds it to its chunk).
+    /// </summary>
+    public void SetShape(U7Object obj, int shape)
+    {
+        var inWorld = obj.Container is null && !obj.Removed;
+        if (inWorld)
+        {
+            Blocking.Update(obj, add: false);
+        }
+
+        obj.Shape = shape;
+        var info = Catalog[shape];
+        var reflected = (obj.Frame & 32) != 0;
+        obj.DimX = reflected ? info.DimY : info.DimX;
+        obj.DimY = reflected ? info.DimX : info.DimY;
+        obj.DimZ = info.DimZ;
+        obj.Solid = info.Solid;
+        if (inWorld)
+        {
+            Blocking.Update(obj, add: true);
+        }
     }
 
     /// <summary>Exult <c>Map_chunk::find_spot</c>, 1-tile version.</summary>
