@@ -36,6 +36,29 @@ public abstract class Schedule(NpcBrain brain)
     protected void StartAction(IActorAction? action, int speedMs, int delayMs, Action<IActorAction>? done = null) =>
         Brain.StartAction(action, speedMs, delayMs, done);
 
+    /// <summary>Exult <c>Actor::set_action</c>: the action runs once the NPC is started (<see cref="Start"/>).</summary>
+    protected void SetAction(IActorAction? action)
+    {
+        Brain.CurrentAction = action;
+        Brain.ActionDone = null;
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::walk_path_to_tile</c>: an A* walk at
+    /// <paramref name="speedMs"/> to within <paramref name="dist"/> of the
+    /// tile; false if there is no path.
+    /// </summary>
+    protected bool WalkPathTo(TileCoord dest, int speedMs, int delayMs, int dist = 0)
+    {
+        if (PathWalk.Astar(Map, Npc, dest, dist) is not { } walk)
+        {
+            return false;
+        }
+
+        StartAction(walk, speedMs, delayMs);
+        return true;
+    }
+
     /// <summary>Exult <c>Actor::start(speed, delay)</c> without a new action: look again after the delay.</summary>
     protected void Start(int speedMs, int delayMs)
     {
@@ -47,6 +70,13 @@ public abstract class Schedule(NpcBrain brain)
 
     /// <summary>Exult <c>Actor::say(from, to)</c>: one of the messages, over the NPC's head.</summary>
     protected void Say(int first, int last) => Runner.Say?.Invoke(Npc, TextMessages.Random(first, last));
+
+    /// <summary>Exult <c>Ucscript</c> opcodes, for the scripts schedules run on their NPC.</summary>
+    protected const int ScriptDelayTicks = 0x27, ScriptFaceDir = 0x59, ScriptStandFrame = 0x61,
+        ScriptReadyFrame = 0x64, ScriptRaise1Frame = 0x65;
+
+    /// <summary>Exult <c>new Usecode_script(npc) ... start()</c>: run the opcodes on the NPC from the next tick.</summary>
+    protected void RunScript(params int[] code) => Runner.Script?.Invoke(Npc, code);
 
     /// <summary>Exult <c>Schedule::try_proximity_usecode</c>.</summary>
     protected bool TryProximityUsecode(int odds) => Runner.TryProximityUsecode(Brain, odds);
@@ -99,8 +129,10 @@ public abstract class Schedule(NpcBrain brain)
         }
 
         var sit = new SitAction(Map, chair);
-        // Exult Schedule::set_action_sequence: walk there, then sit.
-        StartAction(SequenceAction.WalkThen(Map, Npc, sit.SitLoc, sit), 250, delayMs);
+        // Exult Schedule::set_action_sequence: walk there, then sit; the
+        // avatar and party walk persistently.
+        var persistent = Npc.NpcNum == 0 || (Runner.Party?.IsInParty(Npc) ?? false);
+        StartAction(SequenceAction.WalkThen(Map, Npc, sit.SitLoc, sit, persistent), 250, delayMs);
         return chair;
     }
 }

@@ -64,16 +64,21 @@ public static class NpcDat
         for (var i = 0; i < count; i++)
         {
             var dest = i == 0 ? avatar : new U7Object();
+            if (i == 0)
+            {
+                // Its place, shape and size change: out of the world meanwhile.
+                map.TakeFromWorld(avatar);
+            }
+
             ReadActor(r, dest, i, map, fixFirst);
             dest.NpcNum = i;
             dest.IsActor = true;
             dest.Kind = ObjectKind.Actor;
-            dest.Solid = false;
             ApplyShape(map.Catalog, dest);
             if (i == 0)
             {
                 npcs.Add(avatar);
-                map.MoveObject(avatar, dest.Tx, dest.Ty, dest.Tz);
+                map.PlaceInWorld(avatar, dest.Tx, dest.Ty, dest.Tz);
                 continue;
             }
 
@@ -145,15 +150,41 @@ public static class NpcDat
         npc.Unused = iflag2 == 0 && num > 0;
         // Exult Actor::read: the original flags any nonzero word; Exult's writer uses bit 0.
         var hasContents = fixFirst ? iflag1 != 0 && !npc.Unused : (iflag1 & 1) != 0;
+        // Exult Actor::read: the first set of flags.
         var rflags = r.U2();
+        SetIf(npc, rflags, 0x7, ObjFlag.Asleep);
+        SetIf(npc, rflags, 0x8, ObjFlag.Charmed);
+        SetIf(npc, rflags, 0x9, ObjFlag.Cursed);
+        SetIf(npc, rflags, 0xB, ObjFlag.InParty);
+        SetIf(npc, rflags, 0xC, ObjFlag.Paralyzed);
+        SetIf(npc, rflags, 0xD, ObjFlag.Poisoned);
+        SetIf(npc, rflags, 0xE, ObjFlag.Protection);
+        if (!fixFirst)
+        {
+            SetIf(npc, rflags, 0xF, ObjFlag.Dead);
+            SetIf(npc, rflags, 0x6, ObjFlag.Temporary);
+        }
+
+        SetIf(npc, rflags, 0xA, ObjFlag.OnMovingBarge);
         npc.Alignment = (rflags >> 3) & 3;
         var strengthVal = r.U1();
         npc.SetProp(ActorProp.Strength, strengthVal & 0x3F);
+        if (num > 0 && npc.GetProp(ActorProp.Health) < -(npc.GetProp(ActorProp.Strength) / 3))
+        {
+            npc.SetFlag(ObjFlag.Dead); // Exult: fixes older savegames (not for the avatar).
+        }
+
         npc.SetProp(ActorProp.Dexterity, r.U1());
+        // Intelligence (0-4), read (5), tournament (6), polymorph (7).
         var intelVal = r.U1();
         npc.SetProp(ActorProp.Intelligence, intelVal & 0x1F);
+        SetIf(npc, intelVal, 5, ObjFlag.Read);
+        SetIf(npc, intelVal, 6, ObjFlag.Tournament);
+        SetIf(npc, intelVal, 7, ObjFlag.Polymorph);
+        // Combat skill (0-6), Petra (7).
         var combatVal = r.U1();
         npc.SetProp(ActorProp.Combat, combatVal & 0x7F);
+        SetIf(npc, combatVal, 7, ObjFlag.Petra);
         npc.ScheduleType = r.U1();
         var amode = r.U1();
         npc.AttackMode = amode & 0xf;
@@ -193,10 +224,9 @@ public static class NpcDat
 
         npc.SetProp(ActorProp.Magic, magic);
         npc.SetProp(ActorProp.Mana, mana < magic ? mana : magic);
-        if ((flags3 & 1) != 0)
-        {
-            npc.SetFlag(ObjFlag.Met);
-        }
+        SetIf(npc, flags3, 0, ObjFlag.Met);
+        SetIf(npc, flags3, 1, ObjFlag.NoSpellCasting);
+        SetIf(npc, flags3, 2, ObjFlag.SiZombie);
 
         npc.FaceNum = r.U2();
         if (fixFirst || (npc.FaceNum == 0 && num > 0))
@@ -229,7 +259,16 @@ public static class NpcDat
         r.Skip(2);
         r.U2(); // 16-bit shape
         r.Skip(2); // polymorph
-        npc.Flags = (uint)(r.U2() | (r.U2() << 16)); // Obj_flags (in_party, dead, ...)
+        // Exult's own: all the flags, in saves only (garbage in INITGAME).
+        if (fixFirst)
+        {
+            r.Skip(4);
+        }
+        else
+        {
+            npc.Flags |= r.U4();
+        }
+
         var schedTz = r.U1();
         r.Skip(1);
         if (!fixFirst)
@@ -240,7 +279,20 @@ public static class NpcDat
             // Exult next_schedule: what an NPC walking to its spot does once there.
             npc.PendingSchedule = npc.ScheduleType == ScheduleType.WalkToSchedule && nextSchedule != 255 ? nextSchedule : -1;
         }
-        r.Skip(4); // flags2
+        if (fixFirst)
+        {
+            r.Skip(4);
+        }
+        else
+        {
+            // Flags 32 on, but not polymorph.
+            var polymorph = npc.GetFlag(ObjFlag.Polymorph);
+            npc.Flags2 |= r.U4();
+            if (!polymorph)
+            {
+                npc.ClearFlag(ObjFlag.Polymorph);
+            }
+        }
         r.Skip(1); // extended skin
         r.Skip(14);
         var food = r.U1();
@@ -349,7 +401,6 @@ public static class NpcDat
             m.NpcNum = -1;
             m.IsActor = true;
             m.Kind = ObjectKind.Actor;
-            m.Solid = false;
             m.SetFlag(ObjFlag.Temporary);
             ApplyShape(map.Catalog, m);
             if (string.IsNullOrEmpty(m.NpcName))
@@ -461,6 +512,14 @@ public static class NpcDat
         w.Write((byte)2);   // IREG_ENDMARK
     }
 
+    static void SetIf(U7Object npc, int bits, int bit, int flag)
+    {
+        if (((bits >> bit) & 1) != 0)
+        {
+            npc.SetFlag(flag);
+        }
+    }
+
     static void ApplyShape(ShapeCatalog catalog, U7Object npc)
     {
         var info = catalog[npc.Shape];
@@ -468,7 +527,7 @@ public static class NpcDat
         npc.DimX = reflected ? info.DimY : info.DimX;
         npc.DimY = reflected ? info.DimX : info.DimY;
         npc.DimZ = info.DimZ;
-        npc.Solid = false;
+        npc.Solid = info.Solid;
         npc.IsActor = true;
         npc.Kind = ObjectKind.Actor;
     }

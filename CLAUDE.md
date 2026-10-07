@@ -134,8 +134,12 @@ game running. Never stop a Godot process whose command line lacks
 - **Gump mode:** an open container gump blocks walking (Exult default). The
   console's walk commands close gumps first.
 - **Walking:** blocking is Exult's chunk cache (`GameMap.Blocking`, tile x
-  lift); use `ActorWalker.IsBlocked`/`CanStep` for actors, not the single-lift
-  `GameMap.IsBlocked`. A* (`Pathfinder.FindPath` + `ActorPathClient`) has no
+  lift), actors included (solid shapes, `Solid` from the shape info); use
+  `ActorWalker.IsBlocked`/`CanStep` for actors, not the single-lift
+  `GameMap.IsBlocked`. `CanStep` asks an actor in the way to step aside
+  (Exult `is_really_blocked`). An actor's own tile is blocked, so search
+  spots around NPCs with `FindSpot`, and never change an in-world object's
+  position, size or `Solid` except through `GameMap` (the counts would drift). A* (`Pathfinder.FindPath` + `ActorPathClient`) has no
   node cap, only Exult's cost ceiling: walks of 200+ tiles work, but the goal
   must be at the walker's lift and reachable within ~3x the straight cost.
   Walls make some routes too long (e.g. out of walled Trinsic except via the
@@ -175,26 +179,27 @@ Done and play-tested: the whole Trinsic murder chapter.
 
 Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
-Exult's walking (blocking, A*, path following with doors, speeds), saves with
-timers, party order and restored NPC schedules, NPC proximity remarks and
-woken sleepers, and the agent console.
+Exult's walking (blocking, A*, path following with doors, speeds, actors
+stepping aside), saves with timers, party order and restored NPC schedules,
+NPC proximity remarks and woken sleepers, desk work and waiter schedules, and
+the agent console.
 
 Next, in priority order:
 
-1. **Schedules:** sleep, loiter, tend shop, wander, pace, sit, eat and
-   eat at inn are ported (`Actors/Schedules/`). Still standing: desk work,
-   waiter (both need Exult `Schedule_with_objects`, `Pickup_actor_action`
-   and the shape `find_spot`), duel, kid games, farm, miner, preach, dance,
-   blacksmith, thief, sew, bake, lab, hound, talk, shy, graze, and patrol
-   between path eggs. Add a class per schedule and a case in
-   `ScheduleRunner.Create`; keep their `try_proximity_usecode` calls.
+1. **Schedules:** sleep, loiter, tend shop, wander, pace, sit, eat, eat at
+   inn, desk work and waiter are ported (`Actors/Schedules/`;
+   `ScheduleWithObjects` for schedules that make work items). Still
+   standing: duel, kid games, farm, miner, preach, dance, blacksmith, thief,
+   sew, bake, lab, hound, talk, shy, graze, and patrol between path eggs.
+   Add a class per schedule and a case in `ScheduleRunner.Create`; keep
+   their `try_proximity_usecode` calls; scripts go through `RunScript`.
 2. **Remaining intrinsics:** 48 stubbed; the most-used are `sprite_effect`,
    `flash_mouse`, `set_to_attack`, `is_not_blocked` and `is_readied`.
 3. **Signs:** `display_runes` still uses the conversation panel; port
    Exult's `Sign_gump` (runic signs, plaques, gravestones).
-4. **Walking follow-ups:** actors blocking one another with Exult's
-   `move_aside`/`swap_positions`, combat approach through the Monster
-   pathfinder client, `Walk_to_schedule`'s off-screen legs, speed cursors.
+4. **Walking follow-ups:** combat approach through the Monster pathfinder
+   client, `Walk_to_schedule`'s off-screen legs, `Pace_schedule`'s "move
+   aside" requests, speed cursors.
 5. **Story:** continue to Britain (the Crown Jewel, the Man with the Hook,
    Lord British), played through the agent console from `quest4`.
 

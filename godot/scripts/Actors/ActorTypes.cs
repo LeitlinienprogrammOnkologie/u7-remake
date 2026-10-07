@@ -158,6 +158,17 @@ public static class AttackMode
 public static class ObjFlag
 {
     public const int Met = 28;
+    public const int Charmed = 2;
+    public const int Cursed = 3;
+    public const int Poisoned = 8;
+    public const int Protection = 9;
+    public const int OnMovingBarge = 10;
+    public const int Tournament = 29;
+    public const int SiZombie = 30;
+    public const int NoSpellCasting = 31;
+    public const int Polymorph = 32;
+    public const int Read = 34;
+    public const int Petra = 35;
     public const int Dead = 4;
     public const int Temporary = 18;
     public const int OkayToTake = 11;

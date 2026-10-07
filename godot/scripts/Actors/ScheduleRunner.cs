@@ -32,6 +32,8 @@ public sealed class ScheduleRunner
     public Func<U7Object, bool>? InUsecodeControl { get; set; }
     /// <summary>Queues the NPC's usecode with the npc_proximity event (Exult runs it from a script).</summary>
     public Action<U7Object>? ProximityUsecode { get; set; }
+    /// <summary>Exult <c>Usecode_script</c>: runs the opcodes on the NPC from the next tick.</summary>
+    public Action<U7Object, int[]>? Script { get; set; }
     /// <summary>Exult <c>Actor::say</c>: a remark over the NPC's head.</summary>
     public Action<U7Object, string>? Say { get; set; }
     /// <summary>Exult <c>Actor::can_speak</c>.</summary>
@@ -100,11 +102,13 @@ public sealed class ScheduleRunner
                 return new EatSchedule(b);
             case ScheduleType.FollowAvatar:
                 return new FollowAvatarSchedule(b);
+            case ScheduleType.DeskWork:
+                return new DeskSchedule(b);
+            case ScheduleType.Waiter:
+                return new WaiterSchedule(b);
             case ScheduleType.Stand:
             case ScheduleType.Wait:
             case ScheduleType.Combat:
-            case ScheduleType.DeskWork:
-            case ScheduleType.Waiter:
             case ScheduleType.Talk:
             case ScheduleType.Dance:
             case ScheduleType.Farm:

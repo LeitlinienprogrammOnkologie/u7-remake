@@ -10,7 +10,9 @@ namespace U7.Actors;
 /// </summary>
 public static class ActorWalker
 {
-    /// <summary>Exult <c>Actor::sit_frame</c>, <c>bow_frame</c> and <c>sleep_frame</c>.</summary>
+    /// <summary>Exult <c>Actor::reach1_frame</c>, <c>reach2_frame</c>, <c>sit_frame</c>, <c>bow_frame</c> and <c>sleep_frame</c>.</summary>
+    public const int Reach1Frame = 5;
+    public const int Reach2Frame = 8;
     public const int SitFrame = 10;
     public const int BowFrame = 11;
     public const int SleepFrame = 13;
@@ -67,12 +69,139 @@ public static class ActorWalker
 
     /// <summary>
     /// Exult <c>Actor::step</c>'s test: the tile is free for the actor
-    /// (<see cref="IsBlocked"/>) and at most one lift up or down
-    /// (<c>is_really_blocked</c>; actors do not block one another here).
-    /// <paramref name="to"/>.Tz becomes the lift it lands on.
+    /// (<see cref="IsBlocked"/>), or the actor in the way steps aside or
+    /// swaps places (<see cref="IsReallyBlocked"/>); and it is at most one
+    /// lift up or down. <paramref name="to"/>.Tz becomes the lift it lands on.
     /// </summary>
-    public static bool CanStep(GameMap map, U7Object actor, ref TileCoord to) =>
-        !IsBlocked(map, actor, ref to) && Math.Abs(to.Tz - actor.Tz) <= 1;
+    public static bool CanStep(GameMap map, U7Object actor, ref TileCoord to)
+    {
+        if (IsBlocked(map, actor, ref to) && IsReallyBlocked(map, actor, ref to))
+        {
+            return false;
+        }
+
+        return Math.Abs(to.Tz - actor.Tz) <= 1;
+    }
+
+    static readonly int[] DirDx = [0, 1, 1, 1, 0, -1, -1, -1];
+    static readonly int[] DirDy = [-1, -1, 0, 1, 1, 1, 0, -1];
+
+    /// <summary>
+    /// Exult <c>Actor::is_really_blocked</c>, for a step onto a blocked tile:
+    /// it is, if more than a lift up or down or if nothing found is in the
+    /// way (water, say); it is not, if the actor in the way steps aside or
+    /// swaps places with this one.
+    /// </summary>
+    public static bool IsReallyBlocked(GameMap map, U7Object actor, ref TileCoord t, bool force = false)
+    {
+        if (Math.Abs(t.Tz - actor.Tz) > 1)
+        {
+            return true;
+        }
+
+        var block = FindBlocking(map, actor, ObjectGeometry.Direction(actor, t));
+        if (block is null)
+        {
+            return true; // IE, water.
+        }
+
+        if (block == actor)
+        {
+            return false;
+        }
+
+        // Try to get the blocker to move aside.
+        if (block.IsActor && MoveAside(map, block, actor, ObjectGeometry.Direction(actor, block)))
+        {
+            return false;
+        }
+
+        // (May have swapped places.) If okay, try one last time.
+        return (t.Tx != actor.Tx || t.Ty != actor.Ty || t.Tz != actor.Tz) &&
+               IsBlocked(map, actor, ref t, moveFlags: force ? MoveFlags.All : 0);
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::find_blocking</c>: what is in the way of the tiles the
+    /// actor's footprint moves onto, a step in <paramref name="dir"/>, at its lift.
+    /// </summary>
+    public static U7Object? FindBlocking(GameMap map, U7Object actor, int dir)
+    {
+        var (x, y, w, h) = ObjectGeometry.Footprint(actor);
+        for (var i = x + DirDx[dir]; i < x + DirDx[dir] + w; i++)
+        {
+            for (var j = y + DirDy[dir]; j < y + DirDy[dir] + h; j++)
+            {
+                if (!ObjectGeometry.InFootprint(actor, i, j) &&
+                    map.FindBlocking(new TileCoord(i, j, actor.Tz)) is { } block)
+                {
+                    return block;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::move_aside</c>: step out of the way of
+    /// <paramref name="forActor"/>, coming from direction
+    /// <paramref name="dir"/>: to one side, else diagonally, else swap places
+    /// with it. Not in combat, while moving, or sitting, bending over,
+    /// kneeling or asleep.
+    /// </summary>
+    public static bool MoveAside(GameMap map, U7Object npc, U7Object forActor, int dir)
+    {
+        // (Exult: not stepping aside in combat also prevents some double
+        // moves through walls or doors; and not while moving, as that may
+        // break pathfinding.)
+        if (npc.ScheduleType == ScheduleType.Combat || npc.FrameTime != 0)
+        {
+            return false;
+        }
+
+        var frnum = npc.Frame & 0xf;
+        if (frnum is >= SitFrame and <= SleepFrame)
+        {
+            return false;
+        }
+
+        // Try orthogonal directions first, then diagonals.
+        foreach (var d in new[] { (dir + 2) % 8, (dir + 6) % 8, 1, 3, 5, 7 })
+        {
+            var to = new TileCoord(npc.Tx + DirDx[d], npc.Ty + DirDy[d], npc.Tz).Wrapped();
+            if (IsBlocked(map, npc, ref to, moveFlags: npc.TypeFlags))
+            {
+                continue;
+            }
+
+            // Step, and face the direction.
+            if (CanStep(map, npc, ref to))
+            {
+                map.MoveObject(npc, to.Tx, to.Ty, to.Tz);
+                npc.WalkFrameIndex = 0;
+                npc.Frame = DirFrame(d, 0);
+            }
+
+            return npc.Tx == to.Tx && npc.Ty == to.Ty;
+        }
+
+        return SwapPositions(map, npc, forActor);
+    }
+
+    /// <summary>Exult <c>Game_object::swap_positions</c>: trade places with an object of the same footprint.</summary>
+    public static bool SwapPositions(GameMap map, U7Object a, U7Object b)
+    {
+        if (a.DimX != b.DimX || a.DimY != b.DimY)
+        {
+            return false; // Not the same size.
+        }
+
+        int ax = a.Tx, ay = a.Ty, az = a.Tz;
+        map.MoveObject(a, b.Tx, b.Ty, b.Tz);
+        map.MoveObject(b, ax, ay, az);
+        return true;
+    }
 
     /// <summary>
     /// Exult <c>Actor::is_blocked</c>: whether the actor, with its own 3D size

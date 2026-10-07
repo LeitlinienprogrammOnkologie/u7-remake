@@ -71,8 +71,8 @@ public sealed class ChunkBlocking
         return chunk;
     }
 
-    /// <summary>Exult <c>Chunk_cache::update_object</c>: solid objects with height block; actors are left out.</summary>
-    static bool IsObstacle(U7Object obj) => obj.Solid && obj.DimZ > 0 && !obj.IsActor && !obj.IsEgg;
+    /// <summary>Exult <c>Chunk_cache::update_object</c>: solid objects with height block, actors too.</summary>
+    static bool IsObstacle(U7Object obj) => obj.Solid && obj.DimZ > 0 && !obj.IsEgg;
 
     /// <summary>Add or remove an object in every built chunk its footprint covers.</summary>
     public void Update(U7Object obj, bool add)

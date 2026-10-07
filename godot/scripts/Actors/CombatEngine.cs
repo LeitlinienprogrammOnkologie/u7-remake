@@ -245,7 +245,7 @@ public sealed class CombatEngine
             IsActor = true,
             IsMonster = true,
             NpcNum = -1,
-            Solid = false,
+            Solid = rec.Solid,
             DimX = rec.DimX,
             DimY = rec.DimY,
             DimZ = rec.DimZ,

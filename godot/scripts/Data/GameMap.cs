@@ -699,6 +699,84 @@ public sealed class GameMap
     }
 
     /// <summary>Exult <c>Map_chunk::find_spot</c>, 1-tile version.</summary>
+    /// <summary>
+    /// Exult <c>Map_chunk::find_spot</c>: a free spot for an object of the
+    /// shape and frame (its footprint and height), at <paramref name="pos"/>
+    /// or on the squares around it out to <paramref name="dist"/>, starting
+    /// on the preferred side (<paramref name="dir"/>, 0 north clockwise;
+    /// random if -1). It may end up to <paramref name="maxDrop"/> lifts higher
+    /// or lower. Null if there is none.
+    /// </summary>
+    public TileCoord? FindSpot(TileCoord pos, int dist, int shape, int frame, int maxDrop = 0, int dir = -1)
+    {
+        var info = Catalog[shape];
+        var reflected = (frame & 32) != 0;
+        var xs = Math.Max(1, reflected ? info.DimY : info.DimX);
+        var ys = Math.Max(1, reflected ? info.DimX : info.DimY);
+        var zs = info.DimZ;
+        // MOVE_FLY here means: look upwards by max_drop too.
+        const int flags = MoveFlags.Walk | MoveFlags.Fly;
+        if (!Blocking.IsBlockedArea(zs, pos.Tz, pos.Tx - xs + 1, pos.Ty - ys + 1, xs, ys, out var lift, flags, maxDrop))
+        {
+            return pos.Wrapped() with { Tz = lift };
+        }
+
+        if (dir < 0)
+        {
+            dir = Random.Shared.Next(8);
+        }
+
+        dir = (dir + 1) % 8; // Make NW the 0 point.
+        for (var d = 1; d <= dist; d++)
+        {
+            var count = 8 * d;
+            var index = (dir * d - d / 2 + count) % count;
+            for (var n = 0; n < count; n++, index++)
+            {
+                var p = SquareTile(pos, d, index % count);
+                if (!Blocking.IsBlockedArea(zs, p.Tz, p.Tx - xs + 1, p.Ty - ys + 1, xs, ys, out lift, flags, maxDrop))
+                {
+                    return p with { Tz = lift };
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Exult <c>find_spot(pos, dist, obj)</c>: a spot near <paramref name="pos"/> for the object, preferring the side it comes from.</summary>
+    public TileCoord? FindSpot(TileCoord pos, int dist, U7Object obj, int maxDrop = 0) =>
+        FindSpot(pos, dist, obj.Shape, obj.Frame, maxDrop, ObjectGeometry.Direction(pos.Ty - obj.Ty, obj.Tx - pos.Tx));
+
+    /// <summary>
+    /// Exult <c>Get_square</c>: the i-th of the 8·<paramref name="dist"/> tiles
+    /// on the square around <paramref name="pos"/>, from its northwest corner
+    /// clockwise.
+    /// </summary>
+    static TileCoord SquareTile(TileCoord pos, int dist, int i)
+    {
+        var side = 2 * dist;
+        int x, y;
+        if (i <= side)
+        {
+            (x, y) = (-dist + i, -dist); // Along the top.
+        }
+        else if (i <= 2 * side)
+        {
+            (x, y) = (dist, -dist + i - side); // Down the right side.
+        }
+        else if (i <= 3 * side)
+        {
+            (x, y) = (dist - (i - 2 * side), dist); // Back along the bottom.
+        }
+        else
+        {
+            (x, y) = (-dist, dist - (i - 3 * side)); // Up the left side.
+        }
+
+        return new TileCoord(U7Constants.WrapTile(pos.Tx + x), U7Constants.WrapTile(pos.Ty + y), pos.Tz);
+    }
+
     public TileCoord? FindSpot(int tx, int ty, int tz, int dist)
     {
         tx = U7Constants.WrapTile(tx);

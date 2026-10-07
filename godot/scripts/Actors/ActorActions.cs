@@ -88,16 +88,19 @@ public sealed class SequenceAction(int speed, params IActorAction[] actions) : I
     /// <summary>
     /// Exult <c>Actor_action::create_action_sequence</c>: walk to the spot
     /// (A*, or straight there if no path is found, and put there if the walk
-    /// gives up), then do <paramref name="whenThere"/>.
+    /// gives up), then do <paramref name="whenThere"/>. A persistent walk
+    /// keeps finding its way round NPCs (<see cref="PathWalk.Astar"/>).
     /// </summary>
-    public static IActorAction WalkThen(GameMap map, U7Object actor, TileCoord dest, IActorAction whenThere)
+    public static IActorAction WalkThen(GameMap map, U7Object actor, TileCoord dest, IActorAction whenThere,
+        bool persistent = false)
     {
         if (actor.Tx == dest.Tx && actor.Ty == dest.Ty && actor.Tz == dest.Tz)
         {
             return whenThere;
         }
 
-        IActorAction walk = (IActorAction?)PathWalk.Astar(map, actor, dest) ?? new MoveAction(map, dest);
+        IActorAction walk = (IActorAction?)PathWalk.Astar(map, actor, dest, persistent: persistent) ??
+                            new MoveAction(map, dest);
         return new SequenceAction(0, walk, new MoveAction(map, dest), whenThere);
     }
 }
@@ -189,5 +192,119 @@ public sealed class SitAction : FramesAction
         }
 
         return base.HandleEvent(actor);
+    }
+}
+
+/// <summary>Exult <c>Face_pos_actor_action</c>: turn to face a tile (standing).</summary>
+public sealed class FacePosAction(TileCoord pos, int speed) : IActorAction
+{
+    public FacePosAction(U7Object obj, int speed)
+        : this(ObjectGeometry.Tile(obj), speed)
+    {
+    }
+
+    public int HandleEvent(U7Object actor)
+    {
+        var frame = ActorWalker.DirFrame(ObjectGeometry.Direction(actor, pos), 0);
+        if (actor.Frame == frame)
+        {
+            return 0;
+        }
+
+        actor.Frame = frame;
+        return speed;
+    }
+}
+
+/// <summary>
+/// Exult <c>Pickup_actor_action</c>: face the item, bend down (or reach up,
+/// if it is two lifts or more above the feet) and take it into the
+/// inventory, or put it down at a spot; then stand again.
+/// </summary>
+public sealed class PickupAction : IActorAction
+{
+    readonly GameMap _map;
+    readonly U7Object _obj;
+    readonly bool _pickup;
+    readonly TileCoord _objPos;
+    readonly bool _temporary;
+    readonly bool _delete;
+    int _count;
+    int _dir;
+    readonly int _speed;
+
+    /// <summary>Pick the item up (or, with <paramref name="delete"/>, make it vanish).</summary>
+    public PickupAction(GameMap map, U7Object obj, int speed, bool delete = false)
+    {
+        _map = map;
+        _obj = obj;
+        _pickup = true;
+        _objPos = ObjectGeometry.Tile(obj);
+        _speed = speed;
+        _delete = delete;
+    }
+
+    /// <summary>Put the item down at <paramref name="pos"/>, flagged temporary if asked.</summary>
+    public PickupAction(GameMap map, U7Object obj, TileCoord pos, int speed, bool temporary)
+    {
+        _map = map;
+        _obj = obj;
+        _objPos = pos;
+        _speed = speed;
+        _temporary = temporary;
+    }
+
+    public int HandleEvent(U7Object actor)
+    {
+        if (_obj.Removed)
+        {
+            return 0; // It's gone.
+        }
+
+        int frame;
+        switch (_count)
+        {
+            case 0:
+                _dir = ObjectGeometry.Direction(actor, _objPos);
+                frame = ActorWalker.DirFrame(_dir, 0);
+                break;
+            case 1:
+            {
+                var tz = _pickup ? _obj.Tz : _objPos.Tz;
+                frame = ActorWalker.DirFrame(_dir, tz >= actor.Tz + 2
+                    ? Random.Shared.Next(2) == 0 ? ActorWalker.Reach1Frame : ActorWalker.Reach2Frame
+                    : ActorWalker.BowFrame);
+                if (!_pickup)
+                {
+                    _map.PlaceInWorld(_obj, _objPos.Tx, _objPos.Ty, _objPos.Tz);
+                    if (_temporary)
+                    {
+                        _obj.SetFlag(ObjFlag.Temporary);
+                    }
+                }
+                else if (ObjectGeometry.Distance(actor, _obj) <= 8)
+                {
+                    if (_delete)
+                    {
+                        _map.RemoveObject(_obj);
+                    }
+                    else
+                    {
+                        _map.PlaceInContainer(_obj, actor, 255, 255);
+                    }
+                }
+
+                break;
+            }
+            case 2:
+                frame = ActorWalker.DirFrame(_dir, 0);
+                break;
+            default:
+                return 0;
+        }
+
+        _count++;
+        actor.Frame = frame;
+        return _speed;
     }
 }

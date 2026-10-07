@@ -38,7 +38,6 @@ public sealed class AvatarController
         Avatar = avatar;
         _map = map;
         Avatar.IsActor = true;
-        Avatar.Solid = false;
         Avatar.NpcNum = 0;
         if (Avatar.Frame == 0)
         {
@@ -78,10 +77,14 @@ public sealed class AvatarController
             }
             else
             {
-                // (Exult first asks a blocking NPC to move aside; actors don't block here.)
-                Stop();
-                UnstickFromAir(start);
-                return;
+                // An NPC in the way may step aside (not while walking: Exult's is_moving).
+                var block = Avatar.FrameTime != 0 ? null : ActorWalker.FindBlocking(_map, Avatar, dir);
+                if (block is not { IsActor: true } || !ActorWalker.MoveAside(_map, block, Avatar, dir))
+                {
+                    Stop();
+                    UnstickFromAir(start);
+                    return;
+                }
             }
         }
 

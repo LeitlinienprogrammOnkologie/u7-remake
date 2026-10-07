@@ -74,7 +74,7 @@ public partial class U7Game : Node2D
                 DimX = _catalog[U7Constants.AvatarShape].DimX,
                 DimY = _catalog[U7Constants.AvatarShape].DimY,
                 DimZ = _catalog[U7Constants.AvatarShape].DimZ,
-                Solid = false,
+                Solid = _catalog[U7Constants.AvatarShape].Solid,
                 IsActor = true
             };
             _map.AddObject(avatar);
@@ -281,6 +281,16 @@ public partial class U7Game : Node2D
                 code.PutElem(1, UsecodeValue.FromInt(0x80));
                 code.PutElem(2, UsecodeValue.FromInt(fun));
                 code.PutElem(3, UsecodeValue.FromInt((int)UsecodeEvent.NpcProximity));
+                _usecode.StartScript(npc, code, 0);
+            };
+            _schedules.Script = (npc, ops) =>
+            {
+                var code = UsecodeValue.FromArray(ops.Length);
+                for (var i = 0; i < ops.Length; i++)
+                {
+                    code.PutElem(i, UsecodeValue.FromInt(ops[i]));
+                }
+
                 _usecode.StartScript(npc, code, 0);
             };
             _schedules.Say = _usecode.Bark;

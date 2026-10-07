@@ -145,9 +145,11 @@ public sealed class PathWalk : IActorAction
     public static Func<U7Object, bool>? IsSentient { get; set; }
 
     readonly GameMap _map;
-    readonly PathSteps _path;
+    PathSteps _path;
     readonly int _maxBlocked;
-    readonly int _originalDir;
+    /// <summary>Exult <c>persistence</c>: how many more times to find a new way round an NPC in the way.</summary>
+    int _persistence;
+    int _originalDir;
     int _speed;
     int _blocked;
     TileCoord _blockedTile;
@@ -162,14 +164,18 @@ public sealed class PathWalk : IActorAction
     /// <summary>Called after every step the actor takes (from x, y).</summary>
     public Action<U7Object, int, int>? Stepped { get; set; }
 
-    PathWalk(GameMap map, PathSteps path, int maxBlocked)
+    PathWalk(GameMap map, PathSteps path, int maxBlocked, int persistence = 0)
     {
         _map = map;
         _path = path;
         _maxBlocked = maxBlocked;
-        _originalDir = ActorWalker.Direction4(-U7Constants.TileDelta(path.Src.Ty, path.Dest.Ty),
-            U7Constants.TileDelta(path.Src.Tx, path.Dest.Tx));
+        _persistence = persistence;
+        _originalDir = OriginalDir(path);
     }
+
+    static int OriginalDir(PathSteps path) =>
+        ActorWalker.Direction4(-U7Constants.TileDelta(path.Src.Ty, path.Dest.Ty),
+            U7Constants.TileDelta(path.Src.Tx, path.Dest.Tx));
 
     /// <summary>Exult <c>Actor::walk_to_tile</c>: a straight walk (Zombie); null if already there.</summary>
     public static PathWalk? Line(GameMap map, U7Object actor, TileCoord dest, int maxBlocked = 3) =>
@@ -178,12 +184,32 @@ public sealed class PathWalk : IActorAction
     /// <summary>
     /// Exult <c>Actor::walk_path_to_tile</c>: an A* walk to within
     /// <paramref name="dist"/> of the destination (at its lift unless that is
-    /// -1); null if there is no path.
+    /// -1); null if there is no path. A persistent walk (Exult's for the
+    /// avatar and party) plans through NPCs on their feet and, blocked by
+    /// one, finds a new way up to 30 times.
     /// </summary>
-    public static PathWalk? Astar(GameMap map, U7Object actor, TileCoord dest, int dist = 0, int maxBlocked = 3) =>
-        AstarSteps.Find(new ActorPathClient(map, actor, dist), Here(actor), dest) is { } path
-            ? new PathWalk(map, path, maxBlocked)
+    public static PathWalk? Astar(GameMap map, U7Object actor, TileCoord dest, int dist = 0, int maxBlocked = 3,
+        bool persistent = false) =>
+        AstarSteps.Find(new ActorPathClient(map, actor, dist, persistent), Here(actor), dest) is { } path
+            ? new PathWalk(map, path, maxBlocked, persistent ? 30 : 0)
             : null;
+
+    /// <summary>
+    /// Exult <c>walk_to_tile(actor, here, dest, 0, true)</c> on the walk under
+    /// way: a new path there, NPCs on their feet not counting.
+    /// </summary>
+    bool Repath(U7Object actor)
+    {
+        if (AstarSteps.Find(new ActorPathClient(_map, actor, 0, ignoreNpcs: true), Here(actor), _path.Dest) is not
+            { } path)
+        {
+            return false;
+        }
+
+        _path = path;
+        _originalDir = OriginalDir(path);
+        return true;
+    }
 
     static TileCoord Here(U7Object actor) => new(actor.Tx, actor.Ty, actor.Tz);
 
@@ -225,14 +251,42 @@ public sealed class PathWalk : IActorAction
                 return _speed;
             }
 
-            return _blocked++ > _maxBlocked ? 0 : 100 + Random.Shared.Next(500);
+            if (_blocked++ <= _maxBlocked)
+            {
+                return 100 + Random.Shared.Next(500); // Wait up to 1.6 secs.
+            }
+
+            // Persistent pathfinder?
+            if (_persistence == 0)
+            {
+                return 0;
+            }
+
+            _persistence--; // "Tire" a bit from retrying.
+            // Blocked by an NPC? Try a new path: the old one may run into an
+            // NPC that was not in the way before.
+            if (_map.FindBlocking(_blockedTile) is { IsActor: true } && Repath(actor))
+            {
+                _blocked = 0;
+                return _speed;
+            }
+
+            return 0;
         }
 
         var newspeed = actor.FrameTime;
         if (newspeed == 0)
         {
-            _speed = 0;
-            return 0; // Stopped from outside.
+            // Stopped from outside: maybe bumped into an NPC, then pushed
+            // aside by another. A persistent walk finds a new way.
+            if (_persistence == 0 || !Repath(actor))
+            {
+                _speed = 0;
+                return 0;
+            }
+
+            actor.FrameTime = _speed;
+            return _speed;
         }
 
         _speed = newspeed;

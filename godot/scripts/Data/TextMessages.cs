@@ -11,6 +11,9 @@ namespace U7.Data;
 /// </summary>
 public static class TextMessages
 {
+    /// <summary>A waiter taking an order ("What wilt thou have?").</summary>
+    public const int FirstWaiterAsk = 0x1b;
+    public const int LastWaiterAsk = 0x1f;
     /// <summary>Asking for food at the table ("Waiter!").</summary>
     public const int FirstMoreFood = 0x20;
     public const int LastMoreFood = 0x24;

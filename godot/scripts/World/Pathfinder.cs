@@ -25,9 +25,11 @@ public abstract class PathClient
 /// Exult <c>Actor_pathfinder_client</c>: an actor walking, with its own size
 /// and movement flags. Every step costs 3; climbing or dropping a lift adds
 /// 3, a closed unlocked door 3 (it gets opened on the way), swamp doubles the
-/// cost and Black Gate's cobblestone road takes 1 off.
+/// cost and Black Gate's cobblestone road takes 1 off. With
+/// <paramref name="ignoreNpcs"/> (Exult's persistent walks), NPCs on their
+/// feet are no obstacle, though still avoided.
 /// </summary>
-public sealed class ActorPathClient(GameMap map, U7Object npc, int dist = 0) : PathClient
+public sealed class ActorPathClient(GameMap map, U7Object npc, int dist = 0, bool ignoreNpcs = false) : PathClient
 {
     /// <summary>Exult: at least three screens' width.</summary>
     public override int GetMaxCost(int costToGoal) => Math.Max(3 * costToGoal, Pathfinder.ScreenTilesWide * 2 * 3);
@@ -35,10 +37,32 @@ public sealed class ActorPathClient(GameMap map, U7Object npc, int dist = 0) : P
     /// <summary>
     /// Exult <c>Actor_pathfinder_client::check_blocking</c>: a blocked tile is
     /// still worth trying if a closed, unlocked door blocks it, away from the
-    /// door's ends and not from inside the doorway. (Actors never block here.)
+    /// door's ends and not from inside the doorway; or, ignoring NPCs, if one
+    /// that is up and not fighting stands there.
     /// </summary>
     int CheckBlocking(TileCoord from, TileCoord to)
     {
+        if (ignoreNpcs)
+        {
+            if (map.FindBlocking(to) is not { } block)
+            {
+                return -1;
+            }
+
+            if (block.IsActor)
+            {
+                // Sitting, kneeling, lying down or fighting, it is an obstacle.
+                var frnum = block.Frame & 0xf;
+                if (frnum is >= ActorWalker.SitFrame and <= ActorWalker.SleepFrame ||
+                    block.ScheduleType == ScheduleType.Combat)
+                {
+                    return -1;
+                }
+
+                return block.FrameTime != 0 ? 0 : 1; // Try to avoid non-moving NPCs.
+            }
+        }
+
         if (map.FindDoor(to) is not { } door || !map.IsClosedDoor(door) || door.Frame % 4 >= 2)
         {
             return -1;
