@@ -50,6 +50,10 @@ Open the **`godot/`** project in Godot 4.7 (C# / .NET 8). Data root is the repo 
 | F3 | Combat arena (heal, spawn 3 rats, combat on) |
 | Mouse wheel | Zoom 1–8× |
 
+### Agent console (automated play-testing)
+
+With the environment variable `U7_AGENT=<dir>` set, `Game/U7Game.Agent.cs` reads one command per line from `<dir>/cmd.txt` and appends results to `<dir>/out.txt`, each ending in `DONE <n>`. Game time is frozen between commands, music is off, and conversation text and barks are logged. Commands: `look [r]`, `find <text>`, `npc <num|name>`, `state`, `inv [npc]`, `flags`, `stubs`, `tile <x> <y> [z]`, `walk <x> <y>`, `walkto <id|npc:num>`, `tp <x> <y> [z]`, `talk`/`use <id|npc>`, `take <id>`, `close`, `cont [n|all]`, `choose <answer|#n>`, `num <n>`, `click <id>`, `wait <sec>`, `hour <h>`, `save`/`load <slot>`, `shot <name>` (windowed only). Object ids come from `look`/`find` output. Run headless: `godot --headless --path godot`. The Trinsic murder chapter (opening, stables, Finnigan, Spark, the chest, Gilberto, Gargan, the report and map quiz, Johnson's gate) was played through this way.
+
 ## Done milestones
 
 1. **Walker** — isometric map, extracted SHAPES.VGA PNGs, avatar at Trinsic, pick object under cursor.

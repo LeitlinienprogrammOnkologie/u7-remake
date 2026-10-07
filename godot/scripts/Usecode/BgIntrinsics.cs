@@ -187,6 +187,13 @@ public sealed class BgIntrinsics
         StubHits[id] = (e.Hits + 1, e.Callers);
     }
 
+    /// <summary>Stub hits so far, most-hit first, one per line.</summary>
+    public static string StubSummary() =>
+        StubHits.Count == 0
+            ? "no stub hits"
+            : string.Join("\n", StubHits.OrderByDescending(kv => kv.Value.Hits).Select(kv =>
+                $"0x{kv.Key:X2} {Name(kv.Key)} x{kv.Value.Hits} in {string.Join(" ", kv.Value.Callers.Select(c => $"0x{c:X4}"))}"));
+
     /// <summary>Write the stub hits, most-hit first, to <c>stub_report.txt</c> in the repo root.</summary>
     public static void WriteStubReport()
     {

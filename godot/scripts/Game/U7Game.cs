@@ -306,6 +306,7 @@ public partial class U7Game : Node2D
 
             GD.Print($"eggs within 80 tiles of avatar: {eggNear} (map total {_map.Eggs.Count})");
             _eggs.Activate(avatar, -1, -1);
+            AgentInit();
 
             _ready = true;
             GD.Print("Britannia loaded.");
@@ -331,7 +332,8 @@ public partial class U7Game : Node2D
 
     public override void _Process(double delta)
     {
-        if (!_ready)
+        // Also skip the last frame of a scene being replaced by a load.
+        if (!_ready || !IsInsideTree())
         {
             return;
         }
@@ -381,6 +383,7 @@ public partial class U7Game : Node2D
             }
         }
 
+        AgentUpdate(delta, ref click);
         if (!Input.IsMouseButtonPressed(MouseButton.Left))
         {
             _suppressWalk = false;
