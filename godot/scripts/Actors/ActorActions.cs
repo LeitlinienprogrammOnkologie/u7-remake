@@ -195,6 +195,119 @@ public sealed class SitAction : FramesAction
     }
 }
 
+/// <summary>
+/// Exult <c>Approach_actor_action</c>: an A* walk towards an object that may
+/// move, stopping when blocked, once within <c>goalDist</c> of it, or, at a
+/// check part way along, if it has moved more than 2 tiles.
+/// </summary>
+public sealed class ApproachAction : IActorAction
+{
+    readonly PathWalk _walk;
+    readonly U7Object _dest;
+    readonly int _goalDist;
+    readonly TileCoord _origDestPos;
+    int _curStep;
+    int _checkStep;
+
+    ApproachAction(PathWalk walk, U7Object dest, int goalDist)
+    {
+        _walk = walk;
+        _dest = dest;
+        _goalDist = goalDist;
+        _origDestPos = ObjectGeometry.Tile(dest);
+        var nsteps = walk.StepsLeft;
+        _checkStep = nsteps >= 6 ? (nsteps > 18 ? 9 : nsteps / 2) : 10000;
+    }
+
+    /// <summary>Exult <c>Approach_actor_action::create_path</c>: to within <paramref name="dist"/> of it (the A* goal too); null if no path.</summary>
+    public static ApproachAction? Create(GameMap map, U7Object actor, U7Object dest, int dist) =>
+        PathWalk.Astar(map, actor, ObjectGeometry.Tile(dest), dist, maxBlocked: 0) is { } walk
+            ? new ApproachAction(walk, dest, dist)
+            : null;
+
+    public int HandleEvent(U7Object actor)
+    {
+        var delay = _walk.HandleEvent(actor);
+        if (_dest.Removed || delay == 0)
+        {
+            return 0; // Done or blocked.
+        }
+
+        if (_goalDist >= 0 && ObjectGeometry.Distance(actor, _dest) <= _goalDist)
+        {
+            return 0; // Close enough.
+        }
+
+        if (++_curStep == _checkStep)
+        {
+            if (ObjectGeometry.Distance(_dest, _origDestPos) > 2)
+            {
+                return 0; // Moved too much, so stop.
+            }
+
+            if (_walk.StepsLeft >= 6)
+            {
+                _checkStep += 3; // Try checking more often.
+            }
+        }
+
+        return delay;
+    }
+}
+
+/// <summary>Exult <c>Object_animate_actor_action</c>: run an object through its frames for some cycles.</summary>
+public sealed class ObjectAnimateAction(U7Object obj, int nframes, int cycles, int speed) : IActorAction
+{
+    int _cycles = cycles;
+
+    public int HandleEvent(U7Object actor)
+    {
+        if (obj.Removed || _cycles == 0 || nframes <= 0)
+        {
+            return 0;
+        }
+
+        var frnum = (obj.Frame + 1) % nframes;
+        if (frnum == 0)
+        {
+            --_cycles; // A new cycle.
+        }
+
+        obj.Frame = frnum;
+        return _cycles != 0 ? speed : 0;
+    }
+}
+
+/// <summary>Exult <c>Change_actor_action</c>: change an object's shape, frame and quality.</summary>
+public sealed class ChangeAction(GameMap map, U7Object obj, int shape, int frame, int quality) : IActorAction
+{
+    public int HandleEvent(U7Object actor)
+    {
+        if (!obj.Removed)
+        {
+            map.SetShape(obj, shape);
+            obj.Frame = frame;
+            obj.Quality = quality;
+        }
+
+        return 0;
+    }
+}
+
+/// <summary>Exult <c>Activate_actor_action</c>: run the object's usecode as a double-click would.</summary>
+public sealed class ActivateAction(U7Object obj, Func<U7Object, bool>? activate) : IActorAction
+{
+    public int HandleEvent(U7Object actor)
+    {
+        if (!obj.Removed)
+        {
+            activate?.Invoke(obj);
+        }
+
+        return 0;
+    }
+}
+
 /// <summary>Exult <c>Face_pos_actor_action</c>: turn to face a tile (standing).</summary>
 public sealed class FacePosAction(TileCoord pos, int speed) : IActorAction
 {

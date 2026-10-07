@@ -12,6 +12,9 @@ public abstract class PathSteps
 
     /// <summary>The next tile, or false once there are none; <paramref name="done"/> on the last one.</summary>
     public abstract bool NextStep(out TileCoord tile, out bool done);
+
+    /// <summary>Exult <c>get_num_steps</c>: steps left to take.</summary>
+    public abstract int StepsLeft { get; }
 }
 
 /// <summary>Exult <c>Astar</c>: a path found by <see cref="Pathfinder.FindPath"/>.</summary>
@@ -28,6 +31,8 @@ public sealed class AstarSteps : PathSteps
     }
 
     public int Count => _path.Count;
+
+    public override int StepsLeft => _path.Count - _next;
 
     /// <summary>Exult <c>Astar::NewPath</c>: null when there is no path.</summary>
     public static AstarSteps? Find(PathClient client, TileCoord src, TileCoord dest) =>
@@ -86,6 +91,8 @@ public sealed class ZombieSteps : PathSteps
         _minorDelta2 = abs[_minor2];
         _majorDistance = _majorDelta;
     }
+
+    public override int StepsLeft => Math.Max(0, _majorDistance);
 
     /// <summary>Exult <c>Zombie::NewPath</c>: null when already there.</summary>
     public static ZombieSteps? Line(TileCoord src, TileCoord dest)
@@ -161,6 +168,7 @@ public sealed class PathWalk : IActorAction
     /// <summary>Exult <c>reached_end</c>: the last step was taken.</summary>
     public bool ReachedEnd { get; private set; }
     public TileCoord Dest => _path.Dest;
+    public int StepsLeft => _path.StepsLeft;
     /// <summary>Called after every step the actor takes (from x, y).</summary>
     public Action<U7Object, int, int>? Stepped { get; set; }
 
@@ -193,6 +201,22 @@ public sealed class PathWalk : IActorAction
         AstarSteps.Find(new ActorPathClient(map, actor, dist, persistent), Here(actor), dest) is { } path
             ? new PathWalk(map, path, maxBlocked, persistent ? 30 : 0)
             : null;
+
+    /// <summary>
+    /// Exult <c>Path_walking_actor_action::create_path</c> with an
+    /// <c>Approach_object_pathfinder_client</c>: an A* walk to within
+    /// <paramref name="dist"/> of the object's footprint; null if there is no path.
+    /// </summary>
+    public static PathWalk? Approach(GameMap map, U7Object actor, U7Object target, int dist) =>
+        CreatePath(map, actor, Here(target), new ApproachPathClient(map, actor, target, dist));
+
+    /// <summary>Exult <c>Path_walking_actor_action::create_path</c>: an A* walk with the given client; null if no path.</summary>
+    public static PathWalk? CreatePath(GameMap map, U7Object actor, TileCoord dest, PathClient client) =>
+        CreatePath(map, Here(actor), dest, client);
+
+    /// <summary>The same from another start, for a walk to follow a first one.</summary>
+    public static PathWalk? CreatePath(GameMap map, TileCoord src, TileCoord dest, PathClient client) =>
+        AstarSteps.Find(client, src, dest) is { } path ? new PathWalk(map, path, 3) : null;
 
     /// <summary>
     /// Exult <c>walk_to_tile(actor, here, dest, 0, true)</c> on the walk under

@@ -370,6 +370,29 @@ public static class Equipment
         return -1;
     }
 
+    /// <summary>
+    /// Exult <c>Actor::empty_hands</c>: what is in either hand goes to the
+    /// belt or backpack spot (into what is there, if anything), else wherever
+    /// <c>Actor::add</c> puts it.
+    /// </summary>
+    public static void EmptyHands(U7Object actor, ShapeCatalog catalog, GameMap map)
+    {
+        foreach (var hand in (int[])[ReadySpot.Lhand, ReadySpot.Rhand])
+        {
+            if (GetReadied(actor, hand) is not { } obj)
+            {
+                continue;
+            }
+
+            map.TakeFromWorld(obj);
+            if (!AddReadied(actor, obj, ReadySpot.Belt, catalog, map, forcePos: true) &&
+                !AddReadied(actor, obj, ReadySpot.Back, catalog, map, forcePos: true))
+            {
+                AddToActor(actor, obj, catalog, map);
+            }
+        }
+    }
+
     /// <summary>Exult <c>Actor::add_readied</c>. Occupied spots try nest/combine.</summary>
     public static bool AddReadied(
         U7Object actor, U7Object obj, int index, ShapeCatalog catalog, GameMap map, bool forcePos = false)

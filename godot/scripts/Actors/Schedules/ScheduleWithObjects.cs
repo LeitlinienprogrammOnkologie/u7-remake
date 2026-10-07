@@ -32,14 +32,6 @@ public abstract class ScheduleWithObjects(NpcBrain brain) : Schedule(brain)
     /// <summary>Exult <c>Actor::add(obj, true)</c>: into the NPC's inventory, unchecked.</summary>
     protected void GiveToNpc(U7Object item) => Map.PlaceInContainer(item, Npc, 255, 255);
 
-    /// <summary>The NPC's carried items of a shape (Exult <c>get_objects</c>).</summary>
-    protected List<U7Object> Carried(int shape)
-    {
-        var all = new List<U7Object>();
-        Npc.CollectContents(all);
-        return all.Where(o => o.Shape == shape && !o.Removed).ToList();
-    }
-
     /// <summary>Exult <c>Schedule_with_objects::cleanup</c>: remove the created items the NPC still has.</summary>
     protected void Cleanup()
     {
@@ -52,17 +44,6 @@ public abstract class ScheduleWithObjects(NpcBrain brain) : Schedule(brain)
         }
 
         _created.Clear();
-    }
-
-    static U7Object? Owner(U7Object item)
-    {
-        var owner = item.Container;
-        while (owner?.Container is { } outer)
-        {
-            owner = outer;
-        }
-
-        return owner;
     }
 
     /// <summary>Exult: the created items go when the schedule does.</summary>

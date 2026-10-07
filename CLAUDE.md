@@ -181,25 +181,22 @@ Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
 Exult's walking (blocking, A*, path following with doors, speeds, actors
 stepping aside), saves with timers, party order and restored NPC schedules,
-NPC proximity remarks and woken sleepers, desk work and waiter schedules, and
-the agent console.
+NPC proximity remarks and woken sleepers, all schedules but duel (street
+maintenance, patrol markers, crafts), and the agent console.
 
 Next, in priority order:
 
-1. **Schedules:** sleep, loiter, tend shop, wander, pace, sit, eat, eat at
-   inn, desk work and waiter are ported (`Actors/Schedules/`;
-   `ScheduleWithObjects` for schedules that make work items). Still
-   standing: duel, kid games, farm, miner, preach, dance, blacksmith, thief,
-   sew, bake, lab, hound, talk, shy, graze, and patrol between path eggs.
-   Add a class per schedule and a case in `ScheduleRunner.Create`; keep
-   their `try_proximity_usecode` calls; scripts go through `RunScript`.
+1. **Combat as Exult's `Combat_schedule`:** every schedule but duel is
+   ported (`Actors/Schedules/`). Duel is `Combat_schedule` play-fighting, and
+   `CombatEngine` is a reduced port that does not run as a schedule (no
+   Monster pathfinder approach, `find_foe` modes, `back_off`, ...). Port
+   `Combat_schedule` (combat.cc), then Duel on top.
 2. **Remaining intrinsics:** 48 stubbed; the most-used are `sprite_effect`,
    `flash_mouse`, `set_to_attack`, `is_not_blocked` and `is_readied`.
 3. **Signs:** `display_runes` still uses the conversation panel; port
    Exult's `Sign_gump` (runic signs, plaques, gravestones).
-4. **Walking follow-ups:** combat approach through the Monster pathfinder
-   client, `Walk_to_schedule`'s off-screen legs, `Pace_schedule`'s "move
-   aside" requests, speed cursors.
+4. **Walking follow-ups:** `Walk_to_schedule`'s off-screen legs, dormant
+   NPCs, speed cursors.
 5. **Story:** continue to Britain (the Crown Jewel, the Man with the Hook,
    Lord British), played through the agent console from `quest4`.
 

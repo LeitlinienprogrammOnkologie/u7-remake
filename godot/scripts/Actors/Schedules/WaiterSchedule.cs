@@ -57,8 +57,6 @@ public sealed class WaiterSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
     readonly List<U7Object> _eatingTables = new();
     readonly List<U7Object> _unattendedPlates = new();
 
-    const int Std = U7Constants.StandardDelayMs;
-
     protected override List<U7Object> FindItems(int dist)
     {
         var here = Here(Npc);
@@ -380,8 +378,11 @@ public sealed class WaiterSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
 
     public override void NowWhat()
     {
-        // (Exult first, one time in 4 while waiting at the counter, looks for
-        // street lamps and shutters to tend; not ported.)
+        if (_state == State.WaitAtCounter && Rng.Next(4) == 0 && TryStreetMaintenance())
+        {
+            return; // Off to tend a lamp or shutter.
+        }
+
         if (_state is State.GetOrder or State.ServeFood)
         {
             var dist = _customer is { } c ? ObjectGeometry.Distance(Npc, c) : 5000;

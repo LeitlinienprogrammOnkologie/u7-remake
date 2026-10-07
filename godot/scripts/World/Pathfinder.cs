@@ -29,7 +29,7 @@ public abstract class PathClient
 /// <paramref name="ignoreNpcs"/> (Exult's persistent walks), NPCs on their
 /// feet are no obstacle, though still avoided.
 /// </summary>
-public sealed class ActorPathClient(GameMap map, U7Object npc, int dist = 0, bool ignoreNpcs = false) : PathClient
+public class ActorPathClient(GameMap map, U7Object npc, int dist = 0, bool ignoreNpcs = false) : PathClient
 {
     /// <summary>Exult: at least three screens' width.</summary>
     public override int GetMaxCost(int costToGoal) => Math.Max(3 * costToGoal, Pathfinder.ScreenTilesWide * 2 * 3);
@@ -136,6 +136,247 @@ public sealed class ActorPathClient(GameMap map, U7Object npc, int dist = 0, boo
 
     public override bool AtGoal(TileCoord tile, TileCoord goal) =>
         (goal.Tz == -1 ? tile.Distance2d(goal) : tile.Distance(goal)) <= dist;
+}
+
+/// <summary>
+/// Exult <c>Approach_object_pathfinder_client</c>: an actor walking to
+/// within <paramref name="dist"/> of an object, anywhere in its footprint
+/// enlarged by that much and within 5 lifts of it.
+/// </summary>
+public sealed class ApproachPathClient(GameMap map, U7Object npc, U7Object target, int dist)
+    : ActorPathClient(map, npc, dist)
+{
+    readonly (int X, int Y, int W, int H) _box = (target.Tx - target.DimX + 1 - dist, target.Ty - target.DimY + 1 - dist,
+        target.DimX + 2 * dist, target.DimY + 2 * dist);
+
+    public override bool AtGoal(TileCoord tile, TileCoord goal)
+    {
+        var dz = tile.Tz - goal.Tz;
+        if (dz is > 5 or < -5)
+        {
+            return false; // Got to be on the same floor.
+        }
+
+        var dx = U7Constants.TileDelta(_box.X, tile.Tx);
+        var dy = U7Constants.TileDelta(_box.Y, tile.Ty);
+        return dx >= 0 && dx < _box.W && dy >= 0 && dy < _box.H;
+    }
+}
+
+/// <summary>
+/// Exult <c>Fast_pathfinder_client</c>: a quick search that gives up soon
+/// (at twice the estimate, 8 to 64), for anything one lift high stepping a
+/// lift up or down, done once the walker's footprint touches the target's
+/// footprint (or a spot) enlarged by <c>dist</c>, within 5 lifts.
+/// </summary>
+public class FastPathClient : PathClient
+{
+    readonly GameMap _map;
+    readonly int _moveFlags;
+    readonly int _axtiles;
+    readonly int _aytiles;
+    readonly int _aztiles;
+    readonly (int X, int Y, int W, int H) _destBox;
+
+    protected GameMap Map => _map;
+    protected int MoveFlags => _moveFlags;
+    protected (int X, int Y, int Z) Size => (_axtiles, _aytiles, _aztiles);
+
+    public FastPathClient(GameMap map, U7Object from, U7Object to, int dist)
+        : this(map, from, (to.Tx - to.DimX + 1 - dist, to.Ty - to.DimY + 1 - dist, to.DimX + 2 * dist,
+            to.DimY + 2 * dist))
+    {
+    }
+
+    /// <summary>Exult enlarges an empty rectangle at the spot, so the box runs from dist before it to dist - 1 after.</summary>
+    public FastPathClient(GameMap map, U7Object from, TileCoord dest, int dist)
+        : this(map, from, (dest.Tx - dist, dest.Ty - dist, 2 * dist, 2 * dist))
+    {
+    }
+
+    FastPathClient(GameMap map, U7Object from, (int, int, int, int) destBox)
+    {
+        _map = map;
+        _moveFlags = from.TypeFlags;
+        var info = map.Catalog[from.Shape];
+        var reflected = (from.Frame & 32) != 0;
+        _axtiles = Math.Max(1, reflected ? info.DimY : info.DimX);
+        _aytiles = Math.Max(1, reflected ? info.DimX : info.DimY);
+        _aztiles = info.DimZ;
+        _destBox = destBox;
+    }
+
+    public override int GetMaxCost(int costToGoal) => Math.Clamp(2 * costToGoal, 8, 64);
+
+    public override int GetStepCost(TileCoord from, ref TileCoord to)
+    {
+        if (_map.Blocking.IsBlocked(1, to.Tz, to.Tx, to.Ty, out var newLift, _moveFlags, 1, 1))
+        {
+            return -1;
+        }
+
+        to = to with { Tz = newLift };
+        return 1;
+    }
+
+    public override int EstimateCost(TileCoord from, TileCoord to) => from.Distance(to);
+
+    public override bool AtGoal(TileCoord tile, TileCoord goal)
+    {
+        var dz = tile.Tz - goal.Tz;
+        if (dz is > 5 or < -5)
+        {
+            return false; // Got to be on the same floor.
+        }
+
+        int ax = tile.Tx - _axtiles + 1, ay = tile.Ty - _aytiles + 1;
+        return ax < _destBox.X + _destBox.W && _destBox.X < ax + _axtiles &&
+               ay < _destBox.Y + _destBox.H && _destBox.Y < ay + _aytiles;
+    }
+
+    // Exult Block: a footprint with a lift and height.
+    readonly record struct Block(int X, int Y, int Z, int W, int D, int H)
+    {
+        public static Block Of(U7Object obj) => new(obj.Tx - obj.DimX + 1, obj.Ty - obj.DimY + 1, obj.Tz, obj.DimX,
+            obj.DimY, Math.Max(1, obj.DimZ));
+
+        public bool Has(TileCoord t) =>
+            U7Constants.TileDelta(X, t.Tx) is var dx && dx >= 0 && dx < W &&
+            U7Constants.TileDelta(Y, t.Ty) is var dy && dy >= 0 && dy < D && t.Tz >= Z && t.Tz < Z + H;
+
+        public Block Moved(int dx, int dy, int dz) => this with { X = X + dx, Y = Y + dy, Z = Z + dz };
+    }
+
+    /// <summary>Exult <c>Get_closest_edge</c>: the facing edges of the two blocks, from the top tile of the first.</summary>
+    static void ClosestEdge(Block from, Block to, ref TileCoord pos1, ref TileCoord pos2)
+    {
+        if (pos2.Tx < pos1.Tx)
+        {
+            pos1 = pos1 with { Tx = from.X }; // Going left.
+        }
+        else
+        {
+            pos2 = pos2 with { Tx = to.X };
+        }
+
+        if (pos2.Ty < pos1.Ty)
+        {
+            pos1 = pos1 with { Ty = from.Y }; // Going north.
+        }
+        else
+        {
+            pos2 = pos2 with { Ty = to.Y };
+        }
+
+        if (pos2.Tz < pos1.Tz)
+        {
+            pos2 = pos2 with { Tz = pos2.Tz + to.H - 1 }; // Going down (needed for sails).
+        }
+
+        pos1 = pos1 with { Tz = pos1.Tz + from.H - 1 }; // Use the top tile.
+    }
+
+    /// <summary>
+    /// Exult <c>Fast_pathfinder_client::is_grabable</c>: whether
+    /// <paramref name="from"/> could reach <paramref name="to"/>, i.e. is next
+    /// to it or can get within 1-5 tiles of it by a short walk and from there
+    /// in a straight line past nothing fixed (actors and movable things don't
+    /// count).
+    /// </summary>
+    public static bool IsGrabable(GameMap map, U7Object from, U7Object to)
+    {
+        if (ObjectGeometry.Distance(from, to) <= 1)
+        {
+            return true; // Already okay.
+        }
+
+        for (var i = 1; i <= 5; i++)
+        {
+            if (IsGrabable(map, from, to, new FastPathClient(map, from, to, i)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Exult is_grabable_internal.
+    static bool IsGrabable(GameMap map, U7Object from, U7Object to, FastPathClient client)
+    {
+        var fromvol = Block.Of(from);
+        var tovol = Block.Of(to);
+        var here = new TileCoord(from.Tx, from.Ty, from.Tz);
+        var src = here;
+        var dst = new TileCoord(to.Tx, to.Ty, to.Tz);
+        ClosestEdge(fromvol, tovol, ref src, ref dst);
+        src = src with { Tz = from.Tz };
+        if (AstarSteps.Find(client, src, dst) is not { } path)
+        {
+            return false;
+        }
+
+        var t = here;
+        if (path.StepsLeft > 0)
+        {
+            while (path.NextStep(out var step, out _))
+            {
+                t = step;
+                if (t != here && !client.AtGoal(t, dst) && map.Blocking.Test(t.Tx, t.Ty, t.Tz))
+                {
+                    return false; // Blocked.
+                }
+            }
+        }
+
+        if (!client.AtGoal(t, dst))
+        {
+            return false;
+        }
+
+        var srcvol = fromvol;
+        fromvol = fromvol.Moved(t.Tx - src.Tx, t.Ty - src.Ty, t.Tz - src.Tz);
+        dst = new TileCoord(to.Tx, to.Ty, to.Tz);
+        ClosestEdge(fromvol, tovol, ref t, ref dst);
+        if (ZombieSteps.Line(t, dst) is not { } line)
+        {
+            return false;
+        }
+
+        while (line.NextStep(out var step, out _))
+        {
+            if (!tovol.Has(step) && !srcvol.Has(step) && !fromvol.Has(step) &&
+                map.Blocking.Test(step.Tx, step.Ty, step.Tz) && map.FindBlocking(step) is { } block &&
+                // Ignore all blocking actors and movable objects.
+                !block.IsActor && !(block.Kind == ObjectKind.Ireg && map.Catalog[block.Shape].Weight > 0))
+            {
+                return false; // Blocked.
+            }
+        }
+
+        return true;
+    }
+}
+
+/// <summary>
+/// Exult <c>Monster_pathfinder_client</c>: the quick search for a walker of
+/// its own size (any step it could take, all costing 1), trying harder the
+/// cleverer it is (twice the estimate plus half its intelligence, 18 to
+/// three quarters of the screen's width).
+/// </summary>
+public sealed class MonsterPathClient(GameMap map, U7Object npc, TileCoord dest, int dist)
+    : FastPathClient(map, npc, dest, dist)
+{
+    readonly int _intelligence = npc.GetProp(ActorProp.Intelligence);
+
+    public override int GetMaxCost(int costToGoal) =>
+        Math.Max(18, Math.Min(2 * costToGoal + _intelligence / 2, 3 * Pathfinder.ScreenTilesWide / 4));
+
+    public override int GetStepCost(TileCoord from, ref TileCoord to)
+    {
+        var (x, y, z) = Size;
+        return Map.Blocking.IsBlockedStep(x, y, z, from, ref to, MoveFlags) ? -1 : 1;
+    }
 }
 
 /// <summary>

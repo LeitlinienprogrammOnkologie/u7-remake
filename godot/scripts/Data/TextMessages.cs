@@ -11,6 +11,42 @@ namespace U7.Data;
 /// </summary>
 public static class TextMessages
 {
+    /// <summary>A guard pacing into someone ("Step aside!").</summary>
+    public const int FirstMoveAside = 0x00;
+    public const int LastMoveAside = 0x02;
+    /// <summary>A preacher at the podium ("Strive for unity!"), and to one of the flock ("Art thou with us, brother?").</summary>
+    public const int FirstPreach = 0x03;
+    public const int LastPreach = 0x07;
+    public const int FirstPreach2 = 0x08;
+    public const int LastPreach2 = 0x0b;
+    /// <summary>The flock answering, or the preacher praying.</summary>
+    public const int FirstAmen = 0x0c;
+    public const int LastAmen = 0x0f;
+    /// <summary>A thief's small talk ("Nice weather today.").</summary>
+    public const int FirstThief = 0x10;
+    public const int LastThief = 0x13;
+    /// <summary>An NPC coming to talk ("I would have words with thee.").</summary>
+    public const int FirstTalk = 0x14;
+    public const int LastTalk = 0x16;
+    /// <summary>A farmer cutting crops ("These crops are tough!"), and looking for some.</summary>
+    public const int FirstFarmer = 0x3f;
+    public const int LastFarmer = 0x41;
+    public const int FirstFarmer2 = 0x60;
+    public const int LastFarmer2 = 0x62;
+    /// <summary>A miner at the rock ("Still no gold!"), and striking it rich ("Eureka!").</summary>
+    public const int FirstMiner = 0x42;
+    public const int LastMiner = 0x44;
+    public const int FirstMinerGold = 0x45;
+    public const int LastMinerGold = 0x47;
+    /// <summary>Street maintenance: lamps lit and put out, a candle replaced, shutters closed and opened.</summary>
+    public const int FirstLampOn = 0x63;
+    public const int LastLampOn = 0x66;
+    public const int LampOff = 0x67;
+    public const int NewCandle = 0x68;
+    public const int FirstCloseShutters = 0x71;
+    public const int LastCloseShutters = 0x73;
+    public const int FirstOpenShutters = 0x74;
+    public const int LastOpenShutters = 0x76;
     /// <summary>A waiter taking an order ("What wilt thou have?").</summary>
     public const int FirstWaiterAsk = 0x1b;
     public const int LastWaiterAsk = 0x1f;

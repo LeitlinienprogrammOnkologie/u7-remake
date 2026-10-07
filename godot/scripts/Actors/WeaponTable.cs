@@ -28,6 +28,8 @@ public sealed class WeaponRecord
     public bool DeleteDepleted;
     public int MissileSpeed = 4;
     public int RotationSpeed;
+    /// <summary>Exult <c>actor_frames</c>: the attack frames, 0 reach, 1 raise, 2 fast swing, 3 slow swing; bits 2-3 when shooting or throwing.</summary>
+    public int ActorFrames = 2;
 
     public bool UsesCharges => Ammo == -2;
 }
@@ -86,6 +88,7 @@ public sealed class WeaponTable
         var iDelete = Col("delete_depleted");
         var iSpeed = Col("missile_speed");
         var iRot = Col("rotation_speed");
+        var iFrames = Col("actor_frames");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
         int Num(string[] c, int i, int fallback = 0) =>
@@ -122,7 +125,8 @@ public sealed class WeaponTable
                 NoBlocking = Num(c, iNoBlock) != 0,
                 DeleteDepleted = Num(c, iDelete) != 0,
                 MissileSpeed = Num(c, iSpeed, 4),
-                RotationSpeed = Num(c, iRot)
+                RotationSpeed = Num(c, iRot),
+                ActorFrames = Num(c, iFrames, 2)
             };
         }
 

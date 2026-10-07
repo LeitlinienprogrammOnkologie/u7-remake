@@ -32,8 +32,19 @@ public sealed class ScheduleRunner
     public Func<U7Object, bool>? InUsecodeControl { get; set; }
     /// <summary>Queues the NPC's usecode with the npc_proximity event (Exult runs it from a script).</summary>
     public Action<U7Object>? ProximityUsecode { get; set; }
-    /// <summary>Exult <c>Usecode_script</c>: runs the opcodes on the NPC from the next tick.</summary>
-    public Action<U7Object, int[]>? Script { get; set; }
+    /// <summary>Exult <c>Usecode_script</c>: runs the opcodes (ints, and strings to say) on the NPC from the next tick.</summary>
+    public Action<U7Object, object[]>? Script { get; set; }
+    /// <summary>Exult <c>Schedule::seek_foes</c>' end: the NPC fights the foe (combat schedule, target set).</summary>
+    public Action<U7Object, U7Object>? Fight { get; set; }
+    /// <summary>Exult <c>Actor::ready_best_weapon</c>.</summary>
+    public Action<U7Object>? ReadyBestWeapon { get; set; }
+    /// <summary>The weapon table, for attack frames.</summary>
+    public WeaponTable? Weapons { get; set; }
+    /// <summary>Exult <c>Game_object::activate</c>: the object's usecode as a double-click; false if usecode cannot run now.</summary>
+    public Func<U7Object, bool>? Activate { get; set; }
+    /// <summary>Milliseconds of game play (Exult <c>Game::get_ticks</c>, for schedule timers).</summary>
+    public double Ticks { get; private set; }
+    public int Hour => _clock.Hour;
     /// <summary>Exult <c>Actor::say</c>: a remark over the NPC's head.</summary>
     public Action<U7Object, string>? Say { get; set; }
     /// <summary>Exult <c>Actor::can_speak</c>.</summary>
@@ -79,12 +90,65 @@ public sealed class ScheduleRunner
     /// </summary>
     Schedule Create(NpcBrain b, int type)
     {
+        // Exult set_schedule_type: hands emptied for some, the best weapon readied for others.
+        switch (type)
+        {
+            case ScheduleType.Dance:
+            case ScheduleType.TendShop:
+            case ScheduleType.Eat:
+            case ScheduleType.Sit:
+            case ScheduleType.Shy:
+            case ScheduleType.Thief:
+            case ScheduleType.Waiter:
+            case ScheduleType.KidGames:
+            case ScheduleType.EatAtInn:
+            case ScheduleType.DeskWork:
+            case ScheduleType.Sleep when Party?.IsInParty(b.Npc) != true:
+                Equipment.EmptyHands(b.Npc, Map.Catalog, Map);
+                break;
+            case ScheduleType.HorizPace:
+            case ScheduleType.VertPace:
+            case ScheduleType.Hound:
+            case ScheduleType.Preach:
+            case ScheduleType.Patrol:
+                ReadyBestWeapon?.Invoke(b.Npc);
+                break;
+        }
+
         switch (type)
         {
             case ScheduleType.Loiter:
-                return new LoiterSchedule(b, LoiterSchedule.DefaultDist, 12);
+                return new LoiterSchedule(b);
             case ScheduleType.TendShop:
-                return new LoiterSchedule(b, 3, 8);
+                return new LoiterSchedule(b, 3);
+            case ScheduleType.KidGames:
+                return new KidGamesSchedule(b);
+            case ScheduleType.Dance:
+                return new DanceSchedule(b);
+            case ScheduleType.Graze:
+                return new GrazeSchedule(b);
+            case ScheduleType.Farm:
+                return new FarmerSchedule(b);
+            case ScheduleType.Miner:
+                return new MinerSchedule(b);
+            case ScheduleType.Hound:
+                return new HoundSchedule(b);
+            case ScheduleType.Preach:
+                return new PreachSchedule(b);
+            case ScheduleType.Talk:
+                return new TalkSchedule(b);
+            case ScheduleType.Shy:
+                return new ShySchedule(b);
+            case ScheduleType.Thief:
+                return new ThiefSchedule(b);
+            case ScheduleType.Lab:
+                return new LabSchedule(b);
+            case ScheduleType.Sew:
+                return new SewSchedule(b);
+            case ScheduleType.Bake:
+                return new BakeSchedule(b);
+            case ScheduleType.Blacksmith:
+                return new ForgeSchedule(b);
             case ScheduleType.Wander:
                 return new WanderSchedule(b);
             case ScheduleType.Patrol:
@@ -109,22 +173,8 @@ public sealed class ScheduleRunner
             case ScheduleType.Stand:
             case ScheduleType.Wait:
             case ScheduleType.Combat:
-            case ScheduleType.Talk:
-            case ScheduleType.Dance:
-            case ScheduleType.Farm:
-            case ScheduleType.Miner:
-            case ScheduleType.Hound:
-            case ScheduleType.Blacksmith:
-            case ScheduleType.Graze:
-            case ScheduleType.Bake:
-            case ScheduleType.Sew:
-            case ScheduleType.Shy:
-            case ScheduleType.Lab:
-            case ScheduleType.Thief:
             case ScheduleType.Special:
-            case ScheduleType.KidGames:
             case ScheduleType.Duel:
-            case ScheduleType.Preach:
                 return new IdleSchedule(b);
             default:
                 if (_loggedUnknown.Add(type))
@@ -220,6 +270,11 @@ public sealed class ScheduleRunner
             return npc.PendingSchedule;
         }
 
+        if (npc.NpcNum > 0 && _brains.TryGetValue(npc.NpcNum, out var b) && b.Schedule is StreetMaintenanceSchedule s)
+        {
+            return s.PrevType; // Exult Street_maintenance_schedule::get_actual_type.
+        }
+
         return npc.ScheduleType;
     }
 
@@ -230,6 +285,7 @@ public sealed class ScheduleRunner
             return;
         }
 
+        Ticks += delta * 1000;
         foreach (var b in _brains.Values)
         {
             ProximityCheck(b, delta);
@@ -294,6 +350,18 @@ public sealed class ScheduleRunner
         return (msecs * U7Constants.StandardDelayMs / 100 + extraTicks * U7Constants.StandardDelayMs) / 1000.0;
     }
 
+    /// <summary>
+    /// Exult's test in <c>try_street_maintenance</c>: within the game window
+    /// (centred on the avatar) enlarged by a quarter of its width all round.
+    /// </summary>
+    public bool InWindowAndAHalf(U7Object npc)
+    {
+        var (w, h) = ScreenTiles;
+        var dx = U7Constants.TileDelta(Avatar.Tx - w / 2 - w / 4, npc.Tx);
+        var dy = U7Constants.TileDelta(Avatar.Ty - h / 2 - w / 4, npc.Ty);
+        return dx >= 0 && dx < w + w / 2 && dy >= 0 && dy < h + w / 2;
+    }
+
     /// <summary>Exult: within the game window enlarged by 10 tiles.</summary>
     bool OnScreen(U7Object npc)
     {
@@ -310,7 +378,7 @@ public sealed class ScheduleRunner
     /// Exult <c>Fast_pathfinder_client::is_straight_path</c> for two objects:
     /// nothing solid on the straight line between their nearest edges.
     /// </summary>
-    bool IsStraightPath(U7Object from, U7Object to)
+    public bool IsStraightPath(U7Object from, U7Object to)
     {
         var fromVol = Volume(from);
         var toVol = Volume(to);
@@ -583,6 +651,44 @@ public sealed class ScheduleRunner
 
         b.Schedule = Create(b, type);
         b.Schedule.Begin();
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::set_schedule_type(type, newsched)</c>: end the old
+    /// schedule, drop the action, and start the given one at once.
+    /// </summary>
+    public void SetSchedule(NpcBrain b, int type, Schedule schedule)
+    {
+        b.Schedule?.Ending(type);
+        b.StopAction();
+        b.Npc.PendingSchedule = -1;
+        b.Npc.ScheduleType = type;
+        b.Schedule = schedule;
+        schedule.NowWhat();
+    }
+
+    /// <summary>
+    /// Exult <c>Npc_actor::update_schedule(period, 0, pos)</c>: back to the
+    /// schedule of the hour, at <paramref name="pos"/> instead of its spot
+    /// (walking there, or put there when far off).
+    /// </summary>
+    public void UpdateSchedule(NpcBrain b, TileCoord? pos)
+    {
+        if (_table.ForSlot(b.Npc.NpcNum, _clock.Slot) is not { } entry)
+        {
+            return;
+        }
+
+        var dest = pos ?? new TileCoord(entry.Tx, entry.Ty, entry.Tz);
+        if (Dist(b.Npc) > ActivityDist)
+        {
+            Teleport(b, dest);
+            BeginType(b, entry.Type, dest, alreadyThere: true);
+        }
+        else
+        {
+            BeginWalkTo(b, entry.Type, dest);
+        }
     }
 
     /// <summary>Put the NPC at the spot, standing, with its action dropped.</summary>

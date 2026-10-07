@@ -288,10 +288,23 @@ public partial class U7Game : Node2D
                 var code = UsecodeValue.FromArray(ops.Length);
                 for (var i = 0; i < ops.Length; i++)
                 {
-                    code.PutElem(i, UsecodeValue.FromInt(ops[i]));
+                    code.PutElem(i, ops[i] is string text ? UsecodeValue.FromString(text) : UsecodeValue.FromInt((int)ops[i]));
                 }
 
                 _usecode.StartScript(npc, code, 0);
+            };
+            _schedules.Fight = _combat.Fight;
+            _schedules.ReadyBestWeapon = _combat.ReadyBestWeapon;
+            _schedules.Weapons = _combat.Weapons;
+            _schedules.Activate = obj =>
+            {
+                if (_usecode.InUsecode || _usecode.WaitingForChoice)
+                {
+                    return false;
+                }
+
+                RunUsecode(obj); // Exult Game_object::activate, as a double-click.
+                return true;
             };
             _schedules.Say = _usecode.Bark;
             SitAction.Say = _usecode.Bark;

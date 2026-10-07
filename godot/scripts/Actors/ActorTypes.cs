@@ -123,6 +123,7 @@ public static class ScheduleType
     public const int DeskWork = 30;
     public const int FollowAvatar = 31;
     public const int WalkToSchedule = 32;
+    public const int StreetMaintenance = 33;
 
     public static readonly string[] Names =
     [
@@ -158,6 +159,7 @@ public static class AttackMode
 public static class ObjFlag
 {
     public const int Met = 28;
+    public const int Invisible = 0;
     public const int Charmed = 2;
     public const int Cursed = 3;
     public const int Poisoned = 8;

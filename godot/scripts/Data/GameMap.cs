@@ -1090,12 +1090,16 @@ public sealed class GameMap
 
     /// <summary>
     /// Exult <c>Game_map::read_ireg_objects</c>. Used for U7IREG and npc.dat
-    /// inventory. Length 0/1 ends a container.
+    /// inventory. Length 0/1 ends a container. Items start out okay to take
+    /// (Exult's default flags); a container's contents take its flags, but
+    /// not invisibility.
     /// </summary>
     public void ReadIregObjects(byte[] data, ref int i, int scx, int scy, U7Object? container) =>
         ParseIreg(data, ref i, scx, scy, container);
 
-    void ParseIreg(byte[] data, ref int i, int scx, int scy, U7Object? container)
+    const uint OkayToTakeFlag = 1u << 11;
+
+    void ParseIreg(byte[] data, ref int i, int scx, int scy, U7Object? container, uint inherit = OkayToTakeFlag)
     {
         var readyIndex = -1;
         U7Object? last = null;
@@ -1220,13 +1224,23 @@ public sealed class GameMap
             var lift = NibbleSwap(entry[liftIndex]) & 0xf;
             var qualityIndex = extended ? 6 : 5;
             var quality = qualityIndex < entry.Length ? entry[qualityIndex] : 0;
-            uint flags = 0;
+            var flags = inherit;
+            if (testlen == 10 && qualityIndex + 1 < entry.Length && (entry[qualityIndex + 1] & 1) != 0)
+            {
+                flags |= 1u << 18; // Temporary.
+            }
+
             if (info.HasQuantity)
             {
+                // Exult's "weird use of flag": the quantity's top bit is okay-to-take.
                 if ((quality & 0x80) != 0)
                 {
-                    flags |= 1u << 11;
+                    flags |= OkayToTakeFlag;
                     quality &= 0x7f;
+                }
+                else
+                {
+                    flags &= ~OkayToTakeFlag;
                 }
             }
             else if (info.HasQualityFlags)
@@ -1315,7 +1329,7 @@ public sealed class GameMap
 
         if (type != 0)
         {
-            ParseIreg(data, ref i, scx, scy, obj ?? new U7Object());
+            ParseIreg(data, ref i, scx, scy, obj ?? new U7Object(), flags & ~1u); // Don't pass along invisibility.
         }
 
         return obj;

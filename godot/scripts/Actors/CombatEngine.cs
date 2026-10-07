@@ -37,8 +37,12 @@ public sealed class CombatEngine
     readonly Dictionary<int, StrikeAnim> _anims = new();
     /// <summary>Exult <c>Game_object::rotate</c>: frame band per direction 0-7 (N, NE, E, ...).</summary>
     static readonly int[] Rotate = [0, 0, 48, 48, 16, 16, 32, 32];
-    /// <summary>Exult <c>fast_swing_attack_frames1</c>: ready, reach, strike.</summary>
-    static readonly int[] FastSwing1 = [3, 5, 6];
+    /// <summary>
+    /// Exult's attack frame sets by <c>Weapon_info::Actor_frames</c> (reach,
+    /// raise, fast swing, slow swing): one-handed, then two-handed.
+    /// </summary>
+    static readonly int[][] AttackFrames1 = [[3, 6], [3, 4, 6], [3, 5, 6], [3, 4, 5, 6]];
+    static readonly int[][] AttackFrames2 = [[3, 9], [3, 7, 9], [3, 8, 9], [3, 7, 8, 9]];
     /// <summary>Exult <c>visible_frames</c>: substitute when a frame is empty (1-handed ↔ 2-handed).</summary>
     static readonly int[] VisibleFrames = [0, 0, 0, 0, 7, 8, 9, 4, 5, 6, 0, 12, 11, 0, 9, 3];
     readonly Random _rng = new();
@@ -356,6 +360,16 @@ public sealed class CombatEngine
 
         return TryStrike(attacker, defender);
     }
+
+    /// <summary>Exult <c>Schedule::seek_foes</c>: the NPC goes into the combat schedule against the foe.</summary>
+    public void Fight(U7Object npc, U7Object foe)
+    {
+        Engage(npc, foe);
+        StartBattle();
+    }
+
+    /// <summary>Exult <c>Actor::ready_best_weapon</c>.</summary>
+    public void ReadyBestWeapon(U7Object npc) => Equipment.ReadyBestWeapon(npc, _catalog, _weapons, _armor);
 
     public static bool IsEnemy(int align, int other) =>
         align switch
@@ -942,17 +956,41 @@ public sealed class CombatEngine
     /// swing frames one per standard tick, ending on the ready frame. Frames the
     /// shape lacks fall back to standing, as <c>Actor::get_attack_frames</c> does.
     /// </summary>
-    void PlayStrike(U7Object attacker, U7Object defender)
+    void PlayStrike(U7Object attacker, U7Object defender, int weaponShape, bool projectile)
     {
         var dir = ActorWalker.DirIndex(
             Math.Sign(U7Constants.TileDelta(attacker.Tx, defender.Tx)),
             Math.Sign(U7Constants.TileDelta(attacker.Ty, defender.Ty)));
-        var band = Rotate[dir];
-        var rec = _catalog[attacker.Shape];
-        var frames = new int[FastSwing1.Length + 1];
-        for (var i = 0; i < FastSwing1.Length; i++)
+        var swing = AttackFrames(_catalog, _weapons, attacker, weaponShape, projectile, dir);
+        var frames = new int[swing.Length + 1];
+        swing.CopyTo(frames, 0);
+        frames[^1] = frames[0]; // back to ready (or standing if ready is missing)
+        attacker.WalkFrameIndex = 0;
+        attacker.Frame = frames[0];
+        _anims[attacker.Id] = new StrikeAnim(attacker, frames, 1, _stepInterval);
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::get_attack_frames</c>: the frames for attacking with
+    /// <paramref name="weaponShape"/> (-1 bare-handed: a fast swing, or a
+    /// reach when shooting), by the weapon's kind of stroke and whether a
+    /// two-handed weapon is readied, turned to <paramref name="dir"/> (0-7); a
+    /// frame the shape lacks becomes the other hand's, else standing. (Sea
+    /// serpents' and slimes' own are not ported.)
+    /// </summary>
+    public static int[] AttackFrames(ShapeCatalog catalog, WeaponTable weapons, U7Object actor, int weaponShape,
+        bool projectile, int dir)
+    {
+        var kind = weaponShape >= 0 && weapons[weaponShape] is { } winfo
+            ? (projectile ? winfo.ActorFrames >> 2 : winfo.ActorFrames) & 3
+            : projectile ? 0 : 2;
+        var which = (Equipment.IsTwoHanded(actor, catalog) ? AttackFrames2 : AttackFrames1)[kind];
+        var band = Rotate[dir & 7];
+        var rec = catalog[actor.Shape];
+        var frames = new int[which.Length];
+        for (var i = 0; i < which.Length; i++)
         {
-            var fr = FastSwing1[i] + band;
+            var fr = which[i] + band;
             if (!HasFrame(rec, fr))
             {
                 fr = VisibleFrames[fr & 15] + band;
@@ -965,10 +1003,7 @@ public sealed class CombatEngine
             frames[i] = fr;
         }
 
-        frames[^1] = frames[0]; // back to ready (or standing if ready is missing)
-        attacker.WalkFrameIndex = 0;
-        attacker.Frame = frames[0];
-        _anims[attacker.Id] = new StrikeAnim(attacker, frames, 1, _stepInterval);
+        return frames;
     }
 
     /// <summary>Exult <c>Shape_frame::is_empty</c>; the export writes empty frames as 1×1.</summary>
@@ -1032,7 +1067,6 @@ public sealed class CombatEngine
     /// </summary>
     bool TryStrike(U7Object attacker, U7Object defender)
     {
-        PlayStrike(attacker, defender);
         var wpn = GetWeapon(attacker, out var points, out var weaponShape);
         var dist = new TileCoord(attacker.Tx, attacker.Ty, 0)
             .Distance2d(new TileCoord(defender.Tx, defender.Ty, 0));
@@ -1051,6 +1085,7 @@ public sealed class CombatEngine
         }
 
         var ranged = wpn is { Uses: WeaponRecord.UsesRanged } || dist > reach;
+        PlayStrike(attacker, defender, wpn is null ? -1 : weaponShape, ranged);
         if (EffectiveRange(attacker, wpn, reach) < dist)
         {
             LastMessage = "out of range";

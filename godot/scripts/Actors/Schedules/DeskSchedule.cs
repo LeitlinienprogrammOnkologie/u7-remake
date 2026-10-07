@@ -101,7 +101,11 @@ public sealed class DeskSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
 
     public override void NowWhat()
     {
-        // (Exult first looks for street lamps and shutters to tend; not ported.)
+        if (Rng.Next(3) == 0 && TryStreetMaintenance())
+        {
+            return; // Off to tend a lamp or shutter.
+        }
+
         switch (_state)
         {
             case State.Setup:
