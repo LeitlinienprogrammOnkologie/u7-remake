@@ -1680,6 +1680,14 @@ public sealed class GameMap
             $"path={counts[U7.World.EggType.Path]} monster={counts[U7.World.EggType.Monster]}");
     }
 
+    /// <summary>Exult <c>Game_map::create_ireg_object</c>: a new item that is not in the world yet.</summary>
+    public U7Object CreateIregObject(int shape, int frame)
+    {
+        var obj = MakeObject(0, 0, 0, shape, frame, 0, ObjectKind.Ireg);
+        obj.Removed = true;
+        return obj;
+    }
+
     U7Object MakeObject(int tx, int ty, int tz, int shape, int frame, int quality, ObjectKind kind)
     {
         var info = Catalog[shape];

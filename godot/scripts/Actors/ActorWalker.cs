@@ -10,9 +10,14 @@ namespace U7.Actors;
 /// </summary>
 public static class ActorWalker
 {
-    /// <summary>Exult <c>Actor::sit_frame</c> and <c>sleep_frame</c>.</summary>
+    /// <summary>Exult <c>Actor::sit_frame</c>, <c>bow_frame</c> and <c>sleep_frame</c>.</summary>
     public const int SitFrame = 10;
+    public const int BowFrame = 11;
     public const int SleepFrame = 13;
+    static readonly int[] Rotate = [0, 0, 48, 48, 16, 16, 32, 32];
+
+    /// <summary>Exult <c>Game_object::get_dir_framenum</c>: a base frame (0-15) turned to face a direction (0-7).</summary>
+    public static int DirFrame(int dir, int frame) => (frame & 0xf) + Rotate[dir & 7];
 
     // By 8-way direction. Exult picks walking frames by Get_direction4, which
     // turns a diagonal step into east or west.

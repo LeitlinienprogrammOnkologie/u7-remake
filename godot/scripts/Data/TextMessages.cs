@@ -1,0 +1,70 @@
+using System.IO;
+using System.Text;
+using U7.Core;
+
+namespace U7.Data;
+
+/// <summary>
+/// Exult <c>get_text_msg</c>: the game's own messages, TEXT.FLX entries from
+/// 0x400 on (item names come before them), followed by Exult's own from 0x100
+/// (data/exultmsg.txt). Numbers are Exult's (items.h).
+/// </summary>
+public static class TextMessages
+{
+    /// <summary>Asking for food at the table ("Waiter!").</summary>
+    public const int FirstMoreFood = 0x20;
+    public const int LastMoreFood = 0x24;
+    /// <summary>Eating ("Mmmmm...").</summary>
+    public const int FirstMunch = 0x25;
+    public const int LastMunch = 0x28;
+    /// <summary>A sleeper woken by the avatar ("Who goes there?").</summary>
+    public const int FirstAwakened = 0x95;
+    public const int LastAwakened = 0x9a;
+    /// <summary>Exult's: someone moved the chair an NPC was going to sit on.</summary>
+    public const int FirstChairThief = 0x100;
+    public const int LastChairThief = 0x104;
+    /// <summary>Exult's: a waiter's chat and serving lines.</summary>
+    public const int FirstWaiterBanter = 0x105;
+    public const int LastWaiterBanter = 0x107;
+    public const int FirstWaiterServe = 0x108;
+    public const int LastWaiterServe = 0x109;
+
+    /// <summary>Exult's own messages (data/exultmsg.txt, 0x500 on), as far as they are used here.</summary>
+    static readonly Dictionary<int, string> ExultMessages = new()
+    {
+        [0x100] = "Put that chair back!",
+        [0x101] = "Thief!!",
+        [0x102] = "Thou scoundrel!!",
+        [0x103] = "Not funny!",
+        [0x104] = "Who moved my chair??",
+        [0x105] = "You look like you're doing fine.",
+        [0x106] = "Everything okay?",
+        [0x107] = "Ready for dessert?",
+        [0x108] = "Enjoy!",
+        [0x109] = "Specialty of the house!"
+    };
+
+    static FlexFile? _flex;
+
+    /// <summary>A random message from <paramref name="first"/> to <paramref name="last"/> (Exult <c>Actor::say(from, to)</c>).</summary>
+    public static string Random(int first, int last) => Get(first + System.Random.Shared.Next(last - first + 1));
+
+    public static string Get(int msg)
+    {
+        if (msg >= 0x100)
+        {
+            return ExultMessages.GetValueOrDefault(msg, "");
+        }
+
+        _flex ??= new FlexFile(Path.Combine(U7Paths.StaticDir, "TEXT.FLX"));
+        var index = 0x400 + msg;
+        if (index >= _flex.Count)
+        {
+            return "";
+        }
+
+        var data = _flex.Get(index);
+        var end = data.IndexOf((byte)0);
+        return Encoding.Latin1.GetString(end >= 0 ? data[..end] : data);
+    }
+}

@@ -846,6 +846,9 @@ public sealed class CombatEngine
     }
 
     /// <summary>Restore spawned monsters from a saved game (MONSNPCS.DAT).</summary>
+    /// <summary>Exult <c>Actor::can_speak</c>: no monster info, or one that can yell.</summary>
+    public bool CanSpeak(U7Object actor) => !_monsters.Contains(actor.Shape) || !_monsters[actor.Shape].CantYell;
+
     /// <summary>Exult <c>Actor::is_sentient</c>: monster intelligence 6 or more (opens doors, joins fights).</summary>
     public bool IsSentient(U7Object actor) => _monsters[actor.Shape].Intelligence >= 6;
 

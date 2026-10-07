@@ -6,29 +6,38 @@ using U7.World;
 namespace U7.Actors;
 
 /// <summary>
-/// Per-NPC schedule brain. Nearby NPCs (~32 tiles) walk; far NPCs sit on
-/// their current slot destination until the avatar approaches.
+/// Runs the NPCs' schedules (Exult <c>Npc_actor::handle_event</c> with
+/// <c>Schedule::now_what</c>, <c>schedule_npcs</c> and the proximity
+/// handler). Nearby NPCs (~32 tiles) act; far NPCs sit on their current slot
+/// destination until the avatar approaches.
 /// </summary>
 public sealed class ScheduleRunner
 {
     public const int ActivityDist = U7Constants.NpcActivityDist;
 
-    readonly GameMap _map;
-    readonly U7Object _avatar;
-    readonly List<U7Object?> _npcs;
     readonly ScheduleTable _table;
     readonly GameClock _clock;
-    readonly Dictionary<int, Brain> _brains = new();
+    readonly Dictionary<int, NpcBrain> _brains = new();
     readonly HashSet<int> _loggedUnknown = new();
-    readonly Random _rng = new();
     readonly double _stepInterval = U7Constants.StandardDelayMs / 1000.0;
 
+    public GameMap Map { get; }
+    public U7Object Avatar { get; }
+    public Random Rng { get; } = new();
     /// <summary>Party ids for follower spacing (Exult <c>Actor::follow</c>).</summary>
     public PartyManager? Party { get; set; }
     /// <summary>True while the avatar is walking; formation stepping drives followers then.</summary>
     public Func<bool>? AvatarMoving { get; set; }
     /// <summary>Exult <c>Actor::in_usecode_control</c>: the schedule waits while a script runs the NPC.</summary>
     public Func<U7Object, bool>? InUsecodeControl { get; set; }
+    /// <summary>Queues the NPC's usecode with the npc_proximity event (Exult runs it from a script).</summary>
+    public Action<U7Object>? ProximityUsecode { get; set; }
+    /// <summary>Exult <c>Actor::say</c>: a remark over the NPC's head.</summary>
+    public Action<U7Object, string>? Say { get; set; }
+    /// <summary>Exult <c>Actor::can_speak</c>.</summary>
+    public Func<U7Object, bool>? CanSpeak { get; set; }
+    /// <summary>The game window's size in tiles (Exult <c>get_win_tile_rect</c>), centred on the avatar.</summary>
+    public (int W, int H) ScreenTiles { get; set; } = (40, 25);
 
     /// <param name="restore">
     /// A saved game: NPCs keep the schedules and places they were saved with
@@ -38,24 +47,16 @@ public sealed class ScheduleRunner
     public ScheduleRunner(GameMap map, U7Object avatar, List<U7Object?> npcs,
         ScheduleTable table, GameClock clock, bool restore = false)
     {
-        _map = map;
-        _avatar = avatar;
-        _npcs = npcs;
+        Map = map;
+        Avatar = avatar;
         _table = table;
         _clock = clock;
         for (var i = 1; i < npcs.Count; i++)
         {
-            if (npcs[i] is not { Unused: false } npc || npc.IsDead)
+            if (npcs[i] is { Unused: false, IsDead: false } npc)
             {
-                continue;
+                _brains[i] = new NpcBrain(this, npc);
             }
-
-            _brains[i] = new Brain
-            {
-                Npc = npc,
-                Dest = new TileCoord(npc.Tx, npc.Ty, npc.Tz),
-                Center = new TileCoord(npc.Tx, npc.Ty, npc.Tz)
-            };
         }
 
         clock.SlotChanged += _ => ApplySlot(pathIfNearby: true);
@@ -66,6 +67,68 @@ public sealed class ScheduleRunner
         else
         {
             ApplySlot(pathIfNearby: false);
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::set_schedule_type</c>: the schedule object for a type.
+    /// Exult has none for stand; wait does nothing; combat is the combat
+    /// engine's.
+    /// </summary>
+    Schedule Create(NpcBrain b, int type)
+    {
+        switch (type)
+        {
+            case ScheduleType.Loiter:
+                return new LoiterSchedule(b, LoiterSchedule.DefaultDist, 12);
+            case ScheduleType.TendShop:
+                return new LoiterSchedule(b, 3, 8);
+            case ScheduleType.Wander:
+                return new WanderSchedule(b);
+            case ScheduleType.Patrol:
+                return new PatrolSchedule(b);
+            case ScheduleType.HorizPace:
+            case ScheduleType.VertPace:
+                return new PaceSchedule(b, type == ScheduleType.HorizPace);
+            case ScheduleType.Sleep:
+                return new SleepSchedule(b);
+            case ScheduleType.Sit:
+                return new SitSchedule(b);
+            case ScheduleType.EatAtInn:
+                return new EatAtInnSchedule(b);
+            case ScheduleType.Eat:
+                return new EatSchedule(b);
+            case ScheduleType.FollowAvatar:
+                return new FollowAvatarSchedule(b);
+            case ScheduleType.Stand:
+            case ScheduleType.Wait:
+            case ScheduleType.Combat:
+            case ScheduleType.DeskWork:
+            case ScheduleType.Waiter:
+            case ScheduleType.Talk:
+            case ScheduleType.Dance:
+            case ScheduleType.Farm:
+            case ScheduleType.Miner:
+            case ScheduleType.Hound:
+            case ScheduleType.Blacksmith:
+            case ScheduleType.Graze:
+            case ScheduleType.Bake:
+            case ScheduleType.Sew:
+            case ScheduleType.Shy:
+            case ScheduleType.Lab:
+            case ScheduleType.Thief:
+            case ScheduleType.Special:
+            case ScheduleType.KidGames:
+            case ScheduleType.Duel:
+            case ScheduleType.Preach:
+                return new IdleSchedule(b);
+            default:
+                if (_loggedUnknown.Add(type))
+                {
+                    GD.Print($"unknown schedule {type} npc {b.Npc.NpcNum}");
+                }
+
+                return new IdleSchedule(b);
         }
     }
 
@@ -83,6 +146,7 @@ public sealed class ScheduleRunner
             var npc = b.Npc;
             if (Party?.IsInParty(npc) == true || npc.ScheduleType is ScheduleType.FollowAvatar or ScheduleType.Wait)
             {
+                b.Schedule = Create(b, npc.ScheduleType);
                 b.WasNearby = true;
                 continue;
             }
@@ -164,8 +228,162 @@ public sealed class ScheduleRunner
 
         foreach (var b in _brains.Values)
         {
+            ProximityCheck(b, delta);
             Tick(b, delta);
         }
+    }
+
+    /// <summary>
+    /// Exult <c>Npc_proximity_handler</c>: while an NPC is on or near the
+    /// screen it is looked at every 4-12 s (0-4 s if hostile). A sleeper
+    /// within 6 tiles of the avatar, in plain view, wakes one time in three:
+    /// it gets up but stays in its sleep schedule, says something, and lies
+    /// down again 10 s later.
+    /// </summary>
+    void ProximityCheck(NpcBrain b, double delta)
+    {
+        var npc = b.Npc;
+        if (!b.OnScreen)
+        {
+            if (!npc.IsDead && OnScreen(npc))
+            {
+                // Exult Game_window::add_nearby_npcs: it came into view.
+                b.OnScreen = true;
+                b.ProximityTimer = ProximityDelay(npc, 0);
+            }
+
+            return;
+        }
+
+        b.ProximityTimer -= delta;
+        if (b.ProximityTimer > 0)
+        {
+            return;
+        }
+
+        if (!OnScreen(npc) || npc.IsDead)
+        {
+            b.OnScreen = false;
+            return;
+        }
+
+        var extra = 5;
+        if (b.Schedule is SleepSchedule sleep && Party?.IsInParty(npc) != true && !DontWake(npc) &&
+            Dist(npc) < 6 && IsStraightPath(npc, Avatar) && Rng.Next(3) == 0)
+        {
+            sleep.WakeUp();
+            if (CanSpeak?.Invoke(npc) ?? true)
+            {
+                Say?.Invoke(npc, TextMessages.Random(TextMessages.FirstAwakened, TextMessages.LastAwakened));
+            }
+
+            extra = 11; // And don't look again while up.
+        }
+
+        b.ProximityTimer = ProximityDelay(npc, extra);
+    }
+
+    /// <summary>Exult <c>Npc_proximity_handler::add</c>: the wait until the next look, in seconds.</summary>
+    double ProximityDelay(U7Object npc, int extraTicks)
+    {
+        var msecs = npc.Alignment >= Alignment.Evil ? Rng.Next(2000) : 2000 + Rng.Next(4000);
+        return (msecs * U7Constants.StandardDelayMs / 100 + extraTicks * U7Constants.StandardDelayMs) / 1000.0;
+    }
+
+    /// <summary>Exult: within the game window enlarged by 10 tiles.</summary>
+    bool OnScreen(U7Object npc)
+    {
+        var (w, h) = ScreenTiles;
+        var dx = U7Constants.TileDelta(Avatar.Tx - w / 2 - 10, npc.Tx);
+        var dy = U7Constants.TileDelta(Avatar.Ty - h / 2 - 10, npc.Ty);
+        return dx >= 0 && dx < w + 20 && dy >= 0 && dy < h + 20;
+    }
+
+    /// <summary>Exult <c>Bg_dont_wake</c>: ghosts (translucent shapes), Horace and Penumbra sleep on.</summary>
+    bool DontWake(U7Object npc) => Map.Catalog[npc.Shape].Translucent || npc.NpcNum is 141 or 150;
+
+    /// <summary>
+    /// Exult <c>Fast_pathfinder_client::is_straight_path</c> for two objects:
+    /// nothing solid on the straight line between their nearest edges.
+    /// </summary>
+    bool IsStraightPath(U7Object from, U7Object to)
+    {
+        var fromVol = Volume(from);
+        var toVol = Volume(to);
+        int x1 = from.Tx, y1 = from.Ty, z1 = from.Tz, x2 = to.Tx, y2 = to.Ty, z2 = to.Tz;
+        // Exult Get_closest_edge.
+        if (x2 < x1)
+        {
+            x1 = fromVol.X;
+        }
+        else
+        {
+            x2 = toVol.X;
+        }
+
+        if (y2 < y1)
+        {
+            y1 = fromVol.Y;
+        }
+        else
+        {
+            y2 = toVol.Y;
+        }
+
+        if (z2 < z1)
+        {
+            z2 += toVol.H - 1;
+        }
+
+        z1 += fromVol.H - 1;
+        if (ZombieSteps.Line(new TileCoord(x1, y1, z1), new TileCoord(x2, y2, z2)) is not { } line)
+        {
+            return false;
+        }
+
+        while (line.NextStep(out var t, out _))
+        {
+            if (!fromVol.Has(t) && !toVol.Has(t) && Map.Blocking.Test(t.Tx, t.Ty, t.Tz))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Exult <c>Game_object::get_block</c>: the object's footprint and height.</summary>
+    Block Volume(U7Object obj)
+    {
+        var info = Map.Catalog[obj.Shape];
+        var reflected = (obj.Frame & 32) != 0;
+        var w = Math.Max(1, reflected ? info.DimY : info.DimX);
+        var d = Math.Max(1, reflected ? info.DimX : info.DimY);
+        return new Block(obj.Tx - w + 1, obj.Ty - d + 1, obj.Tz, w, d, Math.Max(1, info.DimZ));
+    }
+
+    readonly record struct Block(int X, int Y, int Z, int W, int D, int H)
+    {
+        public bool Has(TileCoord t) =>
+            t.Tx >= X && t.Tx < X + W && t.Ty >= Y && t.Ty < Y + D && t.Tz >= Z && t.Tz < Z + H;
+    }
+
+    /// <summary>
+    /// Exult <c>Schedule::try_proximity_usecode</c>: one time in
+    /// <paramref name="odds"/>, run the NPC's usecode for being near (mostly
+    /// a remark over its head, Black Gate's 0x92E) and look again in 0.5-1.5 s.
+    /// </summary>
+    public bool TryProximityUsecode(NpcBrain b, int odds)
+    {
+        if (ProximityUsecode is null || Rng.Next(odds) != 0)
+        {
+            return false;
+        }
+
+        ProximityUsecode(b.Npc);
+        b.Npc.FrameTime = U7Constants.StandardDelayMs;
+        b.StepTimer = (500 + Rng.Next(1000)) / 1000.0;
+        return true;
     }
 
     void ApplySlot(bool pathIfNearby)
@@ -175,15 +393,16 @@ public sealed class ScheduleRunner
         {
             // Exult Game_window::schedule_npcs skips wait / follow_avatar so
             // companions (Iolo) stay with the avatar instead of Britain.
-            if (b.Npc.ScheduleType is ScheduleType.Wait or ScheduleType.FollowAvatar
-                or ScheduleType.Combat)
+            if (b.Npc.ScheduleType is ScheduleType.Wait or ScheduleType.FollowAvatar or ScheduleType.Combat)
             {
+                b.Schedule ??= Create(b, b.Npc.ScheduleType);
                 continue;
             }
 
             var entry = _table.ForSlot(b.Npc.NpcNum, slot);
             if (entry is null)
             {
+                b.Schedule ??= Create(b, b.Npc.ScheduleType);
                 continue;
             }
 
@@ -193,7 +412,7 @@ public sealed class ScheduleRunner
             var same = b.Npc.ScheduleType == type &&
                        b.Dest.Tx == dest.Tx && b.Dest.Ty == dest.Ty && b.Dest.Tz == dest.Tz &&
                        b.Npc.ScheduleType != ScheduleType.WalkToSchedule;
-            if (same && nearby)
+            if (same && nearby && b.Schedule is not null)
             {
                 continue;
             }
@@ -222,13 +441,9 @@ public sealed class ScheduleRunner
             return;
         }
 
-        _brains[npc.NpcNum] = new Brain
-        {
-            Npc = npc,
-            Dest = new TileCoord(npc.Tx, npc.Ty, npc.Tz),
-            Center = new TileCoord(npc.Tx, npc.Ty, npc.Tz),
-            WasNearby = true
-        };
+        var b = new NpcBrain(this, npc) { WasNearby = true };
+        b.Schedule = Create(b, npc.ScheduleType);
+        _brains[npc.NpcNum] = b;
     }
 
     /// <summary>Move an NPC in place (teleport), dropping any path.</summary>
@@ -240,11 +455,11 @@ public sealed class ScheduleRunner
             return;
         }
 
-        _map.MoveObject(npc, dest.Tx, dest.Ty, dest.Tz);
+        Map.MoveObject(npc, dest.Tx, dest.Ty, dest.Tz);
         ActorWalker.Stand(npc, 4);
     }
 
-    void Tick(Brain b, double delta)
+    void Tick(NpcBrain b, double delta)
     {
         if (b.Npc.IsDead || b.Npc.Removed)
         {
@@ -271,8 +486,7 @@ public sealed class ScheduleRunner
         if (!b.WasNearby)
         {
             b.WasNearby = true;
-            var here = new TileCoord(b.Npc.Tx, b.Npc.Ty, b.Npc.Tz);
-            if (here.Distance2d(b.Dest) > 3)
+            if (new TileCoord(b.Npc.Tx, b.Npc.Ty, b.Npc.Tz).Distance2d(b.Dest) > 3)
             {
                 BeginWalkTo(b, b.Npc.PendingSchedule >= 0 ? b.Npc.PendingSchedule : b.Npc.ScheduleType, b.Dest);
             }
@@ -288,292 +502,67 @@ public sealed class ScheduleRunner
         if (InUsecodeControl?.Invoke(b.Npc) ?? false)
         {
             // Exult Actor::handle_event: keep trying every standard delay.
-            b.StepTimer = U7Constants.StandardDelayMs / 1000.0;
+            b.StepTimer = _stepInterval;
             return;
         }
 
-        if (b.Walk is not null && b.Npc.ScheduleType == ScheduleType.FollowAvatar && (AvatarMoving?.Invoke() ?? false))
+        if (b.CurrentAction is not null && b.Npc.ScheduleType == ScheduleType.FollowAvatar &&
+            (AvatarMoving?.Invoke() ?? false))
         {
             // The avatar walks again: formation stepping takes over.
-            StopWalk(b);
+            b.StopAction();
         }
 
-        if (b.Walk is { } walk)
+        if (b.CurrentAction is { } action)
         {
             // Exult Npc_actor::handle_event: the action's delay, then now_what once it is done.
-            var d = walk.HandleEvent(b.Npc);
+            var d = action.HandleEvent(b.Npc);
             if (d != 0)
             {
                 b.StepTimer = d / 1000.0;
                 return;
             }
 
-            b.Walk = null;
+            b.CurrentAction = null;
             b.Npc.FrameTime = 0;
             b.StepTimer = _stepInterval;
-            var done = b.WalkDone;
-            b.WalkDone = null;
-            done?.Invoke(walk);
+            var done = b.ActionDone;
+            b.ActionDone = null;
+            done?.Invoke(action);
             return;
         }
 
         b.StepTimer = _stepInterval;
-        NowWhat(b);
+        (b.Schedule ??= Create(b, b.Npc.ScheduleType)).NowWhat();
     }
 
     /// <summary>
-    /// Exult <c>Actor::start(speed, delay)</c> with a walk as the action: it
-    /// steps every <paramref name="speedMs"/> once <paramref name="delayMs"/>
-    /// has passed; <paramref name="done"/> runs when it ends.
+    /// Exult <c>Actor::set_schedule_and_loc</c>: walk to the next schedule's
+    /// spot first (Exult <c>Walk_to_schedule</c>), setting off after up to 5 s.
     /// </summary>
-    void StartWalk(Brain b, PathWalk? walk, int speedMs, int delayMs, Action<PathWalk>? done = null)
+    void BeginWalkTo(NpcBrain b, int pending, TileCoord dest)
     {
-        b.Walk = walk;
-        b.WalkDone = done;
-        b.Npc.FrameTime = walk is null ? 0 : speedMs;
-        b.StepTimer = delayMs / 1000.0;
-    }
-
-    void NowWhat(Brain b)
-    {
-        var type = b.Npc.ScheduleType;
-        switch (type)
-        {
-            case ScheduleType.WalkToSchedule:
-                WalkToSchedule(b);
-                break;
-            case ScheduleType.Loiter:
-            {
-                // Exult Loiter_schedule::now_what: amble somewhere within 12 tiles, slowly.
-                var tx = b.Center.Tx - LoiterDist + _rng.Next(2 * LoiterDist);
-                var ty = b.Center.Ty - LoiterDist + _rng.Next(2 * LoiterDist);
-                StartWalk(b, PathWalk.Line(_map, b.Npc, new TileCoord(tx, ty, b.Center.Tz).Wrapped()),
-                    2 * U7Constants.StandardDelayMs, _rng.Next(2000));
-                break;
-            }
-            case ScheduleType.Wander:
-                Wander(b);
-                break;
-            case ScheduleType.Patrol:
-            {
-                // (Exult patrols between path eggs; not ported: wander near the spot.)
-                var tx = b.Center.Tx - 4 + _rng.Next(9);
-                var ty = b.Center.Ty - 4 + _rng.Next(9);
-                StartWalk(b, PathWalk.Astar(_map, b.Npc, new TileCoord(tx, ty, b.Center.Tz).Wrapped()),
-                    U7Constants.StandardDelayMs, _rng.Next(2000));
-                break;
-            }
-            case ScheduleType.HorizPace:
-                Pace(b, horiz: true);
-                break;
-            case ScheduleType.VertPace:
-                Pace(b, horiz: false);
-                break;
-            case ScheduleType.Sleep:
-                if (AtDest(b, 3) || b.Failures >= 2)
-                {
-                    if (!AtDest(b, 3))
-                    {
-                        Teleport(b, b.Dest);
-                    }
-
-                    LieInBed(b);
-                    b.Pause = 2;
-                }
-                else
-                {
-                    // Exult Sleep_schedule walks to the bed at 200 ms a step.
-                    var walk = PathWalk.Astar(_map, b.Npc, b.Dest, dist: 1);
-                    b.Failures = walk is null ? b.Failures + 1 : 0;
-                    StartWalk(b, walk, 200, 0);
-                }
-
-                break;
-            case ScheduleType.Sit:
-            case ScheduleType.EatAtInn:
-            case ScheduleType.Stand:
-            case ScheduleType.Wait:
-            case ScheduleType.TendShop:
-            case ScheduleType.Eat:
-            case ScheduleType.DeskWork:
-            case ScheduleType.Waiter:
-            case ScheduleType.Talk:
-            case ScheduleType.Dance:
-            case ScheduleType.Farm:
-            case ScheduleType.Miner:
-            case ScheduleType.Hound:
-            case ScheduleType.Blacksmith:
-            case ScheduleType.Graze:
-            case ScheduleType.Bake:
-            case ScheduleType.Sew:
-            case ScheduleType.Shy:
-            case ScheduleType.Lab:
-            case ScheduleType.Thief:
-            case ScheduleType.Special:
-            case ScheduleType.KidGames:
-            case ScheduleType.Duel:
-            case ScheduleType.Preach:
-            case ScheduleType.Combat:
-                break;
-            case ScheduleType.FollowAvatar:
-                FollowAvatar(b);
-                break;
-            default:
-                if (_loggedUnknown.Add(type))
-                {
-                    GD.Print($"unknown schedule {type} npc {b.Npc.NpcNum}");
-                }
-
-                ActorWalker.Stand(b.Npc, 4);
-                b.Pause = 2;
-                break;
-        }
-    }
-
-    /// <summary>
-    /// Exult <c>Follow_avatar_schedule::now_what</c> + <c>Actor::follow</c>.
-    /// While the avatar walks, <see cref="PartyManager"/> steps followers in
-    /// formation and this does nothing. Once the avatar stops, a member more
-    /// than a few tiles away paths to a spot beside the avatar; one far off
-    /// screen is brought over (Exult <c>approach_another</c>).
-    /// </summary>
-    void FollowAvatar(Brain b)
-    {
-        var npc = b.Npc;
-        if (npc.IsDead || npc.GetFlag(ObjFlag.Asleep) || npc.GetFlag(ObjFlag.Paralyzed) ||
-            ObjFlag.DontMoveMode(_avatar))
-        {
-            return;
-        }
-
-        if (AvatarMoving?.Invoke() ?? false)
-        {
-            return;
-        }
-
-        var dist = Dist(npc);
-        if (dist <= 6)
-        {
-            if (npc.WalkFrameIndex != 0)
-            {
-                ActorWalker.Stand(npc, FrameFacing(npc.Frame));
-            }
-
-            return;
-        }
-
-        if (dist > 40)
-        {
-            var spot = _map.FindSpot(_avatar.Tx, _avatar.Ty, _avatar.Tz, 8);
-            if (spot is { } t)
-            {
-                Teleport(b, t);
-            }
-
-            return;
-        }
-
-        var id = Math.Max(0, Party?.PartyId(npc) ?? 0);
-        var goal = new TileCoord(
-            U7Constants.WrapTile(_avatar.Tx + PartyManager.XOffs[id % PartyManager.XOffs.Length] + 1 - _rng.Next(3)),
-            U7Constants.WrapTile(_avatar.Ty + PartyManager.YOffs[id % PartyManager.YOffs.Length] + 1 - _rng.Next(3)),
-            _avatar.Tz);
-        b.Dest = goal;
-        // Exult Actor::follow: with the leader standing, catch up at 100 ms a step.
-        StartWalk(b, PathWalk.Astar(_map, npc, goal, dist: 1) ?? PathWalk.Line(_map, npc, goal), FollowSpeed, 0,
-            _ => ActorWalker.Stand(npc, FrameFacing(npc.Frame)));
-    }
-
-    /// <summary>Exult <c>Actor::follow</c>: a stopped leader is caught up with at 100 ms a step.</summary>
-    const int FollowSpeed = 100;
-    /// <summary>Exult <c>Loiter_schedule</c>'s default distance.</summary>
-    const int LoiterDist = 12;
-    /// <summary>Exult <c>Wander_schedule</c>: how far from the centre, and how far one leg goes.</summary>
-    const int WanderDist = 128;
-    const int WanderLeg = 32;
-
-    void BeginWalkTo(Brain b, int pending, TileCoord dest)
-    {
+        b.Schedule?.Ending(ScheduleType.WalkToSchedule);
+        b.StopAction();
         b.Dest = dest;
         b.Npc.PendingSchedule = pending;
         b.Npc.ScheduleType = ScheduleType.WalkToSchedule;
-        b.Failures = 0;
-        b.Legs = 0;
-        // Exult Walk_to_schedule: a schedule change sets off after up to 5 s.
-        b.FirstDelay = _rng.Next(5000);
-        if (AtDest(b, 3))
+        b.Schedule = new WalkToSchedule(b, Rng.Next(5000));
+        if (new TileCoord(b.Npc.Tx, b.Npc.Ty, b.Npc.Tz).Distance2d(dest) <= 3)
         {
             BeginType(b, pending, dest, alreadyThere: true);
         }
     }
 
     /// <summary>
-    /// Exult <c>Walk_to_schedule::now_what</c>: within 3 tiles the new
-    /// schedule starts; after 40 legs or 2 failed path searches in a row the
-    /// NPC is put there; otherwise another A* leg at 200 ms a step, or a
-    /// straight walk when no path is found. (Exult's off-screen legs are not
-    /// ported: NPCs far from the avatar are placed at their spot.)
+    /// Exult <c>Actor::set_schedule_type</c>: end the old schedule and start
+    /// the new one at <paramref name="dest"/>, walking there first unless
+    /// <paramref name="alreadyThere"/>.
     /// </summary>
-    void WalkToSchedule(Brain b)
+    public void BeginType(NpcBrain b, int type, TileCoord dest, bool alreadyThere)
     {
-        var next = b.Npc.PendingSchedule >= 0 ? b.Npc.PendingSchedule : ScheduleType.Stand;
-        if (AtDest(b, 3))
-        {
-            BeginType(b, next, b.Dest, alreadyThere: true);
-            return;
-        }
-
-        if (b.Legs >= 40 || b.Failures >= 2)
-        {
-            Teleport(b, b.Dest);
-            BeginType(b, next, b.Dest, alreadyThere: true);
-            return;
-        }
-
-        if (PathWalk.Astar(_map, b.Npc, b.Dest) is { } walk)
-        {
-            b.Legs++;
-            b.Failures = 0;
-            StartWalk(b, walk, U7Constants.StandardDelayMs, b.FirstDelay + _rng.Next(1000));
-        }
-        else
-        {
-            b.Failures++;
-            StartWalk(b, PathWalk.Line(_map, b.Npc, b.Dest), U7Constants.StandardDelayMs, 1000);
-        }
-
-        b.FirstDelay = 0;
-    }
-
-    /// <summary>
-    /// Exult <c>Wander_schedule::now_what</c>: an A* walk to a free spot up to
-    /// 32 tiles off, staying within 128 of the centre; on failure, try again
-    /// within 3 s.
-    /// </summary>
-    void Wander(Brain b)
-    {
-        var npc = b.Npc;
-        var tx = npc.Tx - WanderLeg + _rng.Next(2 * WanderLeg);
-        var ty = npc.Ty - WanderLeg + _rng.Next(2 * WanderLeg);
-        tx = b.Center.Tx + Math.Clamp(U7Constants.TileDelta(b.Center.Tx, tx), -WanderDist, WanderDist);
-        ty = b.Center.Ty + Math.Clamp(U7Constants.TileDelta(b.Center.Ty, ty), -WanderDist, WanderDist);
-        var walk = _map.FindSpot(tx, ty, npc.Tz, 4) is { } spot ? PathWalk.Astar(_map, npc, spot) : null;
-        if (walk is null)
-        {
-            b.StepTimer = _rng.Next(3000) / 1000.0;
-            return;
-        }
-
-        StartWalk(b, walk, U7Constants.StandardDelayMs, _rng.Next(2000));
-    }
-
-    void BeginType(Brain b, int type, TileCoord dest, bool alreadyThere)
-    {
-        if (b.Bed is not null && type is not (ScheduleType.Sleep or ScheduleType.Wait))
-        {
-            EndSleep(b, type);
-        }
-
+        b.Schedule?.Ending(type);
+        b.Schedule = null;
         b.Dest = dest;
         b.Center = dest;
         b.Npc.PendingSchedule = -1;
@@ -581,216 +570,26 @@ public sealed class ScheduleRunner
         b.Npc.ScheduleDestTx = dest.Tx;
         b.Npc.ScheduleDestTy = dest.Ty;
         b.Npc.ScheduleDestTz = dest.Tz;
-        StopWalk(b);
-        b.Failures = 0;
-        b.PaceDir = 1;
-        if (!alreadyThere && DistFrom(b.Npc, dest) > 3)
+        b.StopAction();
+        if (!alreadyThere && new TileCoord(b.Npc.Tx, b.Npc.Ty, b.Npc.Tz).Distance2d(dest) > 3)
         {
             BeginWalkTo(b, type, dest);
             return;
         }
 
-        switch (type)
-        {
-            case ScheduleType.Sleep:
-                LieInBed(b);
-                break;
-            case ScheduleType.HorizPace:
-            case ScheduleType.VertPace:
-                ActorWalker.Stand(b.Npc, type == ScheduleType.HorizPace ? 2 : 4);
-                break;
-            default:
-                ActorWalker.Stand(b.Npc, FrameFacing(b.Npc.Frame));
-                break;
-        }
+        b.Schedule = Create(b, type);
+        b.Schedule.Begin();
     }
 
-    void Pace(Brain b, bool horiz)
+    /// <summary>Put the NPC at the spot, standing, with its action dropped.</summary>
+    public void Teleport(NpcBrain b, TileCoord dest)
     {
-        var origin = b.Center;
-        var pos = horiz ? b.Npc.Tx : b.Npc.Ty;
-        var originV = horiz ? origin.Tx : origin.Ty;
-        if (Math.Abs(U7Constants.TileDelta(originV, pos)) >= 4)
-        {
-            b.PaceDir = -Math.Sign(U7Constants.TileDelta(originV, pos));
-            if (b.PaceDir == 0)
-            {
-                b.PaceDir = 1;
-            }
-        }
-
-        var dx = horiz ? b.PaceDir : 0;
-        var dy = horiz ? 0 : b.PaceDir;
-        if (!ActorWalker.TryStep(_map, b.Npc, dx, dy))
-        {
-            b.PaceDir = -b.PaceDir;
-        }
-    }
-
-    /// <summary>Drop the NPC's walk (Exult <c>set_action(nullptr)</c>): not moving any more.</summary>
-    static void StopWalk(Brain b)
-    {
-        b.Walk = null;
-        b.WalkDone = null;
-        b.Npc.FrameTime = 0;
-    }
-
-    // Exult Sleep_schedule: BG bedspread frames 3..16; even = spread out.
-    const int Spread0 = 3;
-    const int Spread1 = 16;
-    static readonly int[] BedShapes = [696, 1011];
-
-    /// <summary>
-    /// Exult <c>Sleep_schedule::now_what</c> state 1: pick the nearest free bed,
-    /// unmake it, and put the NPC on top of it (bed lift + bed height) in the
-    /// sleep frame facing west for EW beds, north for NS beds. With no bed
-    /// nearby the NPC just lies down where it is.
-    /// </summary>
-    void LieInBed(Brain b)
-    {
-        var npc = b.Npc;
-        if (b.Bed is { Removed: false } && (npc.Frame & 0xf) == 13)
-        {
-            return; // already in bed
-        }
-
-        var here = new TileCoord(npc.Tx, npc.Ty, npc.Tz);
-        U7Object? bed = null;
-        var best = int.MaxValue;
-        foreach (var shape in BedShapes)
-        {
-            foreach (var cand in _map.FindNearby(here, shape, 24))
-            {
-                var d = here.Distance2d(new TileCoord(cand.Tx, cand.Ty, cand.Tz));
-                if (d < best && !IsBedOccupied(cand, npc))
-                {
-                    best = d;
-                    bed = cand;
-                }
-            }
-        }
-
-        if (bed is null)
-        {
-            ActorWalker.Sleep(npc, _map.Catalog);
-            return;
-        }
-
-        // Prefer the sheet object on the same floor if the bed is a stack.
-        var floor = bed.Tz / 5;
-        foreach (var top in _map.FindNearby(new TileCoord(bed.Tx, bed.Ty, bed.Tz), bed.Shape, 1))
-        {
-            if (top.Frame >= Spread0 && top.Frame <= Spread1 && top.Tz / 5 == floor)
-            {
-                bed = top;
-                break;
-            }
-        }
-
-        b.Bed = bed;
-        b.FloorLoc = new TileCoord(npc.Tx, npc.Ty, npc.Tz - npc.Tz % 5);
-        var bedframe = bed.Frame;
-        if (bedframe >= Spread0 && bedframe < Spread1 && bedframe % 2 == 1)
-        {
-            bed.Frame = ++bedframe; // unmake the bed
-        }
-
-        var bedspread = bedframe >= Spread0 && bedframe % 2 == 0;
-        var height = _map.Catalog[npc.Shape].DimZ;
-        var delta = height < 4 ? height - 4 : 0;
-        var bedHeight = _map.Catalog[bed.Shape].DimZ;
-        _map.MoveObject(npc, bed.Tx + delta, bed.Ty + delta, bed.Tz + (bedspread ? 0 : bedHeight));
-        var band = bed.Shape == 696 ? 32 : 0; // west for EW beds, north for NS
-        var count = _map.Catalog[npc.Shape].FrameCount;
-        npc.Frame = 13 < count ? 13 + band : band;
-        npc.WalkFrameIndex = 0;
-    }
-
-    /// <summary>Exult <c>Sleep_schedule::ending</c>: make the bed and step back onto the floor.</summary>
-    void EndSleep(Brain b, int newType)
-    {
-        var npc = b.Npc;
-        var bed = b.Bed!;
-        b.Bed = null;
-        if (bed.Removed || (npc.Frame & 0xf) != 13 ||
-            new TileCoord(npc.Tx, npc.Ty, npc.Tz).Distance2d(new TileCoord(bed.Tx, bed.Ty, bed.Tz)) >= 8)
-        {
-            return;
-        }
-
-        if (newType != ScheduleType.Combat && bed.Frame >= Spread0 && bed.Frame <= Spread1 &&
-            bed.Frame % 2 == 0 && !IsBedOccupied(bed, npc))
-        {
-            bed.Frame--; // make the bed
-        }
-
-        var spot = _map.FindSpot(b.FloorLoc.Tx, b.FloorLoc.Ty, b.FloorLoc.Tz, 6);
-        var pos = spot ?? b.FloorLoc;
-        _map.MoveObject(npc, pos.Tx, pos.Ty, pos.Tz);
-        ActorWalker.Stand(npc, 4);
-    }
-
-    /// <summary>Exult <c>Sleep_schedule::is_bed_occupied</c>.</summary>
-    bool IsBedOccupied(U7Object bed, U7Object npc)
-    {
-        var floor = bed.Tz / 5;
-        foreach (var other in _map.FindNearby(new TileCoord(bed.Tx, bed.Ty, bed.Tz), U7Constants.AnyShape, 2, 8))
-        {
-            if (other == npc || !other.IsActor)
-            {
-                continue;
-            }
-
-            if (bed.Occupies(other.Tx, other.Ty) && other.Tz / 5 == floor)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    void Teleport(Brain b, TileCoord dest)
-    {
-        _map.MoveObject(b.Npc, dest.Tx, dest.Ty, dest.Tz);
-        StopWalk(b);
+        Map.MoveObject(b.Npc, dest.Tx, dest.Ty, dest.Tz);
+        b.StopAction();
         ActorWalker.Stand(b.Npc, 4);
     }
 
-    bool AtDest(Brain b, int dist) =>
-        new TileCoord(b.Npc.Tx, b.Npc.Ty, b.Npc.Tz).Distance2d(b.Dest) <= dist;
-
-    int Dist(U7Object npc) =>
-        new TileCoord(npc.Tx, npc.Ty, npc.Tz).Distance2d(new TileCoord(_avatar.Tx, _avatar.Ty, _avatar.Tz));
-
-    static int DistFrom(U7Object npc, TileCoord dest) =>
-        new TileCoord(npc.Tx, npc.Ty, npc.Tz).Distance2d(dest);
-
-    static int FrameFacing(int frame) => ((frame >> 4) & 3) switch
-    {
-        0 => 0,
-        1 => 4,
-        2 => 6,
-        _ => 2
-    };
-
-    sealed class Brain
-    {
-        public U7Object Npc = null!;
-        public TileCoord Dest;
-        public TileCoord Center;
-        /// <summary>Exult <c>Actor::action</c>: the walk under way.</summary>
-        public PathWalk? Walk;
-        public Action<PathWalk>? WalkDone;
-        public int Failures;
-        /// <summary>Exult <c>Walk_to_schedule</c>'s legs walked and its delay before the first.</summary>
-        public int Legs;
-        public int FirstDelay;
-        public int PaceDir = 1;
-        public double StepTimer;
-        public double Pause;
-        public bool WasNearby;
-        public U7Object? Bed;
-        public TileCoord FloorLoc;
-    }
+    /// <summary>Tiles between the NPC and the avatar.</summary>
+    public int Dist(U7Object npc) =>
+        new TileCoord(npc.Tx, npc.Ty, npc.Tz).Distance2d(new TileCoord(Avatar.Tx, Avatar.Ty, Avatar.Tz));
 }

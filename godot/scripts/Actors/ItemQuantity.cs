@@ -270,22 +270,7 @@ public sealed class ItemQuantity
     }
 
     /// <summary>Exult <c>Game_map::create_ireg_object</c>: a new item that is not in the world yet.</summary>
-    public U7Object NewItem(int shape, int frame)
-    {
-        var info = _catalog[shape];
-        var reflected = (frame & 32) != 0;
-        return new U7Object
-        {
-            Shape = shape,
-            Frame = frame,
-            Kind = ObjectKind.Ireg,
-            DimX = reflected ? info.DimY : info.DimX,
-            DimY = reflected ? info.DimX : info.DimY,
-            DimZ = info.DimZ,
-            Solid = info.Solid,
-            Removed = true
-        };
-    }
+    public U7Object NewItem(int shape, int frame) => _map.CreateIregObject(shape, frame);
 
     /// <summary>Exult <c>Container_game_object::add</c> / <c>Actor::add</c> (no combining).</summary>
     public bool AddTo(U7Object cont, U7Object obj)

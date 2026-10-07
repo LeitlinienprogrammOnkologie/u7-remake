@@ -272,6 +272,20 @@ public partial class U7Game : Node2D
                 return true;
             };
             PathWalk.IsSentient = _combat.IsSentient;
+            _schedules.ProximityUsecode = npc =>
+            {
+                // Exult try_proximity_usecode: dont_halt, usecode2 <fun> npc_proximity, as a script.
+                var fun = npc.GetUsecode() >= 0 ? npc.GetUsecode() : UsecodeMachine.GetShapeFun(npc.Shape);
+                var code = UsecodeValue.FromArray(4);
+                code.PutElem(0, UsecodeValue.FromInt(0x23));
+                code.PutElem(1, UsecodeValue.FromInt(0x80));
+                code.PutElem(2, UsecodeValue.FromInt(fun));
+                code.PutElem(3, UsecodeValue.FromInt((int)UsecodeEvent.NpcProximity));
+                _usecode.StartScript(npc, code, 0);
+            };
+            _schedules.Say = _usecode.Bark;
+            SitAction.Say = _usecode.Bark;
+            _schedules.CanSpeak = _combat.CanSpeak;
             _schedules.InUsecodeControl = _usecode.InUsecodeControl;
             _conversation.Machine = _usecode;
             _gumpView.ShownBook = () => _usecode is { Wait: UsecodeWait.BookPage } vm ? vm.Book : null;
@@ -388,7 +402,9 @@ public partial class U7Game : Node2D
 
         var dontMove = ObjFlag.DontMoveMode(_avatar.Avatar);
         var canWalk = !inUsecode && !gumpBusy && !_avatar.Avatar.IsDead && !dontMove;
-        Pathfinder.ScreenTilesWide = Math.Max(1, (int)(GetViewport().GetVisibleRect().Size.X / _zoom / U7Constants.TileSize));
+        var viewTiles = GetViewport().GetVisibleRect().Size / _zoom / U7Constants.TileSize;
+        Pathfinder.ScreenTilesWide = Math.Max(1, (int)viewTiles.X);
+        _schedules.ScreenTiles = (Math.Max(1, (int)viewTiles.X), Math.Max(1, (int)viewTiles.Y));
         if (canWalk && !_suppressWalk && Input.IsMouseButtonPressed(MouseButton.Left))
         {
             var world = _camera.GetGlobalMousePosition();

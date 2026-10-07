@@ -137,7 +137,7 @@ public sealed class ZombieSteps : PathSteps
 /// The caller calls <see cref="HandleEvent"/> again after the delay it
 /// returns, until it returns 0.
 /// </summary>
-public sealed class PathWalk
+public sealed class PathWalk : IActorAction
 {
     /// <summary>Runs a door's usecode as a double-click would; false if usecode cannot run now.</summary>
     public static Func<U7Object, bool>? ActivateDoor { get; set; }
@@ -151,7 +151,7 @@ public sealed class PathWalk
     int _speed;
     int _blocked;
     TileCoord _blockedTile;
-    ActionSequence? _subseq;
+    IActorAction? _subseq;
     U7Object? _door;
     bool _handlingDoor;
     bool _doorSequenceComplete;
@@ -343,74 +343,8 @@ public sealed class PathWalk
         // (Exult's find_spot here has no effect: its result is discarded.)
         var past = new TileCoord(U7Constants.WrapTile(px), U7Constants.WrapTile(py), actor.Tz);
         _doorSequenceComplete = false;
-        _subseq = ActionSequence.WalkThenFace(_map, actor, past, dir);
+        _subseq = SequenceAction.WalkThen(_map, actor, past,
+            new FramesAction([ActorWalker.DirFrame(dir, 0)], 100));
         return true;
-    }
-}
-
-/// <summary>
-/// Exult <c>create_action_sequence</c> with <c>Sequence_actor_action</c>:
-/// walk to a spot (teleporting there if no path is found or the walk gives
-/// up), then face a direction.
-/// </summary>
-public sealed class ActionSequence
-{
-    readonly List<Func<U7Object, int>> _actions = new();
-    int _index;
-
-    public static ActionSequence WalkThenFace(GameMap map, U7Object actor, TileCoord dest, int dir)
-    {
-        var seq = new ActionSequence();
-        if (PathWalk.Astar(map, actor, dest) is { } walk)
-        {
-            seq._actions.Add(walk.HandleEvent);
-        }
-
-        var moved = false;
-        int Move(U7Object a)
-        {
-            // Exult Move_actor_action: zip there if not already.
-            if (moved || (a.Tx == dest.Tx && a.Ty == dest.Ty && a.Tz == dest.Tz))
-            {
-                return 0;
-            }
-
-            map.MoveObject(a, dest.Tx, dest.Ty, dest.Tz);
-            moved = true;
-            return 100;
-        }
-
-        seq._actions.Add(Move);
-        var faced = false;
-        seq._actions.Add(a =>
-        {
-            // Exult Frames_actor_action: one standing frame, 100 ms.
-            if (faced)
-            {
-                return 0;
-            }
-
-            ActorWalker.Stand(a, dir);
-            faced = true;
-            return 100;
-        });
-        return seq;
-    }
-
-    /// <summary>Exult <c>Sequence_actor_action::handle_event</c> with speed 0: a finished action runs the next at once.</summary>
-    public int HandleEvent(U7Object actor)
-    {
-        while (_index < _actions.Count)
-        {
-            var delay = _actions[_index](actor);
-            if (delay != 0)
-            {
-                return delay;
-            }
-
-            _index++;
-        }
-
-        return 0;
     }
 }

@@ -14,7 +14,7 @@ Last update: 2026-10-07.
 | Gumps (inventory, containers, stats) | Done (BG paper doll, containers, weight/volume/stacks; no SI PAPERDOL.VGA / spellbook / save) |
 | NPCs from `INITGAME.DAT` `npc.dat` | Done (291 used of 356; unused skipped) |
 | Game clock + dusk/night modulate | Done (RGBA grade, not 8-bit palettes) |
-| Schedules (`assets/data/schedules.csv`) | Done (core types; rest stand-at-dest) |
+| Schedules (`assets/data/schedules.csv`) | Partly (sleep, loiter, tend shop, wander, pace, sit, eat, eat at inn, walk-to, follow; desk, waiter, crafts, ... stand) |
 | Eggs | Done (teleport, usecode, jukebox, button, monster) |
 | Combat | Done (melee, ranged, bodies, avatar death; no explosions / arrest) |
 | Save / load | Done (quick slot, Exult GAMEDAT layout with timers, party order, restored schedules; no zip saves) |
@@ -183,20 +183,19 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - Missile / weather / sfx / voice eggs
 - Explosions, homing missiles, attacks on tiles, blood, arrest
 - Party: dead-party list, party items intrinsics, sleeping/paralysed members, attack modes other than nearest
-- Full schedule classes (waiter, smith, farm, …) — stubbed as stand
+- Schedule classes not ported yet (they stand): desk work, waiter, duel, kid games, farm, miner, preach, dance, blacksmith, thief, sew, bake, lab, hound, talk, shy, graze; patrol between path eggs; street maintenance (lamps, shutters); `empty_hands` / `ready_best_weapon` on a schedule change
 - Hunger, poison, barges, weather, dungeon lights
 - True 8-bit palette cycling (world PNGs are day-baked RGBA)
 - Intro / endgame, SFX, speech playback, music on non-Windows
 - SI paperdolls (`PAPERDOL.VGA`), spellbook, save/load gumps
 - Save: spellbook/virtue-stone bytes, Exult zip saves
 - Many BG intrinsics still log `stub UI_*` and return 0
-- Proximity usecode (`npc_proximity`) not on a timer
 - Signs (`display_runes`) show in the conversation panel, not Exult's `Sign_gump`
 - Walking: actors don't block one another (Exult's `move_aside` / `swap_positions`), Exult's speed cursor arrows, walking with the right button, `Walk_to_schedule`'s off-screen legs and dormant NPCs, the Onecoord / Offscreen / Fast / Monster pathfinder clients (combat still approaches with a greedy step), `Approach_actor_action` and `If_else_path_actor_action` (`path_run_usecode`)
 
 ## Next milestone
 
-Remaining BG intrinsics, then `npc_proximity` timer and full schedule classes. Intro, barges and arrest can wait.
+Remaining BG intrinsics and full schedule classes. Intro, barges and arrest can wait.
 
 `python scripts/usecode_stub_report.py` ranks the stubbed intrinsics by static reachability (Trinsic NPCs by default, `--npcs` for others, plus all of USECODE). In game, every stub hit is counted and written to `stub_report.txt` (repo root, untracked) on exit. Nothing reachable from the Trinsic NPCs is stubbed any more; 48 intrinsics remain game-wide (top: `sprite_effect`, `flash_mouse`, `set_to_attack`, `is_not_blocked`, `is_readied`).
 
@@ -237,3 +236,15 @@ Remaining BG intrinsics, then `npc_proximity` timer and full schedule classes. I
 - Walks follow Exult `Path_walking_actor_action` (`Actors/PathWalk`): one step per call at the walker's frame time; a blocked step stops the walker and is retried after 0.1-0.6 s up to 3 more times; a closed, unlocked door in the way is opened through its usecode (quality set to 0, as Exult does), walked past and closed behind (Exult's walker is stopped by then, so it hops the last tile past the door). Straight walks (`Zombie`) and A* walks share it. Walking frames follow Exult: the avatar cycles 1,2,1,2 and NPCs 1,0,2,0, diagonal steps use the east/west frames.
 - Speeds are Exult's: milliseconds per step, with no run animation. The avatar: by the cursor's distance in a square around it (`Mouse::set_speed_cursor`) slow 400, medium 200, fast 100; in combat 266, with a hostile nearby no fast; keys fast, Shift medium (`Game/WalkSpeed`). Holding the left button on open ground or a key steers a straight walk 8 tiles ahead in that direction, sidestepping a blocked direction (`start_actor_alt`); a quick click walks an A* path to the tile (`start_actor_along_path`, Exult's double right-click); letting go stops. Idle for 2 s the avatar stands. NPCs: walking to the next schedule spot 200 ms after up to 5 s (A* legs, a straight walk when no path, placed there after 2 failures or 40 legs), loiter 400 ms straight walks within 12 tiles, wander 200 ms A* legs of up to 32 tiles, catching up with the party 100 ms. Formation followers step with the avatar.
 - Agent console: `walk` uses the A* walk, `steer <dir> <sec> [ms]` holds a direction, `tile` lists the blocked lifts and where the avatar would stand.
+
+### NPC proximity (current)
+
+- Exult runs an NPC's "near" usecode (event 0, `npc_proximity`) from its schedule (`Schedule::try_proximity_usecode`): queued as a no-halt script (`usecode2 <npc function> 0`), after which the NPC looks again in 0.5-1.5 s. Black Gate's NPC functions mostly call 0x92E, which picks a remark for the schedule ("Looks like rain...", "Try the wine.", Fellowship slogans, "Tag! Thou art it!") and barks it. Loitering NPCs do this one time in 12 (verified: Ellen in Trinsic); tend shop (1 in 8), dance, hound, sew and bake will once those schedules are ported.
+- Exult `Npc_proximity_handler` (`ScheduleRunner.ProximityCheck`): NPCs on or near the screen are looked at every 4-12 s (0-4 s if hostile). A sleeper within 6 tiles of the avatar with a clear straight line between them (`Fast_pathfinder_client::is_straight_path`) wakes one time in three: it gets out of bed but stays in its sleep schedule, says one of the game's lines (TEXT.FLX messages 0x95-0x9a, "Who goes there?", "I am trying to sleep!", via `Data/TextMessages`, Exult `get_text_msg`), and lies down again 10 s later. Ghosts, Horace and Penumbra sleep on (Exult `Bg_dont_wake`); animals that cannot speak (`cant_yell`) wake silently.
+
+### Schedules (current)
+
+- Each scheduled NPC has an `Actors/NpcBrain` holding an Exult-style `Schedule` object (`Actors/Schedules/`, one class per Exult schedule, created as in Exult `Actor::set_schedule_type`) and its current action (`IActorAction`, Exult `Actor_action`). `ScheduleRunner` ticks the action by the delays it returns and calls the schedule's `NowWhat` when the NPC is idle (Exult `Npc_actor::handle_event`), `Ending` when it changes schedule, applies the schedule table at each period, and restores saved schedules.
+- Actions (`Actors/ActorActions`, `Actors/PathWalk`): walks (A* and straight), frames, move/teleport, sequences, and Exult's `create_action_sequence` (walk there, then do something), `Sit_actor_action` (bow, sit; complains if the chair was moved, Exult's own "Who moved my chair??").
+- Ported schedules: sleep (beds), loiter (and tend shop: a 3-tile loiter that remarks one time in 8), wander, pace, walk-to-schedule, follow avatar, sit (nearest free reachable chair, shapes 873/292), eat at inn (sit, finish food within reach, "Mmmm, tasty!", "Barkeeper!" from the game's TEXT.FLX), eat (sit, put a random food on the plate in front, eat it). Stand, wait and combat have no schedule of their own; the rest stand for now. Patrol is approximate (wanders near its spot).
+- Verified headless in Trinsic: Finnigan sits at his desk, Dell calls "Buy something!" in her shop, Ellen sits down to eat at noon with food on her plate, the inn fills at 18:00 with diners calling for food and ale.

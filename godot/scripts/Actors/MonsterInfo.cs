@@ -20,6 +20,8 @@ public sealed class MonsterRecord
     public int Immune;
     public int Vulnerable;
     public bool CantDie;
+    /// <summary>Exult <c>Monster_info::cant_yell</c>: an animal or the like, which cannot speak.</summary>
+    public bool CantYell;
     public bool NoBody;
     /// <summary>Exult <c>Monster_actor::create</c>: the fly/walk/swim/ethereal type flags it gets.</summary>
     public int MoveFlags = U7.Data.MoveFlags.Walk;
@@ -80,6 +82,7 @@ public sealed class MonsterTable
         var iImm = Col("immune");
         var iVuln = Col("vulnerable");
         var iCantDie = Col("cant_die");
+        var iCantYell = Col("cant_yell");
         var iFlags = Col("move_flags");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
@@ -111,6 +114,7 @@ public sealed class MonsterTable
                 Immune = Num(c, iImm),
                 Vulnerable = Num(c, iVuln),
                 CantDie = Num(c, iCantDie) != 0,
+                CantYell = Num(c, iCantYell) != 0,
                 NoBody = Get(c, iFlags).Contains("no_body", StringComparison.OrdinalIgnoreCase),
                 MoveFlags = ParseMoveFlags(Get(c, iFlags))
             };

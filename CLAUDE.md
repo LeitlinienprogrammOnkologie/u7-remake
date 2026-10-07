@@ -53,9 +53,11 @@ godot/scripts/
               actor and stats gumps, TextGump (Exult Book/Scroll_gump page layout)
   Usecode/    UsecodeMachine (VM, waits, scripts), BgIntrinsics (intrinsic table),
               UsecodeScript (execute_usecode_array), Conversation (faces, answers, text)
-  Actors/     NpcDat, ScheduleRunner, CombatEngine, PartyManager, Equipment,
-              Inventory, ItemQuantity (Exult add/remove_quantity), ActorWalker
-              (steps, Actor::is_blocked), PathWalk (Path_walking_actor_action), tables
+  Actors/     NpcDat, ScheduleRunner (schedule ticking, slots, proximity),
+              Schedules/ (one class per Exult schedule), ActorActions (Exult
+              Actor_action kinds), PathWalk (Path_walking_actor_action),
+              CombatEngine, PartyManager, Equipment, Inventory, ItemQuantity,
+              ActorWalker (steps, Actor::is_blocked), tables
   World/      GameClock, EggHatcher, Pathfinder (Exult Find_path + clients)
   Rendering/  WorldView (map painting, bark anchors), ShapeCache
   UI/         ConversationPanel, BarkOverlay, UiTheme
@@ -174,22 +176,26 @@ Done and play-tested: the whole Trinsic murder chapter.
 Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
 Exult's walking (blocking, A*, path following with doors, speeds), saves with
-timers, party order and restored NPC schedules, and the agent console.
+timers, party order and restored NPC schedules, NPC proximity remarks and
+woken sleepers, and the agent console.
 
 Next, in priority order:
 
-1. **`npc_proximity`:** NPC barks on a timer when the avatar is near.
-2. **Schedules:** about 25 schedule types are empty in
-   `ScheduleRunner.NowWhat` (tend shop, eat, sit, waiter, blacksmith, ...).
-   Port them from Exult's `schedule.cc`.
-3. **Remaining intrinsics:** 48 stubbed; the most-used are `sprite_effect`,
+1. **Schedules:** sleep, loiter, tend shop, wander, pace, sit, eat and
+   eat at inn are ported (`Actors/Schedules/`). Still standing: desk work,
+   waiter (both need Exult `Schedule_with_objects`, `Pickup_actor_action`
+   and the shape `find_spot`), duel, kid games, farm, miner, preach, dance,
+   blacksmith, thief, sew, bake, lab, hound, talk, shy, graze, and patrol
+   between path eggs. Add a class per schedule and a case in
+   `ScheduleRunner.Create`; keep their `try_proximity_usecode` calls.
+2. **Remaining intrinsics:** 48 stubbed; the most-used are `sprite_effect`,
    `flash_mouse`, `set_to_attack`, `is_not_blocked` and `is_readied`.
-4. **Signs:** `display_runes` still uses the conversation panel; port
+3. **Signs:** `display_runes` still uses the conversation panel; port
    Exult's `Sign_gump` (runic signs, plaques, gravestones).
-5. **Walking follow-ups:** actors blocking one another with Exult's
+4. **Walking follow-ups:** actors blocking one another with Exult's
    `move_aside`/`swap_positions`, combat approach through the Monster
    pathfinder client, `Walk_to_schedule`'s off-screen legs, speed cursors.
-6. **Story:** continue to Britain (the Crown Jewel, the Man with the Hook,
+5. **Story:** continue to Britain (the Crown Jewel, the Man with the Hook,
    Lord British), played through the agent console from `quest4`.
 
 Known small gaps:
