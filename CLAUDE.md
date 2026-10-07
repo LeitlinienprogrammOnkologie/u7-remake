@@ -38,8 +38,13 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
   (for now) books and scrolls in the original GUMPS.VGA art and FONTS.VGA font 4,
   scaled to fit the window. The light spell is drawn as an animated glow round
   the avatar (the user's idea), not Exult's whole-screen palette; its rules
-  stay Exult's. Engineering
-  questions with an Exult answer don't need asking.
+  stay Exult's. Palette colours cycle every 100 ms (the user's pick of
+  Exult's 100 and 200). Night (and dungeons) use the day palette under the
+  old blue tint, not Exult's teal NIGHT palette (the user's pick,
+  `SceneLighting.NightTint`); the hours' blending is Exult's. Light sources
+  cast flickering pools (radius ×1.3, smoothstep, flicker 0.25, smooth: the
+  user's picks), and the light-pool discs (440, 198) aren't drawn.
+  Engineering questions with an Exult answer don't need asking.
 
 ## Layout
 
@@ -48,7 +53,9 @@ godot/scripts/
   Game/       U7Game (scene root, input, wiring), U7Game.Agent (agent console),
               AvatarController (player walking), SaveGame (Exult GAMEDAT layout)
   Data/       GameMap (chunks, IREG, eggs index, paint order), U7Object,
-              ShapeCatalog, FlexFile, VgaShapeFile (RLE decode for GUMPS/FONTS/FACES.VGA),
+              ShapeCatalog, FlexFile, VgaShapeFile + ShapeFrame (Exult Shape_frame:
+              SHAPES/SPRITES/GUMPS/FONTS/FACES.VGA frames by palette index),
+              U7Palette (PALETTES.FLX, Get_color8), XformTables (XFORM.TBL),
               VgaFont (FONTS.VGA metrics, Exult paint_text_box), ChunkBlocking
               (Exult Chunk_cache blocked flags + is_blocked)
   Gumps/      GumpManager, GumpView (paints gumps and the open book), container,
@@ -61,8 +68,18 @@ godot/scripts/
               CombatEngine, PartyManager, Equipment, Inventory, ItemQuantity,
               ActorWalker (steps, Actor::is_blocked), tables
   World/      GameClock, EggHatcher, Pathfinder (Exult Find_path + clients),
+              LightSources (Exult light rules: brightness, strength, carried
+              light, light level),
               EffectsManager (Exult Sprites_effect, SPRITES.VGA animations)
-  Rendering/  WorldView (map painting, sprites, bark anchors), ShapeCache
+  Rendering/  WorldView (paints the map into IndexBuffer8, Exult's Image_buffer8:
+              XFORM.TBL translucency, invisible actors, status outlines;
+              shown through the world shader: ambient/lit palettes and
+              lights), WorldPalette (palette texture, colour cycling, Exult's
+              special pixels), PaletteSet (PALETTES.FLX by Exult's names,
+              blends), SceneLighting (final palette, lights), GlowTable (how
+              each light source looks), ShapeCache (frames by
+              index; RGBA shape textures for the gumps; gump, font and face
+              frames)
   UI/         ConversationPanel, BarkOverlay, UiTheme
   Core/       U7Paths (data paths, ReadGameDat), U7Constants, TileCoord
 scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers)
@@ -90,7 +107,9 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
      lists or sets usecode timers.
    - The user may have local saves `quest1`–`quest4`, Trinsic checkpoints
      (`quest4` = outside the east gate with Iolo and Spark; it carries stray
-     flags and broken spellbooks from old bugs), `britain0`–`britain3`
+     flags and broken spellbooks from old bugs; in `quest1`–`quest4` the
+     avatar is invisible, so the screen is grey: `setflag npc:0 invisible 0`),
+     `britain0`–`britain3`
      (`quest4` cleaned up, then after Lord British, after Batlin, in the
      castle storeroom), `cove0` (Rudyom's Wand in hand), `minoc0`
      (Batlin's package delivered), `minoc1` (after the murder trail),
@@ -103,7 +122,7 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
 3. For visuals, run windowed (no `--headless`) and use the console's `shot`
    command, or a temporary `GetViewport().GetTexture().GetImage().SavePng()`.
    This opens a window on the user's desktop, so keep it short and prefer
-   headless.
+   headless. End a windowed run with the console's `quit`.
 4. Remove temporary debug code before finishing. Tag it (e.g. `// TMPTRACE`) so
    `sed -i '/TMPTRACE/d'` can strip it reliably.
 
@@ -116,9 +135,11 @@ game running. Never stop a Godot process whose command line lacks
 - **New game data:** a new game reads GAMEDAT files from `STATIC/INITGAME.DAT`
   entries (`U7Paths.ReadGameDat`); saves read `saves/<slot>/`. `u7/GAMEDAT` is
   ignored on purpose: the GOG copy is a game already past the opening.
-- **Bad PNGs:** the extracted PNGs for gumps, fonts and faces in `assets/` are
-  bogus 8×8 tiles. Decode those from the VGA files via `VgaShapeFile`.
-  `ShapeCache.GetFace` does this for FACES.VGA. Shape PNGs are fine.
+- **Graphics come from the VGA files:** `ShapeCache` decodes SHAPES.VGA at
+  runtime (`GetFrame8` by palette index, `Get` as RGBA textures), and
+  GUMPS, FONTS, FACES and SPRITES.VGA through `VgaShapeFile`. The extracted
+  shape PNGs in `assets/` are not read; those for gumps, fonts and faces are
+  bogus 8×8 tiles anyway.
 - **Usecode reference:** `assets/usecode/usecode_disasm.txt` is the
   disassembly. `assets/data/usecode.csv` has each function's externs (the
   `call n` targets). To read a function's strings, parse `u7/STATIC/USECODE`
@@ -207,11 +228,10 @@ console.
 
 Next, in priority order:
 
-1. **Remaining intrinsics:** 31 stubbed, none reachable from Trinsic's or
+1. **Remaining intrinsics:** 29 stubbed, none reachable from Trinsic's or
    Britain's NPCs; the most-used are `flash_mouse` (needs Exult's cursors),
    `is_readied`, `set_attack_mode`, `kill_npc` and `set_oppressor`. Spells still
-   reach 11 (summon, wizard eye, clone, armageddon, ...), and the light
-   sources' palettes (`set_light`, `set_time_palette`) are not ported.
+   reach 11 (summon, wizard eye, clone, armageddon, ...).
 2. **Signs:** `display_runes` still uses the conversation panel; port
    Exult's `Sign_gump` (runic signs, plaques, gravestones).
 3. **Walking follow-ups:** `Walk_to_schedule`'s off-screen legs, dormant

@@ -4,12 +4,17 @@ using Godot;
 namespace U7.Data;
 
 /// <summary>
-/// Reads a SHAPES.VGA-style FLEX (GUMPS.VGA, FONTS.VGA): RLE extents and pixels.
-/// Titan's batch extract treated these as 8×8 tiles; decode from the VGA instead.
-/// RLE layout is Exult <c>Shape_frame::read</c> / <c>Image_buffer8::paint_rle</c>.
+/// Reads a SHAPES.VGA-style FLEX (SHAPES.VGA, SPRITES.VGA, GUMPS.VGA,
+/// FONTS.VGA, FACES.VGA): frame extents, and frames as palette indices
+/// (<see cref="ShapeFrame"/>). Layout is Exult <c>Shape_frame::read</c>: an
+/// RLE shape starts with its length and frame offsets, any other is raw 8×8
+/// terrain. Titan's batch extract treated GUMPS, FONTS and FACES as 8×8
+/// tiles; decode those from the VGA instead.
 /// </summary>
 public sealed class VgaShapeFile
 {
+    const int TileBytes = ShapeFrame.TileSize * ShapeFrame.TileSize;
+
     readonly FlexFile? _flex;
     readonly FrameInfo[][] _frames;
 
@@ -37,9 +42,12 @@ public sealed class VgaShapeFile
         }
     }
 
+    public int ShapeCount => _frames.Length;
+
     public int FrameCount(int shape) =>
         (uint)shape < (uint)_frames.Length && _frames[shape] is { } list ? list.Length : 0;
 
+    /// <summary>A frame's extents; the frame number wraps around the count.</summary>
     public FrameInfo Get(int shape, int frame)
     {
         if ((uint)shape >= (uint)_frames.Length || _frames[shape] is not { Length: > 0 } list)
@@ -47,23 +55,52 @@ public sealed class VgaShapeFile
             return default;
         }
 
-        var i = frame % list.Length;
-        if (i < 0)
-        {
-            i += list.Length;
-        }
-
-        return list[i];
+        return list[Wrap(frame, list.Length)];
     }
 
     /// <summary>
-    /// Decode one RLE frame to RGBA. Palette is 256×RGB (8-bit).
+    /// Exult <c>Shape::read</c>: a frame as palette indices, or null. Without
+    /// <paramref name="wrap"/> (SHAPES.VGA, SPRITES.VGA) a frame past the last
+    /// is none, except that one with bit 5 set is frame &amp; 31 reflected,
+    /// and terrain ignores the bits above 31. With it the frame number wraps
+    /// around the count, as the gump, font and face callers expect.
+    /// </summary>
+    public ShapeFrame? DecodeFrame(int shape, int frame, bool wrap)
+    {
+        if (_flex is null || (uint)shape >= (uint)_flex.Count)
+        {
+            return null;
+        }
+
+        var entry = _flex.Get(shape);
+        if (IsRle(entry))
+        {
+            var nframes = RleFrameCount(entry);
+            if (wrap)
+            {
+                frame = Wrap(frame, nframes);
+            }
+            else if (frame >= nframes && (frame & 32) != 0)
+            {
+                return DecodeFrame(shape, frame & 0x1f, false)?.Reflect();
+            }
+
+            return TryFrameRle(entry, frame, out var data) ? ShapeFrame.FromRle(data) : null;
+        }
+
+        var count = entry.Length / TileBytes;
+        frame = wrap ? Wrap(frame, count) : frame & 31;
+        return (uint)frame < (uint)count ? ShapeFrame.FromTile(entry.Slice(frame * TileBytes, TileBytes)) : null;
+    }
+
+    /// <summary>
+    /// Decode one frame to RGBA. Palette is 256×RGB (8-bit).
     /// </summary>
     public Image? Decode(int shape, int frame, ReadOnlySpan<byte> paletteRgb) =>
         Decode(shape, frame, paletteRgb, 3);
 
     /// <summary>
-    /// Decode one RLE frame with a 256×RGBA palette, for translucent colours
+    /// Decode one frame with a 256×RGBA palette, for translucent colours
     /// (Exult paints those through its xform tables).
     /// </summary>
     public Image? DecodeRgba(int shape, int frame, ReadOnlySpan<byte> paletteRgba) =>
@@ -71,148 +108,63 @@ public sealed class VgaShapeFile
 
     Image? Decode(int shape, int frame, ReadOnlySpan<byte> pal, int stride)
     {
-        if (_flex is null || (uint)shape >= (uint)_flex.Count || pal.Length < 256 * stride)
+        if (pal.Length < 256 * stride || DecodeFrame(shape, frame, true) is not { } decoded)
         {
             return null;
         }
 
-        var entry = _flex.Get(shape);
-        if (!TryFrameRle(entry, frame, out var info, out var rle))
+        if (decoded.Width > 512 || decoded.Height > 512)
         {
             return null;
         }
 
-        var w = info.Width;
-        var h = info.Height;
-        if (w <= 0 || h <= 0 || w > 512 || h > 512)
-        {
-            return null;
-        }
-
-        var rgba = new byte[w * h * 4];
-        var i = 0;
-        while (i + 6 <= rle.Length)
-        {
-            var scanlen = BitConverter.ToUInt16(rle[i..]);
-            i += 2;
-            if (scanlen == 0)
-            {
-                break;
-            }
-
-            var encoded = (scanlen & 1) != 0;
-            scanlen >>= 1;
-            var x = info.XLeft + BitConverter.ToInt16(rle[i..]);
-            var y = info.YAbove + BitConverter.ToInt16(rle[(i + 2)..]);
-            i += 4;
-
-            if (!encoded)
-            {
-                PlotRaw(rgba, w, h, x, y, rle, ref i, scanlen, pal, stride);
-                continue;
-            }
-
-            while (scanlen > 0 && i < rle.Length)
-            {
-                var bcnt = rle[i++];
-                var repeat = (bcnt & 1) != 0;
-                bcnt >>= 1;
-                if (bcnt == 0)
-                {
-                    break;
-                }
-
-                if (repeat)
-                {
-                    if (i >= rle.Length)
-                    {
-                        break;
-                    }
-
-                    var pix = rle[i++];
-                    PlotRun(rgba, w, h, x, y, bcnt, pix, pal, stride);
-                }
-                else
-                {
-                    PlotRaw(rgba, w, h, x, y, rle, ref i, bcnt, pal, stride);
-                }
-
-                x += bcnt;
-                scanlen -= bcnt;
-            }
-        }
-
-        return Image.CreateFromData(w, h, false, Image.Format.Rgba8, rgba);
+        return decoded.ToImage(pal[..(256 * stride)]);
     }
 
-    static void PlotRaw(
-        byte[] rgba, int w, int h, int x, int y, ReadOnlySpan<byte> rle, ref int i, int count,
-        ReadOnlySpan<byte> pal, int stride)
+    static int Wrap(int frame, int count)
     {
-        for (var n = 0; n < count && i < rle.Length; n++, x++)
+        if (count <= 0)
         {
-            Plot(rgba, w, h, x, y, rle[i++], pal, stride);
-        }
-    }
-
-    static void PlotRun(
-        byte[] rgba, int w, int h, int x, int y, int count, byte pix, ReadOnlySpan<byte> pal, int stride)
-    {
-        for (var n = 0; n < count; n++, x++)
-        {
-            Plot(rgba, w, h, x, y, pix, pal, stride);
-        }
-    }
-
-    static void Plot(byte[] rgba, int w, int h, int x, int y, byte pix, ReadOnlySpan<byte> pal, int stride)
-    {
-        if ((uint)x >= (uint)w || (uint)y >= (uint)h)
-        {
-            return;
+            return 0;
         }
 
-        var o = (y * w + x) * 4;
-        var p = pix * stride;
-        rgba[o] = pal[p];
-        rgba[o + 1] = pal[p + 1];
-        rgba[o + 2] = pal[p + 2];
-        rgba[o + 3] = stride == 4 ? pal[p + 3] : (byte)255;
+        var i = frame % count;
+        return i < 0 ? i + count : i;
     }
 
-    static bool TryFrameRle(
-        ReadOnlySpan<byte> entry, int frame, out FrameInfo info, out ReadOnlySpan<byte> rle)
+    /// <summary>Exult's test: RLE when the stored length is the entry's, or one less in an even-sized entry.</summary>
+    static bool IsRle(ReadOnlySpan<byte> entry)
     {
-        info = default;
-        rle = default;
         if (entry.Length < 8)
         {
             return false;
         }
 
         var dlen = BitConverter.ToInt32(entry);
+        return dlen == entry.Length || ((entry.Length & 1) == 0 && dlen == entry.Length - 1);
+    }
+
+    static int RleFrameCount(ReadOnlySpan<byte> entry)
+    {
         var hdrlen = BitConverter.ToInt32(entry[4..]);
-        var shapelen = entry.Length;
-        var isRle = dlen == shapelen || ((shapelen & 1) == 0 && dlen == shapelen - 1);
-        if (!isRle || hdrlen < 4)
+        return hdrlen < 4 ? 0 : (hdrlen - 4) / 4;
+    }
+
+    /// <summary>The bytes of an RLE frame, from its extents to the next frame.</summary>
+    static bool TryFrameRle(ReadOnlySpan<byte> entry, int frame, out ReadOnlySpan<byte> data)
+    {
+        data = default;
+        var nframes = RleFrameCount(entry);
+        if ((uint)frame >= (uint)nframes)
         {
             return false;
         }
 
-        var nframes = (hdrlen - 4) / 4;
-        if (nframes <= 0)
-        {
-            return false;
-        }
-
-        var fr = frame % nframes;
-        if (fr < 0)
-        {
-            fr += nframes;
-        }
-
+        var dlen = BitConverter.ToInt32(entry);
+        var hdrlen = BitConverter.ToInt32(entry[4..]);
         int frameoff;
         int framelen;
-        if (fr == 0)
+        if (frame == 0)
         {
             frameoff = hdrlen;
             framelen = nframes > 1
@@ -221,14 +173,14 @@ public sealed class VgaShapeFile
         }
         else
         {
-            var at = 8 + (fr - 1) * 4;
+            var at = 8 + (frame - 1) * 4;
             if (at + 4 > entry.Length)
             {
                 return false;
             }
 
             frameoff = BitConverter.ToInt32(entry[at..]);
-            framelen = fr == nframes - 1
+            framelen = frame == nframes - 1
                 ? dlen - frameoff
                 : BitConverter.ToInt32(entry[(at + 4)..]) - frameoff;
         }
@@ -238,113 +190,37 @@ public sealed class VgaShapeFile
             return false;
         }
 
-        var xright = BitConverter.ToInt16(entry[frameoff..]);
-        var xleft = BitConverter.ToInt16(entry[(frameoff + 2)..]);
-        var yabove = BitConverter.ToInt16(entry[(frameoff + 4)..]);
-        var ybelow = BitConverter.ToInt16(entry[(frameoff + 6)..]);
-        var w = Math.Max(1, xleft + xright + 1);
-        var h = Math.Max(1, yabove + ybelow + 1);
-        info = new FrameInfo(w, h, xleft, yabove, xright, ybelow, false);
-        rle = entry.Slice(frameoff + 8, framelen - 8);
+        data = entry.Slice(frameoff, framelen);
         return true;
     }
 
     static FrameInfo[] ParseExtents(ReadOnlySpan<byte> entry)
     {
-        if (entry.Length < 8)
+        if (!IsRle(entry))
         {
-            return [];
+            var count = entry.Length / TileBytes;
+            var tiles = new FrameInfo[count];
+            Array.Fill(tiles, new FrameInfo(ShapeFrame.TileSize, ShapeFrame.TileSize, ShapeFrame.TileSize, ShapeFrame.TileSize, -1, -1, true));
+            return tiles;
         }
 
-        var dlen = BitConverter.ToInt32(entry);
-        var hdrlen = BitConverter.ToInt32(entry[4..]);
-        var shapelen = entry.Length;
-        var rle = dlen == shapelen || ((shapelen & 1) == 0 && dlen == shapelen - 1);
-        if (!rle || hdrlen < 4)
+        var frames = new FrameInfo[RleFrameCount(entry)];
+        for (var f = 0; f < frames.Length; f++)
         {
-            return [];
-        }
-
-        var nframes = (hdrlen - 4) / 4;
-        if (nframes <= 0)
-        {
-            return [];
-        }
-
-        var frames = new FrameInfo[nframes];
-        for (var f = 0; f < nframes; f++)
-        {
-            if (TryFrameRle(entry, f, out var info, out _))
+            if (!TryFrameRle(entry, f, out var data))
             {
-                frames[f] = info;
-            }
-        }
-
-        return frames;
-    }
-}
-
-/// <summary>Day palette from <c>PALETTES.FLX</c> entry 0 (VGA 6-bit RGB).</summary>
-public static class U7Palette
-{
-    public static byte[] DayRgb()
-    {
-        var rgb = new byte[768];
-        var path = Path.Combine(U7.Core.U7Paths.StaticDir, "PALETTES.FLX");
-        if (!File.Exists(path))
-        {
-            return rgb;
-        }
-
-        var flex = new FlexFile(path);
-        var pal = flex.Get(0);
-        var n = Math.Min(256, pal.Length / 3);
-        for (var i = 0; i < n; i++)
-        {
-            rgb[i * 3] = (byte)Math.Min(255, pal[i * 3] << 2);
-            rgb[i * 3 + 1] = (byte)Math.Min(255, pal[i * 3 + 1] << 2);
-            rgb[i * 3 + 2] = (byte)Math.Min(255, pal[i * 3 + 2] << 2);
-        }
-
-        return rgb;
-    }
-
-    /// <summary>
-    /// Exult <c>Shape_manager::load</c>'s <c>hard_blends</c> (the values of
-    /// its blends.dat): colour and alpha of the 17 translucent colours, which
-    /// start at index 0xEE. They approximate the original's XFORM.TBL tables.
-    /// </summary>
-    static readonly byte[] Blends =
-    [
-        208, 216, 224, 192, 136, 44, 148, 198, 248, 252, 80, 211,
-        144, 148, 252, 247, 64, 216, 64, 201, 204, 60, 84, 140,
-        144, 40, 192, 128, 96, 40, 16, 128, 100, 108, 116, 192,
-        68, 132, 28, 128, 255, 208, 48, 64, 28, 52, 255, 128,
-        8, 68, 0, 128, 255, 8, 8, 118, 255, 244, 248, 128,
-        56, 40, 32, 128, 228, 224, 214, 82
-    ];
-
-    public const int FirstTranslucent = 0xEE;
-
-    /// <summary>The day palette as RGBA, with the translucent colours blended (Exult <c>paint_rle_translucent</c>).</summary>
-    public static byte[] DayRgbaTranslucent()
-    {
-        var rgb = DayRgb();
-        var rgba = new byte[1024];
-        for (var i = 0; i < 256; i++)
-        {
-            if (i is >= FirstTranslucent and <= 0xFE)
-            {
-                Blends.AsSpan((i - FirstTranslucent) * 4, 4).CopyTo(rgba.AsSpan(i * 4));
                 continue;
             }
 
-            rgba[i * 4] = rgb[i * 3];
-            rgba[i * 4 + 1] = rgb[i * 3 + 1];
-            rgba[i * 4 + 2] = rgb[i * 3 + 2];
-            rgba[i * 4 + 3] = 255;
+            var xright = BitConverter.ToInt16(data);
+            var xleft = BitConverter.ToInt16(data[2..]);
+            var yabove = BitConverter.ToInt16(data[4..]);
+            var ybelow = BitConverter.ToInt16(data[6..]);
+            var w = Math.Max(1, xleft + xright + 1);
+            var h = Math.Max(1, yabove + ybelow + 1);
+            frames[f] = new FrameInfo(w, h, xleft, yabove, xright, ybelow, false);
         }
 
-        return rgba;
+        return frames;
     }
 }

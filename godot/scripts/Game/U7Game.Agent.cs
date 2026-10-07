@@ -19,9 +19,9 @@ namespace U7.Game;
 public partial class U7Game
 {
     const string AgentHelp =
-        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | timer [n] [hours-ago] | stubs | " +
+        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
-        "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> | shot <name> | " +
+        "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | quit | " +
         "save <slot> | load <slot> | tile <x> <y> [z] | arena | combat [off] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
@@ -208,6 +208,23 @@ public partial class U7Game
                 }
 
                 break;
+            case "setflag":
+            {
+                // A test shortcut: an object flag by number or ObjFlag name (invisible, charmed, poisoned, ...).
+                var target = AgentTarget(parts[1]) ?? throw new ArgumentException("no such object/npc");
+                var flag = AgentFlag(parts[2]);
+                if (parts.Length > 3 && parts[3] == "0")
+                {
+                    target.ClearFlag(flag);
+                }
+                else
+                {
+                    target.SetFlag(flag);
+                }
+
+                AgentLog($"{AgentDescribe(target)} flag {flag} = {(target.GetFlag(flag) ? 1 : 0)}");
+                break;
+            }
             case "stubs":
                 AgentLog(BgIntrinsics.StubSummary());
                 break;
@@ -391,10 +408,21 @@ public partial class U7Game
                 break;
             case "hour":
             {
-                var h = int.Parse(arg);
+                var h = int.Parse(parts[1]);
                 _clock.SkipHours(((h - _clock.Hour) % 24 + 24) % 24);
+                if (parts.Length > 2)
+                {
+                    _clock.Set(_clock.Day, _clock.Hour, int.Parse(parts[2]));
+                }
+
+                _lighting.Update(0);
+                AgentLog(_lighting.Describe());
                 break;
             }
+            case "light":
+                _lighting.Update(0);
+                AgentLog(_lighting.Describe());
+                break;
             case "shot":
             {
                 if (DisplayServer.GetName() == "headless")
@@ -408,6 +436,10 @@ public partial class U7Game
                 AgentLog($"saved {file}");
                 break;
             }
+            case "quit":
+                // Windowed runs end this way: only headless games may be stopped from outside.
+                GetTree().Quit();
+                break;
             case "tile":
             {
                 var tx = int.Parse(parts[1]);
@@ -553,6 +585,19 @@ public partial class U7Game
         }
 
         return AgentNpc(arg);
+    }
+
+    /// <summary>An object flag by number or by the name of its <see cref="ObjFlag"/> constant.</summary>
+    static int AgentFlag(string arg)
+    {
+        if (int.TryParse(arg, out var flag))
+        {
+            return flag;
+        }
+
+        var field = typeof(ObjFlag).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .FirstOrDefault(f => f.IsLiteral && f.Name.Equals(arg, StringComparison.OrdinalIgnoreCase));
+        return field?.GetRawConstantValue() is int value ? value : throw new ArgumentException($"no flag {arg}");
     }
 
     U7Object? AgentNpc(string arg)

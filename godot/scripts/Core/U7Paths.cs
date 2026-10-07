@@ -4,9 +4,9 @@ using Godot;
 namespace U7.Core;
 
 /// <summary>
-/// Resolves the extracted Ultima VII tree relative to the Godot project.
-/// Original STATIC/GAMEDAT files stay next to the extracted PNG assets so
-/// Godot never imports the 35k shape frames.
+/// Resolves the Ultima VII tree relative to the Godot project. The original
+/// STATIC/GAMEDAT files and the extracted assets live outside the project,
+/// so Godot never imports them.
 /// </summary>
 public static class U7Paths
 {
@@ -19,7 +19,6 @@ public static class U7Paths
     public static string? GameDatOverride { get; set; }
     public static string SavesDir => Path.Combine(RepoRoot, "saves");
     public static string AssetsDir => Path.Combine(RepoRoot, "assets");
-    public static string ShapesDir => Path.Combine(AssetsDir, "graphics", "shapes");
     public static string GumpsDir => Path.Combine(AssetsDir, "graphics", "gumps");
     public static string FontsDir => Path.Combine(AssetsDir, "graphics", "fonts");
     public static string FacesDir => Path.Combine(AssetsDir, "graphics", "faces");
@@ -109,9 +108,6 @@ public static class U7Paths
             return _initGame;
         }
     }
-
-    public static string ShapePng(int shape, int frame) =>
-        Path.Combine(ShapesDir, $"{shape:D4}", $"{shape:D4}_f{frame:D4}.png");
 
     public static string GumpPng(int shape, int frame) =>
         Path.Combine(GumpsDir, $"{shape:D4}", $"{shape:D4}_f{frame:D4}.png");

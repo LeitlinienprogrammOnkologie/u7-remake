@@ -1,15 +1,11 @@
-using Godot;
 using U7.Core;
+using U7.Rendering;
 
 namespace U7.World;
 
-/// <summary>Exult <c>Game_clock</c> without hunger / dungeon lights.</summary>
+/// <summary>Exult <c>Game_clock</c> without hunger or light sources.</summary>
 public sealed class GameClock
 {
-    public const int PaletteDay = 0;
-    public const int PaletteDusk = 1;
-    public const int PaletteNight = 2;
-
     public int Hour { get; private set; } = 6;
     public int Minute { get; private set; }
     public int Ticks { get; private set; }
@@ -28,37 +24,58 @@ public sealed class GameClock
 
     double _accum;
 
-    public int TimePalette
+    /// <summary>
+    /// Exult <c>get_time_palette</c>: the palette for an hour (24 is the
+    /// next day's 0), night all day in a dungeon.
+    /// </summary>
+    public static int PaletteForHour(int hour, bool dungeon)
     {
-        get
+        if (dungeon || hour < 5)
         {
-            var h = Hour + 1;
-            if (h < 5 || h > 20)
-            {
-                return PaletteNight;
-            }
-
-            if (h == 5 || h == 20)
-            {
-                return PaletteDusk;
-            }
-
-            return PaletteDay;
+            return PaletteSet.Night;
         }
+
+        if (hour == 5)
+        {
+            return PaletteSet.Dawn;
+        }
+
+        if (hour < 20)
+        {
+            return PaletteSet.Day;
+        }
+
+        return hour == 20 ? PaletteSet.Dusk : PaletteSet.Night;
     }
 
-    /// <summary>
-    /// Exult <c>get_final_palette</c>: a light spell matters at dusk and
-    /// night (Exult's PALETTE_SPELL; here a glow round the avatar).
-    /// </summary>
-    public bool LightSpellShows => SpecialLight != 0 && TimePalette is PaletteNight or PaletteDusk;
+    /// <summary>Exult <c>is_dark_palette</c>: dusk (which is also dawn) and night.</summary>
+    public static bool IsDarkPalette(int pal) => pal is PaletteSet.Dusk or PaletteSet.Night;
 
-    public Color WorldModulate => TimePalette switch
+    /// <summary>
+    /// Exult <c>Game_clock::set_time_palette</c>'s <c>Palette_transition</c>:
+    /// through each hour the palette goes from that hour's to the next
+    /// hour's. Exult steps once a game minute; <c>T</c> runs smoothly with
+    /// the clock's ticks.
+    /// </summary>
+    public (int From, int To, float T) PaletteBlend(bool dungeon) =>
+        (PaletteForHour(Hour, dungeon), PaletteForHour(Hour + 1, dungeon),
+            (Minute + Ticks / (float)U7Constants.TicksPerMinute) / 60f);
+
+    /// <summary>
+    /// Exult <c>get_final_palette</c>: a light spell shows while either end
+    /// of the hour's blend is dark (Exult blends to or from PALETTE_SPELL
+    /// then; here the spell is a light round the avatar). A dungeon is dark.
+    /// </summary>
+    public bool LightSpellShows(bool dungeon)
     {
-        PaletteNight => new Color(0.28f, 0.34f, 0.58f),
-        PaletteDusk => new Color(0.95f, 0.62f, 0.38f),
-        _ => Colors.White
-    };
+        if (SpecialLight == 0)
+        {
+            return false;
+        }
+
+        var (from, to, _) = PaletteBlend(dungeon);
+        return IsDarkPalette(from) || IsDarkPalette(to);
+    }
 
     public void Update(double delta)
     {

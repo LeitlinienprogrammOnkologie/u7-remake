@@ -41,10 +41,9 @@ public partial class U7Game : Node2D
     U7Object? _cameraActor;
     /// <summary>Exult <c>center_view</c> on an object: the view stays there (a moving barge takes it along) until the avatar walks.</summary>
     TileCoord? _cameraTile;
-    LightSpellOverlay _lightSpell = null!;
-    LightningFlash _lightningFlash = null!;
-    /// <summary>The world's tint, eased towards the time of day's (a lightning flash shows over it).</summary>
-    Color _worldTint = Colors.White;
+    SceneLighting _lighting = null!;
+    /// <summary>The world's brightness for usecode's fade to black, eased (1 shown, 0 black).</summary>
+    float _fade = 1f;
     MusicPlayer _music = null!;
     PartyManager _party = null!;
     CombatEngine _combat = null!;
@@ -168,10 +167,8 @@ public partial class U7Game : Node2D
                 TextureFilter = TextureFilterEnum.Nearest
             };
             AddChild(_world);
-            _lightSpell = new LightSpellOverlay { Name = "LightSpell" };
-            AddChild(_lightSpell);
-            _lightningFlash = new LightningFlash { Name = "LightningFlash" };
-            AddChild(_lightningFlash);
+            _lighting = new SceneLighting(_clock, _map, _catalog, avatar, _effects, _party);
+            _world.Lighting = _lighting;
 
             _gumps = new GumpManager(_map, avatar);
             _gumps.ActivateUsecode = obj => RunUsecode(obj);
@@ -265,6 +262,7 @@ public partial class U7Game : Node2D
             _usecode.Music = _music;
             _usecode.Eggs = _eggs;
             _usecode.Effects = _effects;
+            _usecode.Lighting = _lighting;
             _map.ScriptSaver = obj => _usecode.SaveScripts(obj);
             foreach (var (obj, blob) in _map.PendingScripts)
             {
@@ -580,25 +578,9 @@ public partial class U7Game : Node2D
         }
 
         _clock.Update(delta);
-        // A light spell tints the world towards full light; its overlay keeps the dark outside the glow.
-        _lightSpell.Advance(delta, _clock.LightSpellShows);
-        var baseModulate = _clock.WorldModulate;
-        var targetModulate = _usecode is { FadedOut: true } ? Colors.Black : baseModulate.Lerp(Colors.White, _lightSpell.Strength);
-        _worldTint = _worldTint.Lerp(targetModulate, (float)Math.Min(1, delta * 2.5));
-        // Exult Lightning_effect: the lightning palette for the flash, whatever the time of day.
-        var flash = _effects.LightningFlash && _usecode is not { FadedOut: true };
-        _lightningFlash.Visible = flash;
-        _world.Modulate = flash ? Colors.White : _worldTint;
-        if (flash)
-        {
-            baseModulate = Colors.White;
-        }
-        // Centred on the avatar's figure, which is drawn up and to the left of its hotspot.
-        var lit = _avatar.Avatar;
-        WorldView.ShapeLocation(lit.Tx, lit.Ty, lit.Tz, out var lightX, out var lightY);
-        var litFrame = _catalog[lit.Shape].GetFrame(lit.Frame);
-        _lightSpell.Update(baseModulate, _world.Modulate,
-            new Vector2(lightX - litFrame.XLeft + litFrame.Width / 2f, lightY - litFrame.YAbove + litFrame.Height / 2f));
+        _fade = Mathf.Lerp(_fade, _usecode is { FadedOut: true } ? 0f : 1f, (float)Math.Min(1, delta * 2.5));
+        _world.Modulate = new Color(_fade, _fade, _fade);
+        _world.RotateColors = _usecode is not { Wait: UsecodeWait.ClickOnItem };
         _usecode?.TickScripts(delta);
         if (_usecode is { RestartRequested: true })
         {
@@ -639,6 +621,11 @@ public partial class U7Game : Node2D
             : new TileCoord(av.Tx, av.Ty, av.Tz));
         WorldView.ShapeLocation(focus.Tx, focus.Ty, focus.Tz, out var camX, out var camY);
         camera.GlobalPosition = new Vector2(camX, camY) + QuakeOffset(delta);
+        // The lights for the view the world is about to draw.
+        var viewSize = GetViewport().GetVisibleRect().Size / camera.Zoom;
+        _lighting.View = new Rect2(camera.GlobalPosition - viewSize / 2, viewSize);
+        _lighting.Focus = (focus.Tx, focus.Ty);
+        _lighting.Update(delta);
 
         var under = WorldView.WorldToTile(camera.GetGlobalMousePosition(), av.Tz);
         var picked = _world.PickObject(camera.GetGlobalMousePosition());

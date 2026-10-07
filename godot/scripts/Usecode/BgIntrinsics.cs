@@ -156,6 +156,8 @@ public sealed class BgIntrinsics
             0x59 => Earthquake(p),
             0x53 => SpriteEffect(p),
             0x57 => CauseLight(p),
+            0x82 => SetLight(),
+            0x84 => SetTimePalette(),
             0x5d => Lightning(),
             0x44 => UsecodeValue.FromInt(_vm.Effects?.GetWeather() ?? 0),
             0x45 => SetWeather(p),
@@ -1485,6 +1487,22 @@ public sealed class BgIntrinsics
     UsecodeValue CauseLight(UsecodeValue[] p)
     {
         _vm.Clock?.AddSpecialLight((int)p[0].IntValue);
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_set_light(light, onoff)</c>: <c>refigure_gear</c> for the
+    /// actor holding the light, less the light if it is going out (a torch's
+    /// usecode calls it before changing the torch's shape). Nothing to do here:
+    /// <see cref="U7.Rendering.SceneLighting"/> recounts every actor's readied
+    /// lights each frame (<see cref="U7.World.LightSources.CarriedLight(U7Object, ShapeCatalog)"/>).
+    /// </summary>
+    static UsecodeValue SetLight() => Zero();
+
+    /// <summary>Exult <c>UI_set_time_palette</c>: <c>Game_clock::reset_palette</c>, the palette set at once.</summary>
+    UsecodeValue SetTimePalette()
+    {
+        _vm.Lighting?.ResetPalette();
         return Zero();
     }
 

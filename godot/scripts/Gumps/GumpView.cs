@@ -99,12 +99,6 @@ public partial class GumpView : Node2D
     public void DrawWorldShape(int shape, int frame, int hx, int hy)
     {
         var tex = Shapes.Get(shape, frame);
-        if (tex is null && (frame & 32) != 0)
-        {
-            tex = Shapes.Get(shape, frame & 0x1f);
-            frame &= 0x1f;
-        }
-
         if (tex is null)
         {
             return;
@@ -114,44 +108,9 @@ public partial class GumpView : Node2D
         DrawTexture(tex, new Vector2(hx - fi.XLeft, hy - fi.YAbove));
     }
 
-    public bool WorldSpriteContains(U7Object obj, int mx, int my, int hx, int hy)
-    {
-        var tex = Shapes.Get(obj.Shape, obj.Frame);
-        var frame = obj.Frame;
-        if (tex is null && (frame & 32) != 0)
-        {
-            tex = Shapes.Get(obj.Shape, frame & 0x1f);
-            frame &= 0x1f;
-        }
-
-        if (tex is null)
-        {
-            return false;
-        }
-
-        var fi = Catalog[obj.Shape].GetFrame(frame);
-        var left = hx - fi.XLeft;
-        var top = hy - fi.YAbove;
-        if (mx < left || my < top || mx >= left + tex.GetWidth() || my >= top + tex.GetHeight())
-        {
-            return false;
-        }
-
-        var image = Shapes.GetImage(obj.Shape, frame);
-        if (image is null)
-        {
-            return true;
-        }
-
-        var px = mx - left;
-        var py = my - top;
-        if (px < 0 || py < 0 || px >= image.GetWidth() || py >= image.GetHeight())
-        {
-            return false;
-        }
-
-        return image.GetPixel(px, py).A > 0.08f;
-    }
+    /// <summary>Exult <c>has_point</c> for an item shown with its hotspot at <paramref name="hx"/>, <paramref name="hy"/>.</summary>
+    public bool WorldSpriteContains(U7Object obj, int mx, int my, int hx, int hy) =>
+        Shapes.GetFrame8(obj.Shape, obj.Frame) is { } frame && frame.Covers(mx - hx, my - hy);
 
     /// <summary>
     /// Exult <c>Font::paint_text</c>: <paramref name="y"/> is the top of the line;

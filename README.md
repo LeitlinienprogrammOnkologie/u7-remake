@@ -53,7 +53,9 @@ python scripts/extract_assets.py
 It reads `u7/` and writes about 500 MB into `assets/`: shape, gump,
 font and face frames as PNG, music and speech, text tables, usecode
 disassembly and the CSV tables the game loads at startup
-(`assets/data/*.csv`, `assets/text/shape_names.txt`). Two optional
+(`assets/data/*.csv`, `assets/text/shape_names.txt`). The game does not
+need the PNG frames: it decodes SHAPES.VGA and the other VGA files from
+`u7/STATIC/` at runtime. Two optional
 scripts, `scripts/extract_endgame_flics.py` and `scripts/render_map.py`,
 produce the endgame frames and a full-map render and are not needed to
 play.
