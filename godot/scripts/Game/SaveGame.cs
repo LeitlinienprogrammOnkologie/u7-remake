@@ -11,8 +11,9 @@ namespace U7.Game;
 
 /// <summary>
 /// Saved games in Exult's GAMEDAT layout: a directory with U7IREGxx, NPC.DAT,
-/// FLAGINIT and GWIN.DAT. Loading points <see cref="U7Paths.GameDatOverride"/>
-/// at the directory and restarts the scene, so the normal loaders read it.
+/// MONSNPCS.DAT, FLAGINIT, GAMEWIN.DAT, USECODE.DAT and USECODE.VAR. Loading
+/// points <see cref="U7Paths.GameDatOverride"/> at the directory and restarts
+/// the scene, so the normal loaders read it.
 /// </summary>
 public static class SaveGame
 {
@@ -38,9 +39,11 @@ public static class SaveGame
         if (usecode is not null)
         {
             File.WriteAllBytes(Path.Combine(dir, "FLAGINIT"), usecode.GFlags);
+            UsecodeDat.Write(dir, usecode.Party?.Members.Select(m => m.NpcNum).ToList() ?? [], usecode.Timers);
         }
 
-        WriteGwin(Path.Combine(dir, "GWIN.DAT"), clock, inCombat, music);
+        File.Delete(Path.Combine(dir, OldGwinName));
+        WriteGwin(Path.Combine(dir, GwinName), clock, inCombat, music);
         var identity = Path.Combine(U7Paths.RepoRoot, "u7", "GAMEDAT", "IDENTITY");
         if (File.Exists(identity))
         {
@@ -49,6 +52,10 @@ public static class SaveGame
 
         GD.Print($"saved to {dir}");
     }
+
+    /// <summary>Exult <c>gamewin.dat</c>; saves made before this used the name GWIN.DAT.</summary>
+    const string GwinName = "GAMEWIN.DAT";
+    const string OldGwinName = "GWIN.DAT";
 
     /// <summary>Exult <c>Game_window::write_gwin</c>.</summary>
     static void WriteGwin(string path, GameClock clock, bool inCombat, MusicPlayer? music)
@@ -74,7 +81,7 @@ public static class SaveGame
     /// <summary>Exult <c>Game_window::read_gwin</c> (the parts we keep).</summary>
     public static GwinState? ReadGwin()
     {
-        var data = U7Paths.ReadGameDat("GWIN.DAT");
+        var data = U7Paths.ReadGameDat(GwinName) ?? U7Paths.ReadGameDat(OldGwinName);
         if (data is null)
         {
             return null;
@@ -108,7 +115,7 @@ public static class SaveGame
         }
         catch (Exception ex)
         {
-            GD.Print($"GWIN.DAT unreadable: {ex.Message}");
+            GD.Print($"{GwinName} unreadable: {ex.Message}");
             return null;
         }
     }

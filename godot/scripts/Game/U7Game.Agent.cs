@@ -18,7 +18,7 @@ namespace U7.Game;
 public partial class U7Game
 {
     const string AgentHelp =
-        "look [r] | find <text> | npc <num|name> | state | inv [npcnum] | flags | stubs | " +
+        "look [r] | find <text> | npc <num|name> | state | inv [npcnum] | flags | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id> | wait <sec> | hour <h> | shot <name> | " +
         "save <slot> | load <slot> | tile <x> <y> [z] | close";
@@ -284,6 +284,21 @@ public partial class U7Game
                 _agentElapsed = 0;
                 _agentLimit = double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture);
                 _agentBusy = () => _usecode is not { WaitingForChoice: true };
+                break;
+            }
+            case "timer":
+            {
+                // List usecode timers, or set one as if set some hours ago.
+                if (parts.Length > 2)
+                {
+                    _usecode!.Timers[int.Parse(parts[1])] = _clock.TotalHours - int.Parse(parts[2]);
+                }
+
+                foreach (var (tnum, hours) in _usecode!.Timers.OrderBy(t => t.Key))
+                {
+                    AgentLog($"timer {tnum}: set at hour {hours}, {_clock.TotalHours - hours} hours ago");
+                }
+
                 break;
             }
             case "steer":

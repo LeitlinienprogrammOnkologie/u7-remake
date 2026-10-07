@@ -17,7 +17,7 @@ Last update: 2026-10-07.
 | Schedules (`assets/data/schedules.csv`) | Done (core types; rest stand-at-dest) |
 | Eggs | Done (teleport, usecode, jukebox, button, monster) |
 | Combat | Done (melee, ranged, bodies, avatar death; no explosions / arrest) |
-| Save / load | Done (quick slot, Exult GAMEDAT layout) |
+| Save / load | Done (quick slot, Exult GAMEDAT layout with timers, party order, restored schedules; no zip saves) |
 | Music | Done (jukebox eggs → GM MIDI via Windows synth; no SFX/speech yet) |
 | Party | Done (join/leave, formation, follow, teleport, combat) |
 | Opening scene (moongate, Iolo, earthquake) | Done |
@@ -53,7 +53,7 @@ Open the **`godot/`** project in Godot 4.7 (C# / .NET 8). Data root is the repo 
 
 ### Agent console (automated play-testing)
 
-With the environment variable `U7_AGENT=<dir>` set, `Game/U7Game.Agent.cs` reads one command per line from `<dir>/cmd.txt` and appends results to `<dir>/out.txt`, each ending in `DONE <n>`. Game time is frozen between commands, music is off, and conversation text and barks are logged. Commands: `look [r]`, `find <text>`, `npc <num|name>`, `state`, `inv [npc]`, `flags`, `stubs`, `tile <x> <y> [z]`, `walk <x> <y>`, `walkto <id|npc:num>`, `steer <dir> <sec> [ms]`, `tp <x> <y> [z]`, `talk`/`use <id|npc>`, `take <id>`, `close`, `cont [n|all]`, `choose <answer|#n>`, `num <n>`, `click <id>`, `wait <sec>`, `hour <h>`, `save`/`load <slot>`, `shot <name>` (windowed only). Object ids come from `look`/`find` output. Helpers: `pwsh scripts/agent/restart.ps1 [-Load <slot>]` starts it headless (I/O in `agent_io/`), `python scripts/agent/agent.py "<cmd>" ...` sends commands and prints the results. The Trinsic murder chapter (opening, stables, Finnigan, Spark, the chest, Gilberto, Gargan, the report and map quiz, Johnson's gate) was played through this way.
+With the environment variable `U7_AGENT=<dir>` set, `Game/U7Game.Agent.cs` reads one command per line from `<dir>/cmd.txt` and appends results to `<dir>/out.txt`, each ending in `DONE <n>`. Game time is frozen between commands, music is off, and conversation text and barks are logged. Commands: `look [r]`, `find <text>`, `npc <num|name>`, `state`, `inv [npc]`, `flags`, `timer [n] [hours-ago]`, `stubs`, `tile <x> <y> [z]`, `walk <x> <y>`, `walkto <id|npc:num>`, `steer <dir> <sec> [ms]`, `tp <x> <y> [z]`, `talk`/`use <id|npc>`, `take <id>`, `close`, `cont [n|all]`, `choose <answer|#n>`, `num <n>`, `click <id>`, `wait <sec>`, `hour <h>`, `save`/`load <slot>`, `shot <name>` (windowed only). Object ids come from `look`/`find` output. Helpers: `pwsh scripts/agent/restart.ps1 [-Load <slot>]` starts it headless (I/O in `agent_io/`), `python scripts/agent/agent.py "<cmd>" ...` sends commands and prints the results. The Trinsic murder chapter (opening, stables, Finnigan, Spark, the chest, Gilberto, Gargan, the report and map quiz, Johnson's gate) was played through this way.
 
 ## Done milestones
 
@@ -142,9 +142,10 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 
 ### Save / load (current)
 
-- `Game/SaveGame` writes Exult's GAMEDAT layout into `saves/<slot>/`: `U7IREG00..8F` (Exult `write_ireg` / `write_ireg_objects`: plain 10-byte, container 12-byte and egg 12/14-byte entries, extended entries for shape ≥ 1024 or frame ≥ 64, contents terminated by 01, chunks by 00 00), `NPC.DAT` (Exult `Actor::write` layout with the extended magic/mana bytes, readied items marked `02 <spot>`), `FLAGINIT` (usecode global flags) and `GWIN.DAT` (day/hour/minute, music track, combat flag).
-- Loading sets `U7Paths.GameDatOverride` to the slot and reloads the scene, so the normal loaders pick up the saved files; `NpcDat` reads a raw `NPC.DAT` when present (both the original and Exult's magic/mana layouts) and keeps schedule destinations, type flags and the object flags. The party is rebuilt from the in_party flags.
-- Spawned monsters are saved to `MONSNPCS.DAT` (count + `Actor::write` records) and restored on load. Not saved: usecode timers/statics (usecode.dat, usevars), schedule changes made by usecode (schedule.dat), spellbook/virtue-stone extra bytes. Exult saves are zip files; a `saves/<slot>/` directory with the same files loads, the zip itself does not yet.
+- `Game/SaveGame` writes Exult's GAMEDAT layout into `saves/<slot>/`: `U7IREG00..8F` (Exult `write_ireg` / `write_ireg_objects`: plain 10-byte, container 12-byte and egg 12/14-byte entries, extended entries for shape ≥ 1024 or frame ≥ 64, contents terminated by 01, chunks by 00 00), `NPC.DAT` (Exult `Actor::write` layout with the extended magic/mana bytes, readied items marked `02 <spot>`, and `next_schedule` for an NPC walking to its spot), `FLAGINIT` (usecode global flags), `GAMEWIN.DAT` (Exult `gamewin.dat`: day/hour/minute, music track, combat flag; older saves named it `GWIN.DAT` and still load), and `USECODE.DAT` / `USECODE.VAR` (`Usecode/UsecodeDat`, Exult `Usecode_internal::write`: the party in join order, the usecode timers, Exult's saved position; the statics file is empty, as Black Gate's usecode has no statics).
+- Loading sets `U7Paths.GameDatOverride` to the slot and reloads the scene, so the normal loaders pick up the saved files; `NpcDat` reads a raw `NPC.DAT` when present (both the original and Exult's magic/mana layouts) and keeps schedule destinations, type flags and the object flags. The party is linked from `USECODE.DAT` in its saved order (Exult `link_party`), or from the in_party flags for saves without that file; the timers go back to the usecode machine.
+- NPC schedules on load follow Exult `Actor::restore_schedule`: everyone keeps the place and schedule they were saved with (a loiterer loiters where it stands), an NPC that was walking to its next schedule's spot sets off again (or is put there when far off), and the schedule table takes over at the next period. A new game applies the table at once (Exult `schedule_npcs` after character creation).
+- Spawned monsters are saved to `MONSNPCS.DAT` (count + `Actor::write` records) and restored on load. No `schedule.dat`: Exult falls back to the static `SCHEDULE.DAT`, and Black Gate's usecode cannot change schedules (the intrinsics that do, 0xa9 and up, are Exult's own). Not saved: spellbook/virtue-stone extra bytes. Exult saves are zip files; a `saves/<slot>/` directory with the same files loads, the zip itself does not yet.
 
 ### Music (current)
 
@@ -187,7 +188,7 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - True 8-bit palette cycling (world PNGs are day-baked RGBA)
 - Intro / endgame, SFX, speech playback, music on non-Windows
 - SI paperdolls (`PAPERDOL.VGA`), spellbook, save/load gumps
-- Save: usecode timers (`get_timer`/`set_timer`) and statics, usecode schedule changes, Exult zip saves
+- Save: spellbook/virtue-stone bytes, Exult zip saves
 - Many BG intrinsics still log `stub UI_*` and return 0
 - Proximity usecode (`npc_proximity`) not on a timer
 - Signs (`display_runes`) show in the conversation panel, not Exult's `Sign_gump`
@@ -218,7 +219,7 @@ Remaining BG intrinsics, then `npc_proximity` timer and full schedule classes. I
 - `Actors/ItemQuantity` ports Exult's quantity container code (`add_quantity`, `create_quantity`, `remove_quantity`, `modify_quantity`, `count_objects`): stacks fill to 100 before new objects are made, carry weight limits what is added, quantity shapes (coins, arrows, bolts, lockpicks) switch to their pile frames, locked containers (522, 798) refuse.
 - `count_objects` sums stack quantities (it counted objects before, so 50 gold read as 1) and counts the whole party for -357. `remove_party_items` / `add_party_items` work across the party like Exult; BG returns the receiving members and drops nothing on the ground.
 - `create_new_object` / `set_last_created` / `update_last_created` / `give_last_created` keep Exult's last_created stack. Monster shapes become neutral wait-schedule monsters that join the monster AI once placed.
-- `input_numeric_value` waits on a number box + OK in the answer column; `earthquake` jolts the camera ±4 px every 100 ms; `wearing_fellowship` checks the medallion (955 frame 1) on the neck; `get_timer`/`set_timer` count game hours (timers are **not saved** yet); `reset_conv_face`; both sound-effect intrinsics are silent no-ops.
+- `input_numeric_value` waits on a number box + OK in the answer column; `earthquake` jolts the camera ±4 px every 100 ms; `wearing_fellowship` checks the medallion (955 frame 1) on the neck; `get_timer`/`set_timer` count game hours (saved in `USECODE.DAT`); `reset_conv_face`; both sound-effect intrinsics are silent no-ops.
 
 ### Books and scrolls (current)
 

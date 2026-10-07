@@ -83,11 +83,36 @@ public sealed class PartyManager
         return true;
     }
 
-    /// <summary>Exult <c>Party_manager::link_party</c>: rebuild from the in_party flags after load.</summary>
-    public void LinkParty()
+    /// <summary>
+    /// Exult <c>Party_manager::link_party</c>: rebuild the party after a load
+    /// from the members <c>usecode.dat</c> saved, in their order.
+    /// </summary>
+    public void LinkParty(IReadOnlyList<int>? saved = null)
     {
         _avatar.SetFlag(ObjFlag.InParty);
         SetFlagRecursively(_avatar, ObjFlag.OkayToTake);
+        if (saved is not null)
+        {
+            // Exult: the members saved in usecode.dat, in their order; bad entries are skipped
+            // and the dead go to the dead-party list (not kept here).
+            _members.Clear();
+            foreach (var num in saved)
+            {
+                if (num <= 0 || num >= _npcs.Count || _npcs[num] is not { } member || _members.Contains(member) ||
+                    member.IsDead)
+                {
+                    continue;
+                }
+
+                member.SetFlag(ObjFlag.InParty);
+                SetFlagRecursively(member, ObjFlag.OkayToTake);
+                _members.Add(member);
+            }
+
+            return;
+        }
+
+        // Saves from before usecode.dat was written: the in_party flags, in NPC order.
         foreach (var npc in _npcs)
         {
             if (npc is { Unused: false, NpcNum: > 0 } && npc.GetFlag(ObjFlag.InParty) && !npc.IsDead)

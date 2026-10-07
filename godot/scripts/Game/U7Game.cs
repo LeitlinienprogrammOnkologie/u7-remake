@@ -102,9 +102,10 @@ public partial class U7Game : Node2D
             }
 
             var schedTable = ScheduleTable.Load();
-            _schedules = new ScheduleRunner(_map, avatar, _npcs, schedTable, _clock);
+            _schedules = new ScheduleRunner(_map, avatar, _npcs, schedTable, _clock, restore: U7Paths.GameDatOverride is not null);
+            var usecodeDat = UsecodeDat.Read();
             _party = new PartyManager(_map, avatar, _npcs) { Schedules = _schedules };
-            _party.LinkParty();
+            _party.LinkParty(usecodeDat?.Party);
             _schedules.Party = _party;
             _schedules.AvatarMoving = () => _avatar.IsPlayerMoving;
             _combat = new CombatEngine(_map, avatar, _catalog);
@@ -210,6 +211,11 @@ public partial class U7Game : Node2D
             var usecodeFile = UsecodeFile.Load();
             GD.Print($"USECODE loaded: {usecodeFile.Count} functions.");
             _usecode = new UsecodeMachine(usecodeFile, _map, avatar);
+            foreach (var (tnum, hours) in usecodeDat?.Timers ?? [])
+            {
+                _usecode.Timers[tnum] = hours;
+            }
+
             // Exult Game_window::read: until the first scene (global flag 0x3b)
             // has played, the avatar is invisible and under usecode control.
             if (_usecode.GFlags[UsecodeMachine.DidFirstSceneFlag] == 0)

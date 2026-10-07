@@ -223,7 +223,7 @@ public static class NpcDat
             npc.TypeFlags |= MoveFlags.Walk;
         }
         r.Skip(5);
-        r.U1(); // next_schedule
+        var nextSchedule = r.U1();
         r.Skip(1);
         r.Skip(2);
         r.Skip(2);
@@ -237,6 +237,8 @@ public static class NpcDat
             npc.ScheduleDestTx = schedTx;
             npc.ScheduleDestTy = schedTy;
             npc.ScheduleDestTz = schedTz;
+            // Exult next_schedule: what an NPC walking to its spot does once there.
+            npc.PendingSchedule = npc.ScheduleType == ScheduleType.WalkToSchedule && nextSchedule != 255 ? nextSchedule : -1;
         }
         r.Skip(4); // flags2
         r.Skip(1); // extended skin
@@ -428,7 +430,9 @@ public static class NpcDat
         w.Write((ushort)npc.TypeFlags);
         w.Write((uint)0);
         w.Write((byte)0);
-        w.Write((byte)255); // next_schedule
+        w.Write((byte)(npc.ScheduleType == ScheduleType.WalkToSchedule && npc.PendingSchedule >= 0
+            ? npc.PendingSchedule
+            : 255)); // next_schedule
         w.Write((byte)0);
         w.Write((ushort)0);
         w.Write((ushort)0);

@@ -30,8 +30,13 @@ public sealed class ScheduleRunner
     /// <summary>Exult <c>Actor::in_usecode_control</c>: the schedule waits while a script runs the NPC.</summary>
     public Func<U7Object, bool>? InUsecodeControl { get; set; }
 
+    /// <param name="restore">
+    /// A saved game: NPCs keep the schedules and places they were saved with
+    /// (Exult <c>restore_schedule</c>); a new game sets everyone to the
+    /// schedule of the hour (Exult <c>schedule_npcs</c>).
+    /// </param>
     public ScheduleRunner(GameMap map, U7Object avatar, List<U7Object?> npcs,
-        ScheduleTable table, GameClock clock)
+        ScheduleTable table, GameClock clock, bool restore = false)
     {
         _map = map;
         _avatar = avatar;
@@ -54,7 +59,64 @@ public sealed class ScheduleRunner
         }
 
         clock.SlotChanged += _ => ApplySlot(pathIfNearby: true);
-        ApplySlot(pathIfNearby: false);
+        if (restore)
+        {
+            RestoreSchedules();
+        }
+        else
+        {
+            ApplySlot(pathIfNearby: false);
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::restore_schedule</c> after a load: an NPC that was
+    /// walking to its next schedule's spot sets off again; everyone else stays
+    /// where they were with the schedule they had (a loiterer loiters around
+    /// where it stands). Party members are left alone. The schedule table
+    /// takes over again at the next change of period.
+    /// </summary>
+    void RestoreSchedules()
+    {
+        foreach (var b in _brains.Values)
+        {
+            var npc = b.Npc;
+            if (Party?.IsInParty(npc) == true || npc.ScheduleType is ScheduleType.FollowAvatar or ScheduleType.Wait)
+            {
+                b.WasNearby = true;
+                continue;
+            }
+
+            var dest = new TileCoord(npc.ScheduleDestTx, npc.ScheduleDestTy, npc.ScheduleDestTz);
+            if (dest.Tx == 0 && dest.Ty == 0)
+            {
+                // Never given a spot (no schedule table entries): where it is.
+                dest = new TileCoord(npc.Tx, npc.Ty, npc.Tz);
+            }
+
+            var nearby = Dist(npc) <= ActivityDist;
+            b.Dest = dest;
+            if (npc.ScheduleType == ScheduleType.WalkToSchedule && npc.PendingSchedule >= 0)
+            {
+                // Exult set_schedule_and_loc: walk there, or be put there when far off.
+                if (nearby)
+                {
+                    BeginWalkTo(b, npc.PendingSchedule, dest);
+                }
+                else
+                {
+                    Teleport(b, dest);
+                    BeginType(b, npc.PendingSchedule, dest, alreadyThere: true);
+                }
+            }
+            else
+            {
+                BeginType(b, npc.ScheduleType, dest, alreadyThere: true);
+                b.Center = new TileCoord(npc.Tx, npc.Ty, npc.Tz);
+            }
+
+            b.WasNearby = nearby;
+        }
     }
 
     public void SetScheduleType(U7Object npc, int type)

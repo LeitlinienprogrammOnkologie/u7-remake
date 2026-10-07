@@ -81,7 +81,8 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
    - Game time is frozen between commands.
    - Conversation text (`SAY`) and barks (`BARK`) are logged.
    - Object ids (`#231108`) are only usable after `look` or `find` has listed them.
-   - `save <slot>` / `load <slot>` keep progress across restarts.
+   - `save <slot>` / `load <slot>` keep progress across restarts; `timer`
+     lists or sets usecode timers.
    - The user may have local saves `quest1`–`quest4`, Trinsic checkpoints
      (`quest4` = outside the east gate with Iolo and Spark). Don't count on them.
    - After a code change, the running game still has the old assembly:
@@ -172,25 +173,23 @@ Done and play-tested: the whole Trinsic murder chapter.
 
 Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
-Exult's walking (blocking, A*, path following with doors, speeds), and the
-agent console.
+Exult's walking (blocking, A*, path following with doors, speeds), saves with
+timers, party order and restored NPC schedules, and the agent console.
 
 Next, in priority order:
 
-1. **Save completeness:** usecode timers (`UsecodeMachine.Timers`), usecode
-   statics/usevars and schedule changes made by usecode are not saved.
-2. **`npc_proximity`:** NPC barks on a timer when the avatar is near.
-3. **Schedules:** about 25 schedule types are empty in
+1. **`npc_proximity`:** NPC barks on a timer when the avatar is near.
+2. **Schedules:** about 25 schedule types are empty in
    `ScheduleRunner.NowWhat` (tend shop, eat, sit, waiter, blacksmith, ...).
    Port them from Exult's `schedule.cc`.
-4. **Remaining intrinsics:** 48 stubbed; the most-used are `sprite_effect`,
+3. **Remaining intrinsics:** 48 stubbed; the most-used are `sprite_effect`,
    `flash_mouse`, `set_to_attack`, `is_not_blocked` and `is_readied`.
-5. **Signs:** `display_runes` still uses the conversation panel; port
+4. **Signs:** `display_runes` still uses the conversation panel; port
    Exult's `Sign_gump` (runic signs, plaques, gravestones).
-6. **Walking follow-ups:** actors blocking one another with Exult's
+5. **Walking follow-ups:** actors blocking one another with Exult's
    `move_aside`/`swap_positions`, combat approach through the Monster
    pathfinder client, `Walk_to_schedule`'s off-screen legs, speed cursors.
-7. **Story:** continue to Britain (the Crown Jewel, the Man with the Hook,
+6. **Story:** continue to Britain (the Crown Jewel, the Man with the Hook,
    Lord British), played through the agent console from `quest4`.
 
 Known small gaps:
