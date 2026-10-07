@@ -21,6 +21,7 @@ public sealed class ShapeCache
     readonly ShapeCatalog _catalog;
     readonly VgaShapeFile _gumpsVga;
     readonly VgaShapeFile _fontsVga;
+    readonly VgaShapeFile _facesVga;
     readonly byte[] _palette;
 
     public VgaShapeFile GumpsVga => _gumpsVga;
@@ -31,6 +32,7 @@ public sealed class ShapeCache
         _catalog = catalog;
         _gumpsVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "GUMPS.VGA"));
         _fontsVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "FONTS.VGA"));
+        _facesVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "FACES.VGA"));
         _palette = U7Palette.DayRgb();
     }
 
@@ -214,19 +216,24 @@ public sealed class ShapeCache
         }
 
         Texture2D? tex = null;
-        var path = U7Paths.FacePng(shape, frame);
-        if (!File.Exists(path) && frame != 0)
+        var image = _facesVga.Decode(shape, frame, _palette);
+        if (image is null)
         {
-            path = U7Paths.FacePng(shape, 0);
+            var path = U7Paths.FacePng(shape, frame);
+            if (!File.Exists(path) && frame != 0)
+            {
+                path = U7Paths.FacePng(shape, 0);
+            }
+
+            if (File.Exists(path))
+            {
+                image = Image.LoadFromFile(path);
+            }
         }
 
-        if (File.Exists(path))
+        if (image is not null)
         {
-            var image = Image.LoadFromFile(path);
-            if (image is not null)
-            {
-                tex = ImageTexture.CreateFromImage(image);
-            }
+            tex = ImageTexture.CreateFromImage(image);
         }
 
         _faceTex[key] = tex;

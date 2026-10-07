@@ -142,6 +142,20 @@ public sealed class BgIntrinsics
             0x8d => GetPartyList(),
             0x8e => UsecodeValue.FromInt(_vm.Combat is { InCombat: true } ? 1 : 0),
             0x96 => AOrAn(p),
+            0x0c => InputNumericValue(p),
+            0x0f => Zero(), // play_sound_effect: no SFX playback yet
+            0x86 => Zero(), // play_sound_effect2
+            0x24 => CreateNewObject(p),
+            0x25 => SetLastCreated(p),
+            0x26 => UpdateLastCreated(p),
+            0x2b => RemovePartyItems(p),
+            0x2c => AddPartyItems(p),
+            0x36 => GiveLastCreated(p),
+            0x59 => Earthquake(p),
+            0x65 => GetTimer(p),
+            0x66 => SetTimer(p),
+            0x67 => WearingFellowship(),
+            0x91 => ResetConvFace(),
             _ => Stub(id, p, n)
         };
 
@@ -151,7 +165,42 @@ public sealed class BgIntrinsics
     {
         var args = n <= 0 ? "" : string.Join(", ", p.Take(n).Select(a => a.ToString()));
         _vm.Log($"stub UI_{Name(id)}({args})");
+        RecordStub(id, _vm.CurrentFrame?.Function.Id ?? -1);
         return Zero();
+    }
+
+    /// <summary>Stub hits for the whole run (static: survives the scene reload on load).</summary>
+    static readonly Dictionary<int, (int Hits, SortedSet<int> Callers)> StubHits = new();
+
+    static void RecordStub(int id, int caller)
+    {
+        if (!StubHits.TryGetValue(id, out var e))
+        {
+            e = (0, new SortedSet<int>());
+        }
+
+        if (caller >= 0)
+        {
+            e.Callers.Add(caller);
+        }
+
+        StubHits[id] = (e.Hits + 1, e.Callers);
+    }
+
+    /// <summary>Write the stub hits, most-hit first, to <c>stub_report.txt</c> in the repo root.</summary>
+    public static void WriteStubReport()
+    {
+        if (StubHits.Count == 0 || U7Paths.RepoRoot.Length == 0)
+        {
+            return;
+        }
+
+        var lines = StubHits
+            .OrderByDescending(kv => kv.Value.Hits)
+            .Select(kv => $"0x{kv.Key:X2}  {Name(kv.Key),-26}{kv.Value.Hits,6}  " +
+                          string.Join(" ", kv.Value.Callers.Select(c => $"0x{c:X4}")));
+        System.IO.File.WriteAllLines(System.IO.Path.Combine(U7Paths.RepoRoot, "stub_report.txt"),
+            lines.Prepend($"{"id",4}  {"name",-26}{"hits",6}  callers"));
     }
 
     UsecodeValue GetRandom(UsecodeValue[] p)
@@ -182,12 +231,17 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
+        // The panel names a speaker the player already knows (Exult sets met here,
+        // so a first meeting stays nameless until the next conversation).
+        var name = item is { NpcNum: >= 0 } && (item.NpcNum == 0 || item.GetFlag(U7.Actors.ObjFlag.Met))
+            ? item.NpcName
+            : "";
         if (item is { NpcNum: >= 0 })
         {
             item.SetFlag(U7.Actors.ObjFlag.Met);
         }
 
-        _vm.Conv.ShowFace(shape, frame);
+        _vm.Conv.ShowFace(shape, frame, name);
         _vm.NotifyFaces();
         return Zero();
     }
@@ -848,6 +902,8 @@ public sealed class BgIntrinsics
 
         var shown = sb.ToString();
         _vm.ShowText(shown);
+        _vm.Conv.TextFace = -1;
+        _vm.RequestWait(UsecodeWait.ClickToContinue);
         return Zero();
     }
 
@@ -1023,6 +1079,7 @@ public sealed class BgIntrinsics
         return Zero();
     }
 
+    /// <summary>Exult <c>Usecode_internal::count_objects</c>: -357 counts the whole party; stacks count their quantity.</summary>
     UsecodeValue CountObjects(UsecodeValue[] p)
     {
         var shape = (int)p[1].IntValue;
@@ -1031,11 +1088,241 @@ public sealed class BgIntrinsics
         var oval = p[0].IsPtr ? 0 : (int)p[0].IntValue;
         if (oval == -357)
         {
-            return UsecodeValue.FromInt(_vm.Avatar.CountContents(shape, qual, frame));
+            return UsecodeValue.FromInt(PartyObjects().Sum(m => Quantities.Count(m, shape, qual, frame)));
         }
 
         var obj = _vm.GetItem(p[0]);
-        return UsecodeValue.FromInt(obj?.CountContents(shape, qual, frame) ?? 0);
+        return UsecodeValue.FromInt(obj is null ? 0 : Quantities.Count(obj, shape, qual, frame));
+    }
+
+    U7.Actors.ItemQuantity? _quantities;
+
+    U7.Actors.ItemQuantity Quantities => _quantities ??=
+        new U7.Actors.ItemQuantity(_vm.Catalog, _vm.Map, _vm.Combat?.Weapons, _vm.Combat?.Ammo);
+
+    /// <summary>Exult <c>get_party</c> as objects: avatar first, then the members.</summary>
+    List<U7Object> PartyObjects()
+    {
+        var list = new List<U7Object> { _vm.Avatar };
+        if (_vm.Party?.Members is { } members)
+        {
+            list.AddRange(members);
+        }
+
+        return list;
+    }
+
+    /// <summary>Exult <c>Usecode_internal::remove_party_items(quantity, shape, quality, frame, flag)</c>.</summary>
+    UsecodeValue RemovePartyItems(UsecodeValue[] p)
+    {
+        var quantity = (int)p[0].NeedIntValue();
+        var shape = (int)p[1].IntValue;
+        var qual = (int)p[2].IntValue;
+        var frame = (int)p[3].IntValue;
+        var party = PartyObjects();
+        var avail = party.Sum(m => Quantities.Count(m, shape, qual, frame));
+        if (quantity == U7Constants.AnyShape)
+        {
+            quantity = avail;
+        }
+        else if (avail < quantity)
+        {
+            return Zero();
+        }
+
+        var orig = quantity;
+        foreach (var member in party)
+        {
+            if (quantity <= 0)
+            {
+                break;
+            }
+
+            quantity = Quantities.Remove(member, quantity, shape, qual, frame);
+        }
+
+        return UsecodeValue.FromInt(quantity != orig ? 1 : 0);
+    }
+
+    /// <summary>
+    /// Exult <c>Usecode_internal::add_party_items(quantity, shape, quality, frame, temporary)</c>:
+    /// returns the party members who received items (BG does not drop the rest).
+    /// </summary>
+    UsecodeValue AddPartyItems(UsecodeValue[] p)
+    {
+        var quantity = (int)p[0].IntValue;
+        var shape = (int)p[1].IntValue;
+        var qual = (int)p[2].IntValue;
+        var frame = (int)p[3].IntValue;
+        var temp = p[4].IntValue != 0;
+        var got = new List<U7Object>();
+        foreach (var member in PartyObjects())
+        {
+            if (quantity <= 0)
+            {
+                break;
+            }
+
+            var prev = quantity;
+            quantity = Quantities.Add(member, quantity, shape, qual, frame, dontCreate: false, temp);
+            if (quantity < prev)
+            {
+                got.Add(member);
+            }
+        }
+
+        var arr = UsecodeValue.FromArray(got.Count);
+        for (var i = 0; i < got.Count; i++)
+        {
+            arr.PutElem(i, UsecodeValue.FromObject(got[i]));
+        }
+
+        return arr;
+    }
+
+    /// <summary>
+    /// Exult <c>Usecode_internal::create_object</c>: a new object outside the
+    /// world, pushed on last_created. Monster shapes become neutral monsters in
+    /// the wait schedule.
+    /// </summary>
+    UsecodeValue CreateNewObject(UsecodeValue[] p)
+    {
+        var shape = (int)p[0].IntValue;
+        U7Object obj;
+        if (_vm.Combat is { } combat && (combat.IsMonsterShape(shape) || _vm.Catalog[shape].IsNpcClass))
+        {
+            obj = combat.CreateMonster(shape, 0, U7.Actors.ScheduleType.Wait, U7.Actors.Alignment.Neutral);
+            obj.Alignment = U7.Actors.Alignment.Neutral;
+            obj.Removed = true;
+        }
+        else
+        {
+            obj = Quantities.NewItem(shape, 0);
+            obj.SetFlag(U7.Actors.ObjFlag.OkayToTake);
+        }
+
+        _vm.LastCreated.Add(obj);
+        return UsecodeValue.FromObject(obj);
+    }
+
+    /// <summary>Exult <c>UI_set_last_created(item)</c>: take it off the map (or out of its container) onto last_created.</summary>
+    UsecodeValue SetLastCreated(UsecodeValue[] p)
+    {
+        var obj = _vm.GetItem(p[0]);
+        if (obj is not null && _vm.LastCreated.Contains(obj))
+        {
+            return Zero();
+        }
+
+        if (obj is not null)
+        {
+            _vm.LastCreated.Add(obj);
+            _vm.Map.TakeFromWorld(obj);
+            obj.Removed = true;
+        }
+
+        return UsecodeValue.FromObject(obj);
+    }
+
+    /// <summary>
+    /// Exult <c>UI_update_last_created(pos)</c>: pop last_created and place it
+    /// at (x, y[, z]); a one-element array just drops it.
+    /// </summary>
+    UsecodeValue UpdateLastCreated(UsecodeValue[] p)
+    {
+        if (_vm.LastCreated.Count == 0)
+        {
+            return Zero();
+        }
+
+        var obj = _vm.LastCreated[^1];
+        _vm.LastCreated.RemoveAt(_vm.LastCreated.Count - 1);
+        var arr = p[0];
+        var sz = arr.IsArray ? arr.ArraySize : 1;
+        if (sz >= 2)
+        {
+            var tz = sz >= 3 ? (int)arr.GetElem(2).IntValue : 0;
+            _vm.Map.PlaceInWorld(obj, (int)arr.GetElem(0).IntValue, (int)arr.GetElem(1).IntValue, tz);
+            _vm.Combat?.AdoptMonster(obj);
+        }
+        else
+        {
+            _vm.Map.TakeFromWorld(obj);
+            obj.Removed = true;
+        }
+
+        return UsecodeValue.FromInt(1);
+    }
+
+    /// <summary>Exult <c>UI_give_last_created(container)</c>: pops only when the add succeeds.</summary>
+    UsecodeValue GiveLastCreated(UsecodeValue[] p)
+    {
+        var cont = _vm.GetItem(p[0]);
+        if (cont is null || _vm.LastCreated.Count == 0)
+        {
+            return Zero();
+        }
+
+        var obj = _vm.LastCreated[^1];
+        var ok = obj.Container is null && obj.Removed && Quantities.AddTo(cont, obj);
+        if (ok)
+        {
+            _vm.LastCreated.RemoveAt(_vm.LastCreated.Count - 1);
+        }
+
+        return UsecodeValue.FromInt(ok ? 1 : 0);
+    }
+
+    /// <summary>Exult <c>UI_input_numeric_value(min, max, step, default)</c>: waits for the slider.</summary>
+    UsecodeValue InputNumericValue(UsecodeValue[] p)
+    {
+        var min = (int)p[0].IntValue;
+        var max = (int)p[1].IntValue;
+        var step = Math.Max(1, (int)p[2].IntValue);
+        var def = Math.Clamp((int)p[3].IntValue, Math.Min(min, max), Math.Max(min, max));
+        _vm.NumericPrompt = (min, max, step, def);
+        _vm.RequestWait(UsecodeWait.NumericInput);
+        return UsecodeValue.FromInt(def);
+    }
+
+    /// <summary>Exult <c>UI_earthquake(len)</c>: shake the view len times, 100 ms apart.</summary>
+    UsecodeValue Earthquake(UsecodeValue[] p)
+    {
+        _vm.QuakeSteps = Math.Max(_vm.QuakeSteps, (int)p[0].IntValue);
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_get_timer(n)</c>: hours since set_timer, or a random 0–12 if never set.</summary>
+    UsecodeValue GetTimer(UsecodeValue[] p)
+    {
+        var tnum = (int)p[0].IntValue;
+        if (_vm.Timers.TryGetValue(tnum, out var set) && set > 0)
+        {
+            return UsecodeValue.FromInt((_vm.Clock?.TotalHours ?? 0) - set);
+        }
+
+        return UsecodeValue.FromInt(_vm.Random(13) - 1);
+    }
+
+    UsecodeValue SetTimer(UsecodeValue[] p)
+    {
+        _vm.Timers[(int)p[0].IntValue] = _vm.Clock?.TotalHours ?? 0;
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_wearing_fellowship</c>: Fellowship medallion (shape 955 frame 1) on the avatar's neck.</summary>
+    UsecodeValue WearingFellowship()
+    {
+        var obj = U7.Actors.Equipment.GetReadied(_vm.Avatar, U7.Actors.ReadySpot.Neck);
+        return UsecodeValue.FromInt(obj is { Shape: 955 } && (obj.Frame & 31) == 1 ? 1 : 0);
+    }
+
+    /// <summary>Exult <c>UI_reset_conv_face</c>: first face back to frame 0.</summary>
+    UsecodeValue ResetConvFace()
+    {
+        _vm.Conv.ChangeFaceFrame(0, 0);
+        _vm.NotifyFaces();
+        return Zero();
     }
 
     UsecodeValue GetContItems(UsecodeValue[] p)

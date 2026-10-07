@@ -121,6 +121,16 @@ public partial class WorldView : Node2D
         {
             PaintDungeonBlackness(c0x, c0y, c1x, c1y);
         }
+
+        // Exult paints text effects after the map; the bark overlay draws these on screen.
+        _barkBack.Clear();
+        foreach (var obj in _barks)
+        {
+            _barkBack.Add(MakeBark(obj));
+        }
+
+        (_barkInfo, _barkBack) = (_barkBack, _barkInfo);
+        _barks.Clear();
     }
 
     /// <summary>
@@ -247,10 +257,41 @@ public partial class WorldView : Node2D
             return;
         }
 
+        _barks.Add(obj);
+    }
+
+    readonly List<U7Object> _barks = new();
+    List<BarkInfo> _barkInfo = new();
+    List<BarkInfo> _barkBack = new();
+
+    /// <summary>A bark to draw: its text and the top centre of the speaker's sprite in world pixels.</summary>
+    public readonly record struct BarkInfo(string Text, Vector2 WorldTop);
+
+    /// <summary>Barks painted in the last frame (drawn on screen by the bark overlay).</summary>
+    public IReadOnlyList<BarkInfo> Barks => _barkInfo;
+
+    /// <summary>
+    /// Exult <c>Text_effect</c>: one line per speaker, the '@' quote marks shown
+    /// as '"'. Anchored at the top centre of the shape rectangle.
+    /// </summary>
+    BarkInfo MakeBark(U7Object obj)
+    {
+        var text = obj.BarkText;
+        if (text.StartsWith('@'))
+        {
+            text = '"' + text[1..];
+        }
+
+        if (text.EndsWith('@'))
+        {
+            text = text[..^1] + '"';
+        }
+
+        var fi = Catalog[obj.Shape].GetFrame(obj.Frame);
         ShapeLocation(obj.Tx, obj.Ty, obj.Tz, out var hx, out var hy);
-        var font = ThemeDB.FallbackFont;
-        var pos = new Vector2(hx - obj.BarkText.Length, hy - 12);
-        DrawString(font, pos, obj.BarkText, HorizontalAlignment.Left, -1, 5, new Color(1f, 0.95f, 0.55f));
+        var left = hx - fi.XLeft;
+        var width = fi.XLeft + fi.XRight + 1;
+        return new BarkInfo(text, new Vector2(left + width / 2f, hy - fi.YAbove));
     }
 
     /// <summary>Exult <c>Game_render::paint_object</c>: dependencies first, then the object.</summary>
@@ -273,7 +314,8 @@ public partial class WorldView : Node2D
             }
         }
 
-        if (obj.Removed || obj.Container is not null || obj.InvisibleEgg)
+        if (obj.Removed || obj.Container is not null || obj.InvisibleEgg ||
+            (obj.IsActor && obj.GetFlag(U7.Actors.ObjFlag.DontMove)))
         {
             return;
         }

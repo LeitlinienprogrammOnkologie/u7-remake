@@ -931,8 +931,8 @@ public sealed class GameMap
     {
         for (var schunk = 0; schunk < U7Constants.NumSuperchunks; schunk++)
         {
-            var name = Path.Combine(U7Paths.GameDatDir, $"U7IREG{schunk:X2}");
-            if (!File.Exists(name))
+            var data = U7Paths.ReadGameDat($"U7IREG{schunk:X2}");
+            if (data is null)
             {
                 continue;
             }
@@ -940,7 +940,7 @@ public sealed class GameMap
             var scy = 16 * (schunk / 12);
             var scx = 16 * (schunk % 12);
             var i = 0;
-            ParseIreg(File.ReadAllBytes(name), ref i, scx, scy, null);
+            ParseIreg(data, ref i, scx, scy, null);
         }
     }
 

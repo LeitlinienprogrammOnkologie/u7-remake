@@ -18,8 +18,7 @@ public static class NpcDat
     {
         byte[] data;
         bool fixFirst;
-        var saved = Path.Combine(U7Paths.GameDatDir, "NPC.DAT");
-        if (File.Exists(saved))
+        if (U7Paths.SavedGameFile("NPC.DAT") is { } saved)
         {
             // A saved game (Exult layout): raw npc.dat.
             data = File.ReadAllBytes(saved);
@@ -320,13 +319,13 @@ public static class NpcDat
     public static List<U7Object> LoadMonsters(GameMap map)
     {
         var result = new List<U7Object>();
-        var path = Path.Combine(U7Paths.GameDatDir, "MONSNPCS.DAT");
-        if (!File.Exists(path))
+        var data = U7Paths.ReadGameDat("MONSNPCS.DAT");
+        if (data is null)
         {
             return result;
         }
 
-        var r = new Cursor(File.ReadAllBytes(path));
+        var r = new Cursor(data);
         var count = r.U2();
         for (var i = 0; i < count && r.I < r.D.Length; i++)
         {

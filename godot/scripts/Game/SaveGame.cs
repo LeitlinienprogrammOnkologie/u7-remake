@@ -72,17 +72,17 @@ public static class SaveGame
     public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCombat, int Track, bool Repeat);
 
     /// <summary>Exult <c>Game_window::read_gwin</c> (the parts we keep).</summary>
-    public static GwinState? ReadGwin(string dir)
+    public static GwinState? ReadGwin()
     {
-        var path = Path.Combine(dir, "GWIN.DAT");
-        if (!File.Exists(path))
+        var data = U7Paths.ReadGameDat("GWIN.DAT");
+        if (data is null)
         {
             return null;
         }
 
         try
         {
-            using var r = new BinaryReader(File.OpenRead(path));
+            using var r = new BinaryReader(new MemoryStream(data));
             r.ReadUInt16();
             r.ReadUInt16();
             int day = r.ReadUInt16();

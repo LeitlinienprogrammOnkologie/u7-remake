@@ -14,7 +14,11 @@ public enum UsecodeWait
     Converse,
     SelectMenu,
     SelectMenuIndex,
-    ClickOnItem
+    ClickOnItem,
+    /// <summary>input_numeric_value: resume with <see cref="UsecodeMachine.ResumeWait"/> and the chosen number.</summary>
+    NumericInput,
+    /// <summary>Exult <c>click_to_continue</c>: text is shown; resume with <see cref="UsecodeMachine.ContinueText"/>.</summary>
+    ClickToContinue
 }
 
 /// <summary>
@@ -25,6 +29,8 @@ public enum UsecodeWait
 public sealed class UsecodeMachine
 {
     public const int LastGflag = 2047;
+    /// <summary>Exult <c>Usecode_machine::did_first_scene</c>: went through the first scene with Iolo.</summary>
+    public const int DidFirstSceneFlag = 0x3b;
     public const int StackSize = 1024;
     public const int AnyShape = -359;
     const int MaxInstructionsPerRun = 250_000;
@@ -65,6 +71,14 @@ public sealed class UsecodeMachine
     public bool FadedOut { get; set; }
     /// <summary>Set by the restart_game intrinsic; the game reloads from the initial data.</summary>
     public bool RestartRequested { get; set; }
+    /// <summary>Exult <c>last_created</c>: objects made or lifted by usecode, newest last.</summary>
+    public List<U7Object> LastCreated { get; } = new();
+    /// <summary>Exult usecode timers: timer number → game hour it was set (<c>get_total_hours</c>).</summary>
+    public Dictionary<int, int> Timers { get; } = new();
+    /// <summary>input_numeric_value prompt (min, max, step, default) while <see cref="Wait"/> is NumericInput.</summary>
+    public (int Min, int Max, int Step, int Default) NumericPrompt { get; set; }
+    /// <summary>Remaining Exult <c>Earthquake</c> shakes (one per 100 ms); the game consumes it.</summary>
+    public int QuakeSteps { get; set; }
     public const double StdDelaySeconds = U7.Core.U7Constants.StandardDelayMs / 1000.0;
 
     readonly List<UsecodeScript> _scripts = new();
@@ -100,6 +114,14 @@ public sealed class UsecodeMachine
     }
 
     public bool HasScript(U7Object obj) => _scripts.Any(s => s.Obj == obj && !s.Done);
+
+    /// <summary>
+    /// Exult <c>Actor::in_usecode_control</c>: dont_move / dont_render set, or a
+    /// started script that is not no_halt. Such an actor does not walk on its own.
+    /// </summary>
+    public bool InUsecodeControl(U7Object actor) =>
+        U7.Actors.ObjFlag.DontMoveMode(actor) ||
+        _scripts.Any(s => s.Obj == actor && s.Activated && !s.Done && !s.NoHalt);
 
     /// <summary>Exult <c>Usecode_script::save</c> for every running script on the object.</summary>
     public IEnumerable<byte[]> SaveScripts(U7Object obj)
@@ -375,13 +397,12 @@ public sealed class UsecodeMachine
 
     void LoadFlagInit()
     {
-        var path = Path.Combine(U7Paths.GameDatDir, "FLAGINIT");
-        if (!System.IO.File.Exists(path))
+        var data = U7Paths.ReadGameDat("FLAGINIT");
+        if (data is null)
         {
             return;
         }
 
-        var data = System.IO.File.ReadAllBytes(path);
         var n = Math.Min(data.Length, GFlags.Length);
         Array.Copy(data, GFlags, n);
     }
@@ -400,6 +421,7 @@ public sealed class UsecodeMachine
         UserChoice = null;
         _foundAnswer = false;
         _pendingCallisPush = false;
+        _textQueue.Clear();
         if (!CallFunction(id, (int)ev, item, entrypoint: true))
         {
             HudMessage = $"no usecode 0x{id:X3}";
@@ -1163,6 +1185,11 @@ public sealed class UsecodeMachine
         SayString();
     }
 
+    /// <summary>
+    /// Exult <c>Usecode_internal::say_string</c>: show the text up to each '~'
+    /// ("~~" counts once) and wait for a click after every piece; a '*' at the
+    /// start of a piece is one more click.
+    /// </summary>
     public void SayString()
     {
         if (StringReg.Length == 0)
@@ -1170,15 +1197,94 @@ public sealed class UsecodeMachine
             return;
         }
 
-        var text = StringReg.Replace("~~", "\n").Replace('~', '\n').Replace("*", "");
+        var str = StringReg;
         StringReg = "";
-        ShowText(text);
+        while (str.Length > 0)
+        {
+            if (str[0] == '*')
+            {
+                _textQueue.Enqueue(null);
+                str = str[1..];
+                continue;
+            }
+
+            var eol = str.IndexOf('~');
+            if (eol < 0)
+            {
+                _textQueue.Enqueue(str);
+                break;
+            }
+
+            _textQueue.Enqueue(str[..eol]);
+            str = str[(eol + 1)..];
+            if (str.StartsWith('~'))
+            {
+                str = str[1..];
+            }
+        }
+
+        NextText();
     }
 
+    /// <summary>Pieces of the current say still to show; null is a bare click.</summary>
+    readonly Queue<string?> _textQueue = new();
+
+    /// <summary>Exult <c>show_npc_message</c> + <c>click_to_continue</c> for the next queued piece.</summary>
+    void NextText()
+    {
+        while (_textQueue.Count > 0)
+        {
+            var piece = _textQueue.Dequeue();
+            if (piece is not null)
+            {
+                ShowText(piece);
+            }
+
+            if (FadedOut)
+            {
+                continue; // Exult skips the click on a black screen.
+            }
+
+            Wait = UsecodeWait.ClickToContinue;
+            AnswersChanged?.Invoke();
+            return;
+        }
+    }
+
+    /// <summary>The player clicked through the shown text: next piece, or carry on running.</summary>
+    public void ContinueText()
+    {
+        if (Wait != UsecodeWait.ClickToContinue)
+        {
+            return;
+        }
+
+        Wait = UsecodeWait.None;
+        NextText();
+        if (Wait != UsecodeWait.None)
+        {
+            return;
+        }
+
+        if (_pendingCallisPush)
+        {
+            _pendingCallisPush = false;
+            Push(UsecodeValue.FromInt(0));
+        }
+
+        Run();
+        if (!InUsecode && !WaitingForChoice)
+        {
+            Conv.InitFaces();
+            FacesChanged?.Invoke();
+        }
+    }
+
+    /// <summary>Text for the conversation panel, spoken by the face shown last (Exult <c>last_face_shown</c>).</summary>
     public void ShowText(string text)
     {
         Conv.NpcText = text;
-        HudMessage = text;
+        Conv.TextFace = Conv.LastFace;
         Say?.Invoke(text);
     }
 
@@ -1226,6 +1332,7 @@ public sealed class UsecodeMachine
         _aborted = false;
         Wait = UsecodeWait.None;
         _pendingCallisPush = false;
+        _textQueue.Clear();
         UserChoice = null;
         StringReg = "";
         Conv.ClearAnswers();

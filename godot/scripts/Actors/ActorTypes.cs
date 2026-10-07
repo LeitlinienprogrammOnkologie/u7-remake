@@ -164,5 +164,12 @@ public static class ObjFlag
     public const int InParty = 6;
     public const int Asleep = 1;
     public const int Paralyzed = 7;
+    /// <summary>Exult <c>dont_move</c>; in BG also <c>bg_dont_render</c> (actor not drawn).</summary>
     public const int DontMove = 16;
+    /// <summary>Exult-only <c>bg_dont_move</c> / <c>dont_render</c>.</summary>
+    public const int BgDontMove = 22;
+
+    /// <summary>Exult <c>Game_window::main_actor_dont_move</c>: the avatar is under usecode control.</summary>
+    public static bool DontMoveMode(U7.Data.U7Object avatar) =>
+        avatar.GetFlag(DontMove) || avatar.GetFlag(BgDontMove);
 }

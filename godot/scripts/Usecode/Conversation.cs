@@ -9,8 +9,14 @@ public sealed class Conversation
     public List<string> Answers { get; } = new();
     readonly Stack<List<string>> _answerStack = new();
     public readonly (int Shape, int Frame)?[] Faces = new (int, int)?[2];
+    /// <summary>Speaker name per face slot, empty when the player has not met them yet.</summary>
+    public readonly string[] FaceNames = ["", ""];
     public string NpcText = "";
     public int FaceCount { get; private set; }
+    /// <summary>Exult <c>last_face_shown</c>: slot of the face shown most recently, or -1.</summary>
+    public int LastFace { get; private set; } = -1;
+    /// <summary>Slot of the face that said <see cref="NpcText"/>, or -1 (signs, no face).</summary>
+    public int TextFace = -1;
 
     public void ClearAnswers() => Answers.Clear();
 
@@ -80,7 +86,7 @@ public sealed class Conversation
     public int LocateAnswer(string str) =>
         Answers.FindIndex(a => a.Equals(str, StringComparison.OrdinalIgnoreCase));
 
-    public void ShowFace(int shape, int frame, int slot = -1)
+    public void ShowFace(int shape, int frame, string name = "", int slot = -1)
     {
         if (slot < 0)
         {
@@ -89,6 +95,12 @@ public sealed class Conversation
                 if (Faces[i] is { } f && f.Shape == shape)
                 {
                     Faces[i] = (shape, frame);
+                    LastFace = i;
+                    if (name.Length > 0)
+                    {
+                        FaceNames[i] = name;
+                    }
+
                     return;
                 }
             }
@@ -103,6 +115,17 @@ public sealed class Conversation
         }
 
         Faces[slot] = (shape, frame);
+        FaceNames[slot] = name;
+        LastFace = slot;
+    }
+
+    /// <summary>Exult <c>Conversation::change_face_frame(frame, slot)</c>.</summary>
+    public void ChangeFaceFrame(int frame, int slot)
+    {
+        if ((uint)slot < (uint)Faces.Length && Faces[slot] is { } f)
+        {
+            Faces[slot] = (f.Shape, frame);
+        }
     }
 
     public void RemoveFace(int shape)
@@ -112,15 +135,28 @@ public sealed class Conversation
             if (Faces[i] is { } f && f.Shape == shape)
             {
                 Faces[i] = null;
+                FaceNames[i] = "";
                 FaceCount = Math.Max(0, FaceCount - 1);
+                if (TextFace == i)
+                {
+                    TextFace = -1;
+                }
             }
+        }
+
+        if (LastFace >= 0 && Faces[LastFace] is null)
+        {
+            LastFace = Array.FindIndex(Faces, f => f is not null);
         }
     }
 
     public void InitFaces()
     {
         Array.Clear(Faces);
+        FaceNames[0] = FaceNames[1] = "";
         FaceCount = 0;
+        LastFace = -1;
+        TextFace = -1;
         NpcText = "";
     }
 }

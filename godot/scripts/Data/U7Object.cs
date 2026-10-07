@@ -175,24 +175,6 @@ public sealed class U7Object
         }
     }
 
-    public int CountContents(int shape, int quality, int frame)
-    {
-        var total = 0;
-        foreach (var child in Contents)
-        {
-            if ((shape == U7.Core.U7Constants.AnyShape || child.Shape == shape) &&
-                (frame == U7.Core.U7Constants.AnyShape || (child.Frame & 31) == frame) &&
-                (quality == U7.Core.U7Constants.AnyShape || child.Quality == quality))
-            {
-                total += 1;
-            }
-
-            total += child.CountContents(shape, quality, frame);
-        }
-
-        return total;
-    }
-
     public int GetProp(int index) =>
         (uint)index < (uint)Props.Length ? Props[index] : 0;
 

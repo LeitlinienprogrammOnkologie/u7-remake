@@ -33,7 +33,28 @@ public static class Inventory
     public static int GetWeight(U7Object obj, ShapeCatalog catalog)
     {
         var rec = catalog[obj.Shape];
-        var wt = GetQuantity(obj, catalog) * rec.Weight;
+        var wt = ShapeWeight(obj.Shape, GetQuantity(obj, catalog), catalog);
+        if (!rec.IsContainerClass && !obj.IsActor)
+        {
+            return wt;
+        }
+
+        foreach (var child in obj.Contents)
+        {
+            if (!child.Removed)
+            {
+                wt += GetWeight(child, catalog);
+            }
+        }
+
+        return wt;
+    }
+
+    /// <summary>Weight in 1/10 stones of <paramref name="quant"/> items of a shape (Exult <c>Ireg_game_object::get_weight</c>).</summary>
+    public static int ShapeWeight(int shape, int quant, ShapeCatalog catalog)
+    {
+        var rec = catalog[shape];
+        var wt = quant * rec.Weight;
         if (rec.Lightweight)
         {
             wt /= 10;
@@ -46,19 +67,6 @@ public static class Inventory
         if (rec.HasQuantity && wt <= 0)
         {
             wt = 1;
-        }
-
-        if (!rec.IsContainerClass && !obj.IsActor)
-        {
-            return wt;
-        }
-
-        foreach (var child in obj.Contents)
-        {
-            if (!child.Removed)
-            {
-                wt += GetWeight(child, catalog);
-            }
         }
 
         return wt;

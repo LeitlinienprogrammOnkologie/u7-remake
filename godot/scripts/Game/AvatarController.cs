@@ -20,6 +20,8 @@ public sealed class AvatarController
     Vector2I? _clickTarget;
     List<Vector2I>? _path;
     int _pathI;
+    /// <summary>The player walked or a swing played: stand once when that ends.</summary>
+    bool _settle;
 
     public Action<U7Object, int, int>? Moved;
 
@@ -41,8 +43,16 @@ public sealed class AvatarController
         }
     }
 
-    public void Update(double delta, Vector2I? clickTile, bool holdFrame = false)
+    public void Update(double delta, Vector2I? clickTile, bool holdFrame = false, bool inUsecodeControl = false)
     {
+        if (inUsecodeControl)
+        {
+            // Exult Game_window::start_actor: no walking while a script moves the avatar,
+            // and its frames are the script's.
+            _settle = false;
+            return;
+        }
+
         if (clickTile is { } t)
         {
             _clickTarget = t;
@@ -103,6 +113,7 @@ public sealed class AvatarController
             if (dx == 0 && dy == 0)
             {
                 _clickTarget = null;
+                _settle = false;
                 ActorWalker.Stand(Avatar, _facing);
                 return;
             }
@@ -115,9 +126,14 @@ public sealed class AvatarController
             return;
         }
 
-        if (!holdFrame)
+        if (holdFrame)
         {
-            ActorWalker.Stand(Avatar, _facing);
+            _settle = true;
+        }
+        else if (_settle)
+        {
+            _settle = false;
+            ActorWalker.Stand(Avatar, ActorWalker.FacingOfFrame(Avatar.Frame));
         }
     }
 
@@ -161,6 +177,7 @@ public sealed class AvatarController
 
     bool TryStep(int dx, int dy)
     {
+        _settle = true;
         _facing = ActorWalker.DirIndex(dx, dy);
         var fromTx = Avatar.Tx;
         var fromTy = Avatar.Ty;

@@ -6,6 +6,7 @@ using U7.Data;
 using U7.Gumps;
 using U7.Rendering;
 using U7.Usecode;
+using U7.UI;
 using U7.World;
 
 namespace U7.Game;
@@ -22,10 +23,8 @@ public partial class U7Game : Node2D
     GumpManager _gumps = null!;
     Camera2D _camera = null!;
     Label _hud = null!;
-    Label _say = null!;
     Label _debug = null!;
-    VBoxContainer _answers = null!;
-    TextureRect[] _faces = [];
+    ConversationPanel _conversation = null!;
     AvatarController _avatar = null!;
     GameMap _map = null!;
     ShapeCatalog _catalog = null!;
@@ -39,6 +38,8 @@ public partial class U7Game : Node2D
     CombatEngine _combat = null!;
     List<U7Object?> _npcs = new();
     float _zoom = 4f;
+    double _quakeTimer;
+    Vector2 _quakeOffset;
     bool _ready;
     bool _debugOn;
     bool _suppressWalk;
@@ -87,7 +88,7 @@ public partial class U7Game : Node2D
             }
 
             _clock = new GameClock();
-            var gwin = SaveGame.ReadGwin(U7Paths.GameDatDir);
+            var gwin = SaveGame.ReadGwin();
             if (gwin is { } g0)
             {
                 _clock.Set(g0.Day, g0.Hour, g0.Minute);
@@ -185,37 +186,9 @@ public partial class U7Game : Node2D
             _hud.AddThemeColorOverride("font_color", new Color(0.95f, 0.9f, 0.7f));
             layer.AddChild(_hud);
 
-            _say = new Label
-            {
-                Name = "Say",
-                Position = new Vector2(12, 520),
-                Size = new Vector2(800, 160),
-                AutowrapMode = TextServer.AutowrapMode.WordSmart,
-                TextureFilter = TextureFilterEnum.Nearest
-            };
-            _say.AddThemeColorOverride("font_color", new Color(1f, 0.92f, 0.55f));
-            layer.AddChild(_say);
-
-            _answers = new VBoxContainer
-            {
-                Name = "Answers",
-                Position = new Vector2(900, 200)
-            };
-            layer.AddChild(_answers);
-
-            _faces = new TextureRect[2];
-            for (var i = 0; i < _faces.Length; i++)
-            {
-                _faces[i] = new TextureRect
-                {
-                    Name = $"Face{i}",
-                    Visible = false,
-                    StretchMode = TextureRect.StretchModeEnum.KeepAspect,
-                    TextureFilter = TextureFilterEnum.Nearest,
-                    MouseFilter = Control.MouseFilterEnum.Ignore
-                };
-                layer.AddChild(_faces[i]);
-            }
+            layer.AddChild(new BarkOverlay { Name = "Barks", World = _world });
+            _conversation = new ConversationPanel { Name = "Conversation", Shapes = _shapes };
+            layer.AddChild(_conversation);
 
             _debug = new Label
             {
@@ -229,8 +202,18 @@ public partial class U7Game : Node2D
 
             var usecodeFile = UsecodeFile.Load();
             GD.Print($"USECODE loaded: {usecodeFile.Count} functions.");
-            GD.Print(usecodeFile.DisassemblePrefix(0x0096));
             _usecode = new UsecodeMachine(usecodeFile, _map, avatar);
+            // Exult Game_window::read: until the first scene (global flag 0x3b)
+            // has played, the avatar is invisible and under usecode control.
+            if (_usecode.GFlags[UsecodeMachine.DidFirstSceneFlag] == 0)
+            {
+                avatar.SetFlag(ObjFlag.DontMove);
+            }
+            else
+            {
+                avatar.ClearFlag(ObjFlag.DontMove);
+            }
+
             _usecode.Gumps = _gumps;
             _usecode.Npcs = _npcs;
             _usecode.Clock = _clock;
@@ -264,21 +247,11 @@ public partial class U7Game : Node2D
                 _usecode.Call(0x60E, avatar, UsecodeEvent.Weapon);
             };
             _eggs.Usecode = _usecode;
-            _usecode.Say += text => _say.Text = text;
-            _usecode.AnswersChanged += RebuildAnswers;
-            _usecode.FacesChanged += RefreshFaces;
-
-            var dummy = new U7Object { Shape = 0x96, Frame = 0, Tx = avatar.Tx, Ty = avatar.Ty };
-            var rc = _usecode.Call(0x0096, dummy, UsecodeEvent.DoubleClick);
-            GD.Print($"debug call 0x0096 → {rc} ip={_usecode.LastIp} last={_usecode.LastIntrinsic} (frame={dummy.Frame} flags=0x{dummy.Flags:X})");
-            if (_usecode.InUsecode || _usecode.WaitingForChoice)
-            {
-                GD.Print("debug call left usecode running; resetting.");
-                _usecode.Reset();
-            }
-
-            _say.Text = "";
-            _usecode.HudMessage = "";
+            _schedules.InUsecodeControl = _usecode.InUsecodeControl;
+            _conversation.Machine = _usecode;
+            _usecode.Say += _ => _conversation.Refresh();
+            _usecode.AnswersChanged += _conversation.Refresh;
+            _usecode.FacesChanged += _conversation.Refresh;
 
             GD.Print(
                 $"gumps: chest={_catalog[800].GumpShape} crate={_catalog[804].GumpShape} " +
@@ -349,9 +322,11 @@ public partial class U7Game : Node2D
         }
     }
 
+
     public override void _ExitTree()
     {
         _music?.Dispose();
+        BgIntrinsics.WriteStubReport();
     }
 
     public override void _Process(double delta)
@@ -383,7 +358,8 @@ public partial class U7Game : Node2D
             _gumps.OnMouseMove(_gumpView, virt.X, virt.Y);
         }
 
-        if (!inUsecode && !_suppressWalk && !gumpBusy && !_avatar.Avatar.IsDead &&
+        var dontMove = ObjFlag.DontMoveMode(_avatar.Avatar);
+        if (!inUsecode && !_suppressWalk && !gumpBusy && !_avatar.Avatar.IsDead && !dontMove &&
             Input.IsMouseButtonPressed(MouseButton.Left) && _camera is not null)
         {
             var world = _camera.GetGlobalMousePosition();
@@ -411,9 +387,10 @@ public partial class U7Game : Node2D
         }
 
         var frozen = inUsecode || gumpBusy || _avatar.Avatar.IsDead;
-        if (!inUsecode && !gumpBusy && !_avatar.Avatar.IsDead)
+        if (!inUsecode && !gumpBusy && !_avatar.Avatar.IsDead && !dontMove)
         {
-            _avatar.Update(delta, click, _combat.IsAnimating(_avatar.Avatar));
+            _avatar.Update(delta, click, _combat.IsAnimating(_avatar.Avatar),
+                _usecode?.InUsecodeControl(_avatar.Avatar) ?? false);
         }
 
         _clock.Update(delta);
@@ -443,7 +420,7 @@ public partial class U7Game : Node2D
 
         var av = _avatar.Avatar;
         var cam = WorldView.AvatarCameraPoint(av);
-        camera.GlobalPosition = new Vector2(Mathf.Round(cam.X), Mathf.Round(cam.Y));
+        camera.GlobalPosition = new Vector2(Mathf.Round(cam.X), Mathf.Round(cam.Y)) + QuakeOffset(delta);
 
         var under = WorldView.WorldToTile(camera.GetGlobalMousePosition(), av.Tz);
         var picked = _world.PickObject(camera.GetGlobalMousePosition());
@@ -496,19 +473,25 @@ public partial class U7Game : Node2D
                 _zoom = Mathf.Clamp(_zoom + 0.5f, 1f, 8f);
                 _camera.Zoom = new Vector2(_zoom, _zoom);
                 _gumpView.Zoom = _zoom;
-                RefreshFaces();
             }
             else if (mb.ButtonIndex == MouseButton.WheelDown && mb.Pressed)
             {
                 _zoom = Mathf.Clamp(_zoom - 0.5f, 1f, 8f);
                 _camera.Zoom = new Vector2(_zoom, _zoom);
                 _gumpView.Zoom = _zoom;
-                RefreshFaces();
             }
             else if (mb.Pressed && mb.ButtonIndex is MouseButton.Left or MouseButton.Right)
             {
                 if (HandleClickOnItem(virt.X, virt.Y, mb.ButtonIndex == MouseButton.Right))
                 {
+                    _suppressWalk = true;
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+
+                if (ObjFlag.DontMoveMode(_avatar.Avatar))
+                {
+                    // Exult: no double-clicks, drags or walking while usecode runs the avatar.
                     _suppressWalk = true;
                     GetViewport().SetInputAsHandled();
                     return;
@@ -563,6 +546,13 @@ public partial class U7Game : Node2D
         }
         else if (@event is InputEventKey { Pressed: true, Echo: false } key)
         {
+            // Exult restricts key actions in dont_move mode; debug, save, music and zoom stay.
+            if (ObjFlag.DontMoveMode(_avatar.Avatar) &&
+                key.Keycode is Key.Home or Key.E or Key.I or Key.C or Key.F3 or Key.F6 or Key.Pageup or Key.Pagedown)
+            {
+                return;
+            }
+
             switch (key.Keycode)
             {
                 case Key.Home:
@@ -697,7 +687,7 @@ public partial class U7Game : Node2D
         arr.PutElem(2, UsecodeValue.FromInt(worldObj?.Ty ?? tile.Ty));
         arr.PutElem(3, UsecodeValue.FromInt(worldObj?.Tz ?? tile.Tz));
         _usecode.ResumeWait(arr);
-        RebuildAnswers();
+        _conversation.Refresh();
         return true;
     }
 
@@ -781,70 +771,30 @@ public partial class U7Game : Node2D
         var rc = _usecode.Call(fun, obj, UsecodeEvent.DoubleClick);
         if (rc < 0)
         {
-            _say.Text = _usecode.HudMessage;
+            _statusExtra = _usecode.HudMessage;
         }
 
-        RebuildAnswers();
+        _conversation.Refresh();
     }
 
-    void RefreshFaces()
+
+    /// <summary>Exult <c>Earthquake::handle_event</c>: a random ±4 pixel jolt every 100 ms while usecode asks for one.</summary>
+    Vector2 QuakeOffset(double delta)
     {
-        if (_faces.Length == 0 || _usecode is null || _shapes is null)
+        if (_usecode is not { QuakeSteps: > 0 } machine)
         {
-            return;
+            _quakeOffset = Vector2.Zero;
+            return _quakeOffset;
         }
 
-        var view = GetViewport().GetVisibleRect().Size;
-        for (var i = 0; i < _faces.Length; i++)
+        _quakeTimer -= delta;
+        if (_quakeTimer <= 0)
         {
-            var slot = _usecode.Conv.Faces[i];
-            if (slot is not { } face)
-            {
-                _faces[i].Visible = false;
-                _faces[i].Texture = null;
-                continue;
-            }
-
-            var tex = _shapes.GetFace(face.Shape, face.Frame);
-            _faces[i].Texture = tex;
-            _faces[i].Visible = tex is not null;
-            if (tex is null)
-            {
-                continue;
-            }
-
-            var size = tex.GetSize() * _zoom;
-            _faces[i].Size = size;
-            _faces[i].Position = i == 0
-                ? new Vector2(16, 72)
-                : new Vector2(Mathf.Max(16, view.X - size.X - 16), 72);
-        }
-    }
-
-    void RebuildAnswers()
-    {
-        foreach (var child in _answers.GetChildren())
-        {
-            child.QueueFree();
+            _quakeTimer = 0.1;
+            machine.QuakeSteps--;
+            _quakeOffset = new Vector2(GD.RandRange(-4, 4), GD.RandRange(-4, 4));
         }
 
-        var machine = _usecode;
-        if (machine is null || !machine.WaitingForChoice)
-        {
-            return;
-        }
-
-        for (var i = 0; i < machine.Conv.Answers.Count; i++)
-        {
-            var text = machine.Conv.Answers[i];
-            var idx = i;
-            var btn = new Button { Text = text };
-            btn.Pressed += () =>
-            {
-                machine.Choose(text, idx);
-                RebuildAnswers();
-            };
-            _answers.AddChild(btn);
-        }
+        return _quakeOffset;
     }
 }

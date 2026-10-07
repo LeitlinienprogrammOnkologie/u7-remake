@@ -104,6 +104,15 @@ public static class ActorWalker
         actor.WalkFrameIndex = 0;
     }
 
+    /// <summary>Facing (0 N, 2 E, 4 S, 6 W) from a frame's rotation bits.</summary>
+    public static int FacingOfFrame(int frame) => ((frame >> 4) & 3) switch
+    {
+        0 => 0,
+        1 => 4,
+        2 => 6,
+        _ => 2
+    };
+
     public static int DirIndex(int dx, int dy) => (dx, dy) switch
     {
         (0, -1) => 0,

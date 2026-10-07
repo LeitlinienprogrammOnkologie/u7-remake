@@ -16,6 +16,8 @@ public sealed class GameClock
     public int Day { get; private set; }
     public int TimeRate { get; set; } = 1;
     public int Slot => Hour / 3;
+    /// <summary>Exult <c>Game_clock::get_total_hours</c>.</summary>
+    public int TotalHours => Day * 24 + Hour;
 
     public event Action<int>? HourChanged;
     public event Action<int>? SlotChanged;

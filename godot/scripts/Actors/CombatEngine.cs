@@ -62,6 +62,9 @@ public sealed class CombatEngine
     public string LastMessage { get; private set; } = "";
     public IReadOnlyList<U7Object> Spawned => _spawned;
     public IReadOnlyList<U7Object> Engaged => _engaged;
+    public WeaponTable Weapons => _weapons;
+    public AmmoTable Ammo => _ammo;
+    public bool IsMonsterShape(int shape) => _monsters.Contains(shape);
 
     public CombatEngine(GameMap map, U7Object avatar, ShapeCatalog catalog)
     {
@@ -213,13 +216,29 @@ public sealed class CombatEngine
             return null;
         }
 
+        var npc = CreateMonster(shape, frame, sched < 0 ? ScheduleType.Loiter : sched, align);
+        npc.Tx = spot.Value.Tx;
+        npc.Ty = spot.Value.Ty;
+        npc.Tz = spot.Value.Tz;
+        npc.SetFlag(ObjFlag.Temporary);
+        _map.AddObject(npc);
+        _spawned.Add(npc);
+        StartBattle();
+        LastMessage = $"spawn {npc.NpcName} at {npc.Tx},{npc.Ty} align {npc.Alignment}";
+        GD.Print(LastMessage);
+        return npc;
+    }
+
+    /// <summary>
+    /// Exult <c>Monster_actor::create</c> without placing it: stats from
+    /// monsters.csv, alignment from <paramref name="align"/> unless neutral.
+    /// </summary>
+    public U7Object CreateMonster(int shape, int frame, int sched, int align)
+    {
         var inf = _monsters[shape];
         var rec = _catalog[shape];
         var npc = new U7Object
         {
-            Tx = spot.Value.Tx,
-            Ty = spot.Value.Ty,
-            Tz = spot.Value.Tz,
             Shape = shape,
             Frame = frame,
             Kind = ObjectKind.Actor,
@@ -231,22 +250,25 @@ public sealed class CombatEngine
             DimY = rec.DimY,
             DimZ = rec.DimZ,
             Alignment = align == Alignment.Neutral ? inf.Alignment : align,
-            ScheduleType = sched < 0 ? ScheduleType.Loiter : sched,
+            ScheduleType = sched,
             NpcName = string.IsNullOrEmpty(rec.Name) ? $"shape {shape}" : rec.Name
         };
-        npc.SetFlag(ObjFlag.Temporary);
         var str = RandomizeStat(inf.Strength);
         npc.SetProp(ActorProp.Strength, str);
         npc.SetProp(ActorProp.Health, str);
         npc.SetProp(ActorProp.Dexterity, RandomizeStat(inf.Dexterity));
         npc.SetProp(ActorProp.Intelligence, RandomizeStat(inf.Intelligence));
         npc.SetProp(ActorProp.Combat, RandomizeStat(inf.Combat));
-        _map.AddObject(npc);
-        _spawned.Add(npc);
-        StartBattle();
-        LastMessage = $"spawn {npc.NpcName} at {npc.Tx},{npc.Ty} align {npc.Alignment}";
-        GD.Print(LastMessage);
         return npc;
+    }
+
+    /// <summary>Let the monster AI drive a monster that usecode placed in the world.</summary>
+    public void AdoptMonster(U7Object npc)
+    {
+        if (npc.IsMonster && !_spawned.Contains(npc))
+        {
+            _spawned.Add(npc);
+        }
     }
 
     /// <summary>Debug F3: heal avatar, spawn three chaotic rats, enter combat.</summary>

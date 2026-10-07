@@ -10,5 +10,9 @@ Thumbs.db
 /u7/
 /exult/
 /assets/
+# Replacement FONTS.VGA files (unused; provenance and licence unknown).
+/modern fonts/
 # Saved games (Exult GAMEDAT layout)
 /saves/
+# Runtime stub-intrinsic report (BgIntrinsics.WriteStubReport)
+/stub_report.txt

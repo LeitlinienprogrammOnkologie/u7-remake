@@ -20,14 +20,16 @@ Last update: 2026-10-07.
 | Save / load | Done (quick slot, Exult GAMEDAT layout) |
 | Music | Done (jukebox eggs → GM MIDI via Windows synth; no SFX/speech yet) |
 | Party | Done (join/leave, formation, follow, teleport, combat) |
-| Intro, barges | Not started |
+| Opening scene (moongate, Iolo, earthquake) | Done |
+| Conversation panel | Done (portraits, paging, click to continue, answers) |
+| Intro movie, barges | Not started |
 | Serpent Isle | Out of scope |
 
 `dotnet build` of `godot/U7.csproj` is clean.
 
 ## How to run
 
-Open the **`godot/`** project in Godot 4.7 (C# / .NET 8). Data root is the repo (`u7/STATIC/U7MAP` must exist). `u7/`, `exult/` and `assets/` are not tracked; [README.md](README.md) explains how to provide them. Start tile is Trinsic **1079, 2214**, hour **6:00**.
+Open the **`godot/`** project in Godot 4.7 (C# / .NET 8). Data root is the repo (`u7/STATIC/U7MAP` must exist). `u7/`, `exult/` and `assets/` are not tracked; [README.md](README.md) explains how to provide them. A new game starts from `STATIC/INITGAME.DAT` (not `u7/GAMEDAT`, which holds a game already past the opening): Trinsic **1079, 2214**, hour **6:00**, with the opening scene.
 
 | Key / input | Action |
 |---|---|
@@ -180,10 +182,33 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - True 8-bit palette cycling (world PNGs are day-baked RGBA)
 - Intro / endgame, SFX, speech playback, music on non-Windows
 - SI paperdolls (`PAPERDOL.VGA`), spellbook, save/load gumps
-- Save: usecode timers/statics, usecode schedule changes, Exult zip saves
+- Save: usecode timers (`get_timer`/`set_timer`) and statics, usecode schedule changes, Exult zip saves
 - Many BG intrinsics still log `stub UI_*` and return 0
 - Proximity usecode (`npc_proximity`) not on a timer
 
 ## Next milestone
 
-Not set. Candidates: full schedule classes, remaining BG intrinsics, `npc_proximity` timer. Intro, barges and arrest can wait.
+Remaining BG intrinsics, then `npc_proximity` timer and full schedule classes. Intro, barges and arrest can wait.
+
+`python scripts/usecode_stub_report.py` ranks the stubbed intrinsics by static reachability (Trinsic NPCs by default, `--npcs` for others, plus all of USECODE). In game, every stub hit is counted and written to `stub_report.txt` (repo root, untracked) on exit. Nothing reachable from the Trinsic NPCs is stubbed any more; 49 intrinsics remain game-wide (top: `sprite_effect`, `flash_mouse`, `set_to_attack`, `is_not_blocked`, `is_readied`).
+
+### Opening scene (current)
+
+- A new game reads IREG, FLAGINIT and the rest from `INITGAME.DAT` entries (`U7Paths.ReadGameDat`); saves read `saves/<slot>/`. `u7/GAMEDAT` is not used: the GOG copy is a game already past the opening (flags 0x14, 0x3b, 0x4c, 0x5a, 0x5c set, the Trinsic superchunks 64/65/70/71 changed).
+- Exult `Game_window::read`: while global flag 0x3b (`did_first_scene`) is clear, the avatar gets object flag 16 (BG `dont_move` + `bg_dont_render`): not drawn, no walking, double-clicks, drags or game keys (debug, save, music and zoom still work), followers wait (Exult `main_actor_dont_move`).
+- The scene itself is the game's usecode: the cached-in egg (0x06C2) calls Iolo's 0x0401 with the egg event (music 35, barks), 0x06AA creates and animates the red moongate, 0x0618 clears flag 16, Iolo greets the Avatar, Petre interrupts, 0x08DD makes the NPCs react and shakes the screen (Forge of Virtue earthquake), Iolo joins, 0x06FA remarks on the tremor. Verified headless end to end.
+- Usecode control (Exult `Actor::in_usecode_control`: flag 16/22 or a started, halting script): the player cannot walk the avatar and NPC schedules wait, so script steps and frames are not overwritten. The avatar returns to its standing frame once when a walk or swing ends (Exult `Actor::stop`), facing the way it already faces, instead of every idle frame.
+- Barks (`item_say`, script `say`) follow Exult `Text_effect` (one per speaker, '@' shown as '"', drawn after the map) but in screen space: `UI/BarkOverlay` draws MedievalSharp in yellow with a dark outline, sized with the zoom, centred above the speaker's sprite and kept on screen. `WorldView.Barks` supplies the anchors.
+
+### Conversation panel (current)
+
+- `UI/ConversationPanel` replaces the bare label/buttons: dark wood with gold trim along the bottom, the speaker's portrait (from `FACES.VGA`; the extracted face PNGs are 8x8 tiles), their name once met before this conversation, MedievalSharp text, a pulsing continue marker, answers as numbered buttons (1–9 keys work), the number prompt, and a smaller portrait for a second speaker. The Guardian's large face gets red text like Exult's font 7.
+- Paging follows Exult `say_string` / `show_npc_message`: the VM splits a say at '~' ("~~" counts once) and waits for a click after every piece (`UsecodeWait.ClickToContinue`, `ContinueText`); a leading '*' is an extra click, a '*' inside a piece starts a new page, '^' capitalises, and text too long for the box is paged in the panel. Clicks anywhere, Space or Enter continue. `display_runes` waits for a click like Exult's modal sign.
+- Fonts: MedievalSharp (`godot/fonts/`, SIL OFL) for the panel and barks; gumps still use the original `FONTS.VGA`.
+
+### Usecode items (current)
+
+- `Actors/ItemQuantity` ports Exult's quantity container code (`add_quantity`, `create_quantity`, `remove_quantity`, `modify_quantity`, `count_objects`): stacks fill to 100 before new objects are made, carry weight limits what is added, quantity shapes (coins, arrows, bolts, lockpicks) switch to their pile frames, locked containers (522, 798) refuse.
+- `count_objects` sums stack quantities (it counted objects before, so 50 gold read as 1) and counts the whole party for -357. `remove_party_items` / `add_party_items` work across the party like Exult; BG returns the receiving members and drops nothing on the ground.
+- `create_new_object` / `set_last_created` / `update_last_created` / `give_last_created` keep Exult's last_created stack. Monster shapes become neutral wait-schedule monsters that join the monster AI once placed.
+- `input_numeric_value` waits on a number box + OK in the answer column; `earthquake` jolts the camera ±4 px every 100 ms; `wearing_fellowship` checks the medallion (955 frame 1) on the neck; `get_timer`/`set_timer` count game hours (timers are **not saved** yet); `reset_conv_face`; both sound-effect intrinsics are silent no-ops.

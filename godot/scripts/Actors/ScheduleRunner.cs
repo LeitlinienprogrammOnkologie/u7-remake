@@ -27,6 +27,8 @@ public sealed class ScheduleRunner
     public PartyManager? Party { get; set; }
     /// <summary>True while the avatar is walking; formation stepping drives followers then.</summary>
     public Func<bool>? AvatarMoving { get; set; }
+    /// <summary>Exult <c>Actor::in_usecode_control</c>: the schedule waits while a script runs the NPC.</summary>
+    public Func<U7Object, bool>? InUsecodeControl { get; set; }
 
     public ScheduleRunner(GameMap map, U7Object avatar, List<U7Object?> npcs,
         ScheduleTable table, GameClock clock)
@@ -221,6 +223,13 @@ public sealed class ScheduleRunner
             return;
         }
 
+        if (InUsecodeControl?.Invoke(b.Npc) ?? false)
+        {
+            // Exult Actor::handle_event: keep trying every standard delay.
+            b.StepTimer = U7Constants.StandardDelayMs / 1000.0;
+            return;
+        }
+
         b.StepTimer = _stepInterval;
         NowWhat(b);
     }
@@ -327,7 +336,8 @@ public sealed class ScheduleRunner
     void FollowAvatar(Brain b)
     {
         var npc = b.Npc;
-        if (npc.IsDead || npc.GetFlag(ObjFlag.Asleep) || npc.GetFlag(ObjFlag.Paralyzed))
+        if (npc.IsDead || npc.GetFlag(ObjFlag.Asleep) || npc.GetFlag(ObjFlag.Paralyzed) ||
+            ObjFlag.DontMoveMode(_avatar))
         {
             return;
         }

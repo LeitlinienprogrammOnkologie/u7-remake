@@ -26,7 +26,8 @@ C:\GOG Games\Ultima 7 Complete
 C:\Program Files (x86)\GOG Galaxy\Games\Ultima 7 Complete
 ```
 
-The game reads only `u7/STATIC/` and `u7/GAMEDAT/`, but the extraction
+The game reads only `u7/STATIC/` (a new game starts from
+`STATIC/INITGAME.DAT`, like Exult; `u7/GAMEDAT/` is ignored), but the extraction
 script and `titan` expect the whole install. The data root is located at
 runtime by walking up from the Godot project until `u7/STATIC/U7MAP`
 exists, so the folder name and position are fixed.
@@ -62,6 +63,9 @@ in `assets/audio/music_mt32/`, converted to General MIDI at load with
 Exult's patch table; no soundfont or extra software is needed. On other platforms music is silent for now.
 
 ## 4. Run
+
+The conversation panel and barks use MedievalSharp (`godot/fonts/`,
+SIL Open Font License, see `godot/fonts/OFL.txt`).
 
 Open the `godot/` project in Godot 4.7 and press Play, or build from the
 command line:
