@@ -33,6 +33,11 @@ public partial class U7Game : Node2D
     GameClock _clock = null!;
     ScheduleRunner _schedules = null!;
     EggHatcher _eggs = null!;
+    EffectsManager _effects = null!;
+    LightSpellOverlay _lightSpell = null!;
+    LightningFlash _lightningFlash = null!;
+    /// <summary>The world's tint, eased towards the time of day's (a lightning flash shows over it).</summary>
+    Color _worldTint = Colors.White;
     MusicPlayer _music = null!;
     PartyManager _party = null!;
     CombatEngine _combat = null!;
@@ -99,6 +104,7 @@ public partial class U7Game : Node2D
             if (gwin is { } g0)
             {
                 _clock.Set(g0.Day, g0.Hour, g0.Minute);
+                _clock.SpecialLight = g0.SpecialLight;
             }
 
             var schedTable = ScheduleTable.Load();
@@ -136,6 +142,9 @@ public partial class U7Game : Node2D
                 }
             }
 
+            _effects = new EffectsManager(_shapes.SpritesVga);
+            _combat.Effects = _effects;
+            _schedules.Effects = _effects;
             _world = new WorldView
             {
                 Name = "WorldView",
@@ -143,9 +152,14 @@ public partial class U7Game : Node2D
                 Catalog = _catalog,
                 Shapes = _shapes,
                 Avatar = avatar,
+                Effects = _effects,
                 TextureFilter = TextureFilterEnum.Nearest
             };
             AddChild(_world);
+            _lightSpell = new LightSpellOverlay { Name = "LightSpell" };
+            AddChild(_lightSpell);
+            _lightningFlash = new LightningFlash { Name = "LightningFlash" };
+            AddChild(_lightningFlash);
 
             _gumps = new GumpManager(_map, avatar);
             _gumps.ActivateUsecode = obj => RunUsecode(obj);
@@ -161,6 +175,7 @@ public partial class U7Game : Node2D
                 _statusExtra = _combat.LastMessage;
             };
             _gumps.IsCombatOn = () => _combat.InCombat;
+            _gumps.GumpsVga = _shapes.GumpsVga;
 
             var gumpLayer = new CanvasLayer { Name = "Gumps", Layer = 10 };
             AddChild(gumpLayer);
@@ -237,6 +252,7 @@ public partial class U7Game : Node2D
             _usecode.Combat = _combat;
             _usecode.Music = _music;
             _usecode.Eggs = _eggs;
+            _usecode.Effects = _effects;
             _map.ScriptSaver = obj => _usecode.SaveScripts(obj);
             foreach (var (obj, blob) in _map.PendingScripts)
             {
@@ -274,6 +290,20 @@ public partial class U7Game : Node2D
                 return true;
             };
             PathWalk.IsSentient = _combat.IsSentient;
+            _combat.WeaponUsecode = (fun, target) => _usecode.Call(fun, target, UsecodeEvent.Weapon);
+            _gumps.CastSpell = (fun, caster) =>
+            {
+                _usecode.Call(fun, caster, UsecodeEvent.DoubleClick);
+                _conversation.Refresh();
+            };
+            UsecodeAction.Call = (fun, item, eventId) =>
+            {
+                if (!_usecode.InUsecode && !_usecode.WaitingForChoice)
+                {
+                    _usecode.Call(fun, item, (UsecodeEvent)eventId);
+                    _conversation.Refresh();
+                }
+            };
             _schedules.ProximityUsecode = npc =>
             {
                 // Exult try_proximity_usecode: dont_halt, usecode2 <fun> npc_proximity, as a script.
@@ -484,8 +514,25 @@ public partial class U7Game : Node2D
         }
 
         _clock.Update(delta);
-        var targetModulate = _usecode is { FadedOut: true } ? Colors.Black : _clock.WorldModulate;
-        _world.Modulate = _world.Modulate.Lerp(targetModulate, (float)Math.Min(1, delta * 2.5));
+        // A light spell tints the world towards full light; its overlay keeps the dark outside the glow.
+        _lightSpell.Advance(delta, _clock.LightSpellShows);
+        var baseModulate = _clock.WorldModulate;
+        var targetModulate = _usecode is { FadedOut: true } ? Colors.Black : baseModulate.Lerp(Colors.White, _lightSpell.Strength);
+        _worldTint = _worldTint.Lerp(targetModulate, (float)Math.Min(1, delta * 2.5));
+        // Exult Lightning_effect: the lightning palette for the flash, whatever the time of day.
+        var flash = _effects.LightningFlash && _usecode is not { FadedOut: true };
+        _lightningFlash.Visible = flash;
+        _world.Modulate = flash ? Colors.White : _worldTint;
+        if (flash)
+        {
+            baseModulate = Colors.White;
+        }
+        // Centred on the avatar's figure, which is drawn up and to the left of its hotspot.
+        var lit = _avatar.Avatar;
+        WorldView.ShapeLocation(lit.Tx, lit.Ty, lit.Tz, out var lightX, out var lightY);
+        var litFrame = _catalog[lit.Shape].GetFrame(lit.Frame);
+        _lightSpell.Update(baseModulate, _world.Modulate,
+            new Vector2(lightX - litFrame.XLeft + litFrame.Width / 2f, lightY - litFrame.YAbove + litFrame.Height / 2f));
         _usecode?.TickScripts(delta);
         if (_usecode is { RestartRequested: true })
         {
@@ -498,6 +545,11 @@ public partial class U7Game : Node2D
 
         _schedules.Update(delta, frozen);
         _combat.Update(delta, frozen);
+        // Exult pauses its time queue while usecode waits for a click and in gump mode.
+        if (!inUsecode && !_gumps.GumpMode)
+        {
+            _effects.Update(delta);
+        }
 
         var camera = _camera;
         var hud = _hud;

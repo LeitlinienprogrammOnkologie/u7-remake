@@ -1,4 +1,5 @@
 using Godot;
+using U7.Actors;
 using U7.Core;
 using U7.Data;
 
@@ -152,6 +153,19 @@ public sealed class BgIntrinsics
             0x2c => AddPartyItems(p),
             0x36 => GiveLastCreated(p),
             0x59 => Earthquake(p),
+            0x53 => SpriteEffect(p),
+            0x57 => CauseLight(p),
+            0x5d => Lightning(),
+            0x44 => UsecodeValue.FromInt(_vm.Effects?.GetWeather() ?? 0),
+            0x45 => SetWeather(p),
+            0x41 => SetToAttack(p),
+            0x95 => Telekenesis(p),
+            0x29 => FindObject(p),
+            0x85 => IsNotBlocked(p),
+            0x7d => PathRunUsecode(p),
+            0x8b => SetPathFailure(p),
+            0x52 => AddSpell(p),
+            0x7b => ObjSpriteEffect(p),
             0x65 => GetTimer(p),
             0x66 => SetTimer(p),
             0x67 => WearingFellowship(),
@@ -545,6 +559,19 @@ public sealed class BgIntrinsics
         else
         {
             _vm.Music?.Start(track, ((val >> 8) & 1) != 0);
+
+            // A number that is no NPC: no notes.
+            var who = p[1];
+            if (who.IsInt && (who.IntValue >= 0 || (who.IntValue != -356 && who.IntValue < -_vm.Npcs.Count)))
+            {
+                return Zero();
+            }
+
+            // The notes rising from the item (the instrument played).
+            if (_vm.GetItem(p[1]) is { Removed: false, Container: null } obj)
+            {
+                _vm.Effects?.AddSprite(24, obj, 0, 0, -2, -2);
+            }
         }
 
         return Zero();
@@ -1115,6 +1142,144 @@ public sealed class BgIntrinsics
         return UsecodeValue.FromInt(obj is null ? 0 : Quantities.Count(obj, shape, qual, frame));
     }
 
+    /// <summary>
+    /// Exult <c>UI_find_object(where, shape, qual, frame)</c>: the first match
+    /// within a tile of a position, on the screen (-359), in the party (-357)
+    /// or inside an object; null if none.
+    /// </summary>
+    UsecodeValue FindObject(UsecodeValue[] p)
+    {
+        var shape = (int)p[1].IntValue;
+        var qual = (int)p[2].IntValue;
+        var frame = (int)p[3].IntValue;
+        if (p[0].ArraySize == 3)
+        {
+            var tile = new TileCoord((int)p[0].GetElem(0).IntValue, (int)p[0].GetElem(1).IntValue, (int)p[0].GetElem(2).IntValue);
+            return FirstOrNull(_vm.Map.FindNearby(tile, shape, 1, 0, qual, frame));
+        }
+
+        var oval = (int)p[0].IntValue;
+        if (oval == U7Constants.AnyShape)
+        {
+            // The game window, centred on the avatar.
+            var h = _vm.Schedules?.ScreenTiles.H ?? 25;
+            var av = _vm.Avatar;
+            return FirstOrNull(_vm.Map.FindNearby(new TileCoord(av.Tx, av.Ty, 0), shape, h / 2, 0, qual, frame));
+        }
+
+        if (oval != -357)
+        {
+            var owner = _vm.GetItem(p[0]);
+            return UsecodeValue.FromObject(owner is null ? null : U7.Actors.ItemQuantity.FindItem(owner, shape, qual, frame));
+        }
+
+        foreach (var member in PartyObjects())
+        {
+            if (U7.Actors.ItemQuantity.FindItem(member, shape, qual, frame) is { } found)
+            {
+                return UsecodeValue.FromObject(found);
+            }
+        }
+
+        return UsecodeValue.FromObject(null);
+    }
+
+    /// <summary>
+    /// Exult <c>UI_is_not_blocked(tile, shape, frame)</c>: whether the shape
+    /// would stand at the tile, neither blocked nor rising or falling
+    /// (<c>Map_chunk::is_blocked</c> over its footprint, for walkers and swimmers).
+    /// </summary>
+    UsecodeValue IsNotBlocked(UsecodeValue[] p)
+    {
+        if (p[0].ArraySize < 3)
+        {
+            return Zero();
+        }
+
+        var tile = new TileCoord((int)p[0].GetElem(0).IntValue, (int)p[0].GetElem(1).IntValue, (int)p[0].GetElem(2).IntValue);
+        var info = _vm.Catalog[(int)p[1].IntValue];
+        var reflected = ((int)p[2].IntValue & 32) != 0;
+        var xtiles = reflected ? info.DimY : info.DimX;
+        var ytiles = reflected ? info.DimX : info.DimY;
+        var blocked = _vm.Map.Blocking.IsBlockedArea(
+            info.DimZ, tile.Tz, tile.Tx - xtiles + 1, tile.Ty - ytiles + 1, xtiles, ytiles,
+            out var newLift, MoveFlags.Walk | MoveFlags.Swim);
+        return UsecodeValue.FromInt(!blocked && newLift == tile.Tz ? 1 : 0);
+    }
+
+    /// <summary>Exult <c>path_npc</c>: the walker of the last <c>path_run_usecode</c>, for <c>set_path_failure</c>.</summary>
+    U7Object? _pathNpc;
+
+    /// <summary>
+    /// Exult <c>UI_path_run_usecode(loc, fun, item, event)</c> (Black Gate:
+    /// no free spot sought, no failure run unless set): the avatar walks
+    /// there with the party and then runs the function on the item; 0 if
+    /// there is no way there.
+    /// </summary>
+    UsecodeValue PathRunUsecode(UsecodeValue[] p)
+    {
+        var npc = _vm.Avatar;
+        _pathNpc = npc;
+        var fun = (int)p[1].GetElem0().IntValue;
+        var obj = _vm.GetItem(p[2]);
+        var size = p[0].ArraySize;
+        if (size < 2 || _vm.Schedules is not { } runner)
+        {
+            return Zero();
+        }
+
+        var dest = new TileCoord((int)p[0].GetElem(0).IntValue, (int)p[0].GetElem(1).IntValue,
+            size == 3 ? Math.Max(0, (int)p[0].GetElem(2).IntValue) : 0);
+        IActorAction? action = obj is null
+            ? PathWalk.Astar(_vm.Map, npc, dest)
+            : new IfElsePathAction(_vm.Map, npc, dest, new UsecodeAction(fun, obj, (int)p[3].IntValue));
+        if (action is null)
+        {
+            return Zero();
+        }
+
+        runner.StartAction(npc, action, U7Constants.StandardDelayMs, 0);
+        return UsecodeValue.FromInt(action is IfElsePathAction { DoneAndFailed: true } ? 0 : 1);
+    }
+
+    /// <summary>Exult <c>UI_set_path_failure(fun, item, event)</c>: what the last <c>path_run_usecode</c> walker does if it cannot get there.</summary>
+    UsecodeValue SetPathFailure(UsecodeValue[] p)
+    {
+        var item = _vm.GetItem(p[1]);
+        if (_pathNpc is { } npc && item is not null && _vm.Schedules?.BrainOf(npc)?.CurrentAction is IfElsePathAction action)
+        {
+            action.SetFailure(new UsecodeAction((int)p[0].IntValue, item, (int)p[2].IntValue));
+        }
+
+        return Zero();
+    }
+
+    static UsecodeValue FirstOrNull(List<U7Object> found) => UsecodeValue.FromObject(found.Count > 0 ? found[0] : null);
+
+    /// <summary>
+    /// Exult <c>UI_add_spell(spell, ?, spellbook)</c> (<c>Spellbook_object::add_spell</c>):
+    /// 1 if the spell (circle * 8 + number) was added, 0 if the book had it or is no spellbook.
+    /// </summary>
+    UsecodeValue AddSpell(UsecodeValue[] p)
+    {
+        var book = _vm.GetItem(p[2]);
+        var spell = (int)p[0].IntValue;
+        if (book is null || !_vm.Catalog[book.Shape].IsSpellbookClass || spell is < 0 or >= 72)
+        {
+            return Zero();
+        }
+
+        book.SpellCircles ??= new byte[9];
+        var bit = (byte)(1 << (spell % 8));
+        if ((book.SpellCircles[spell / 8] & bit) != 0)
+        {
+            return Zero();
+        }
+
+        book.SpellCircles[spell / 8] |= bit;
+        return UsecodeValue.FromInt(1);
+    }
+
     U7.Actors.ItemQuantity? _quantities;
 
     U7.Actors.ItemQuantity Quantities => _quantities ??=
@@ -1309,6 +1474,90 @@ public sealed class BgIntrinsics
     UsecodeValue Earthquake(UsecodeValue[] p)
     {
         _vm.QuakeSteps = Math.Max(_vm.QuakeSteps, (int)p[0].IntValue);
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_cause_light(units)</c>: a light spell (<c>add_special_light</c>).</summary>
+    UsecodeValue CauseLight(UsecodeValue[] p)
+    {
+        _vm.Clock?.AddSpecialLight((int)p[0].IntValue);
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_lightning</c>: a flash of lightning, and more now and then.</summary>
+    UsecodeValue Lightning()
+    {
+        _vm.Effects?.AddUsecodeLightning();
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_set_weather(n)</c>: <c>Egg_object::set_weather</c> for the standard 15 minutes.</summary>
+    UsecodeValue SetWeather(UsecodeValue[] p)
+    {
+        _vm.Effects?.SetWeather((int)p[0].IntValue);
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_set_to_attack(from, to, weapon)</c>: what the actor's next
+    /// script 'attack' hits, an object or the tile of a <c>click_on_item</c>;
+    /// 0 if the shape is no weapon.
+    /// </summary>
+    UsecodeValue SetToAttack(UsecodeValue[] p)
+    {
+        var from = _vm.GetItem(p[0]);
+        var shape = (int)p[2].IntValue;
+        if (from is not { IsActor: true } || shape < 0 || _vm.Combat?.Weapons[shape] is null)
+        {
+            return Zero();
+        }
+
+        from.AttackWeapon = shape;
+        if (_vm.GetItem(p[1]) is { } to)
+        {
+            from.AttackTargetObj = to;
+            from.AttackTargetTile = null;
+            return UsecodeValue.FromInt(1);
+        }
+
+        var size = p[1].IsArray ? p[1].ArraySize : 0;
+        if (size >= 3)
+        {
+            from.AttackTargetObj = null;
+            from.AttackTargetTile = new TileCoord((int)p[1].GetElem(1).IntValue, (int)p[1].GetElem(2).IntValue,
+                size >= 4 ? (int)p[1].GetElem(3).IntValue : 0);
+            return UsecodeValue.FromInt(1);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_telekenesis(fun)</c>: a script's next call of the function runs as a double-click.</summary>
+    UsecodeValue Telekenesis(UsecodeValue[] p)
+    {
+        _vm.TelekenesisFun = (int)p[0].IntValue;
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_sprite_effect(sprite, tx, ty, dx, dy, frame, reps)</c>: a SPRITES.VGA animation at a tile.</summary>
+    UsecodeValue SpriteEffect(UsecodeValue[] p)
+    {
+        _vm.Effects?.AddSprite(
+            (int)p[0].IntValue, new TileCoord((int)p[1].IntValue, (int)p[2].IntValue, 0),
+            (int)p[3].IntValue, (int)p[4].IntValue, 0, (int)p[5].IntValue, (int)p[6].IntValue);
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_obj_sprite_effect(obj, sprite, -xoff, -yoff, dx, dy, frame, reps)</c>: one following the object.</summary>
+    UsecodeValue ObjSpriteEffect(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { } obj)
+        {
+            _vm.Effects?.AddSprite(
+                (int)p[1].IntValue, obj, -(int)p[2].IntValue, -(int)p[3].IntValue,
+                (int)p[4].IntValue, (int)p[5].IntValue, (int)p[6].IntValue, (int)p[7].IntValue);
+        }
+
         return Zero();
     }
 

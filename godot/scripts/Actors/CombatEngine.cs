@@ -68,6 +68,18 @@ public sealed class CombatEngine
     public AmmoTable Ammo => _ammo;
     public bool IsMonsterShape(int shape) => _monsters.Contains(shape);
 
+    /// <summary>Exult <c>Effects_manager</c>, for explosions.</summary>
+    public U7.World.EffectsManager? Effects { get; set; }
+
+    /// <summary>Exult <c>data/bg/shape_info.txt</c> explosions: the SPRITES.VGA explosion of a weapon or missile (default 5).</summary>
+    static readonly Dictionary<int, int> ExplosionSprites = new()
+    {
+        [399] = 13, [639] = 8, [554] = 19, [78] = 4, [621] = 4, [702] = 4, [704] = 4, [565] = 18, [287] = 23
+    };
+
+    /// <summary>Exult <c>volatile_explosive</c> (BG): shapes that blow up readily, the powder keg.</summary>
+    static bool IsVolatile(int shape) => shape == 704;
+
     public CombatEngine(GameMap map, U7Object avatar, ShapeCatalog catalog)
     {
         _map = map;
@@ -942,7 +954,13 @@ public sealed class CombatEngine
             return false;
         }
 
-        // (Exult blows up a powder keg used as a weapon instead; explosions are not ported.)
+        if (IsVolatile(weaponShape))
+        {
+            // A powder keg used as a weapon blows up instead.
+            Explode(Centre(target), target, weaponShape, -1, attacker);
+            return true;
+        }
+
         HitWith(attacker, target, wpn, wpn?.Damage ?? 1, ammoObj is not null && needAmmo > 0 ? _ammo[ammoObj.Shape] : null,
             ammoObj?.Shape ?? -1);
         if (target is { IsActor: true, IsDead: false, Removed: false })
@@ -953,11 +971,84 @@ public sealed class CombatEngine
         return true;
     }
 
-    bool HitWith(U7Object attacker, U7Object defender, WeaponRecord? wpn, int wpoints, AmmoRecord? ainf, int ammoShape)
+    /// <summary>Runs a weapon's usecode on what it hit (function, target), with the weapon event.</summary>
+    public Action<int, U7Object>? WeaponUsecode { get; set; }
+
+    /// <summary>Exult <c>Actor::usecode_attack</c>: the attack usecode's <c>set_to_attack</c> set up (at an object; attacks on tiles are not ported).</summary>
+    public bool UsecodeAttack(U7Object actor) =>
+        actor.AttackTargetObj is { } target && AttackTarget(actor, target, actor.AttackWeapon, combat: false);
+
+    static TileCoord Centre(U7Object obj) => new(obj.Tx, obj.Ty, obj.Tz + obj.DimZ / 2);
+
+    /// <summary>
+    /// Exult <c>Explosion_effect</c>: the weapon's (or missile's) explosion
+    /// sprite at <paramref name="pos"/>; a quarter of the way through, the
+    /// exploding object goes and everything within half the sprite's width is
+    /// attacked with the weapon, the attacker answering for it (the avatar if
+    /// none). The explosion's sound is not played.
+    /// </summary>
+    public void Explode(TileCoord pos, U7Object? exploding, int weapon, int projectile, U7Object? attacker)
     {
+        if (Effects is not { } effects)
+        {
+            return;
+        }
+
+        var shape = projectile >= 0 ? projectile : weapon >= 0 ? weapon : 704;
+        var wshape = weapon >= 0 ? weapon : projectile >= 0 ? projectile : 704;
+        if (exploding is not null && IsVolatile(exploding.Shape))
+        {
+            exploding.Quality = 1; // Detonating.
+        }
+
+        if (attacker is not { IsActor: true })
+        {
+            attacker = _avatar;
+        }
+
+        var blast = effects.AddSprite(ExplosionSprites.GetValueOrDefault(shape, 5), pos);
+        blast.AtQuarter = e =>
+        {
+            // (Exult removes the exploding object even if it is an actor, which a wielded powder keg could make so.)
+            if (exploding is { Removed: false, Container: null, IsActor: false })
+            {
+                _map.RemoveObject(exploding);
+            }
+
+            var width = effects.SpriteFrame(e.Sprite, e.Frame).Width;
+            var wpn = _weapons[wshape];
+            var ainf = projectile >= 0 ? _ammo[projectile] : null;
+            foreach (var obj in _map.FindNearby(e.Pos, U7Constants.AnyShape, width / (2 * U7Constants.TileSize), 0x80))
+            {
+                if (!obj.Removed && !obj.IsDead && obj != exploding)
+                {
+                    HitWith(attacker, obj, wpn, wpn?.Damage ?? 1, ainf, projectile, explosion: true);
+                }
+            }
+        };
+        LastMessage = $"explosion at {pos.Tx},{pos.Ty},{pos.Tz}";
+        GD.Print(LastMessage);
+    }
+
+    bool HitWith(U7Object attacker, U7Object defender, WeaponRecord? wpn, int wpoints, AmmoRecord? ainf, int ammoShape,
+        bool explosion = false)
+    {
+        if (!explosion && (wpn is { Explodes: true } || ainf is { Explodes: true }))
+        {
+            // Exult figure_hit_points: an exploding weapon blows up instead of hitting.
+            Explode(Centre(defender), null, wpn?.Shape ?? -1, ammoShape, attacker);
+            return false;
+        }
+
         if (!defender.IsActor)
         {
+            // Exult Game_object::figure_hit_points (breakable objects are not ported), then the weapon's usecode.
             ObjectAttacked(defender, ammoShape);
+            if (wpn is { Usecode: > 0 })
+            {
+                WeaponUsecode?.Invoke(wpn.Usecode, defender);
+            }
+
             return false;
         }
 
@@ -987,6 +1078,17 @@ public sealed class CombatEngine
         {
             defender.Bark($"{hits}");
             LastMessage = $"{NameOf(attacker)} hits {NameOf(defender)} for {hits}";
+        }
+
+        // Exult Actor::figure_hit_points: the weapon's usecode comes last of all.
+        if (wpn is { Usecode: > 0 })
+        {
+            if (attacker.NpcNum >= 0)
+            {
+                defender.Oppressor = attacker;
+            }
+
+            WeaponUsecode?.Invoke(wpn.Usecode, defender);
         }
 
         return hits > 0;
@@ -1311,6 +1413,14 @@ public sealed class CombatEngine
         var target = pr.Target;
         var hit = false;
         var centre = new TileCoord(target.Tx, target.Ty, target.Tz + target.DimZ / 2);
+        if (pr.Weapon is { Explodes: true } || ainf is { Explodes: true })
+        {
+            // Exult Projectile_effect: an exploding missile blows up where it lands (homing ones are not ported).
+            Explode(new TileCoord(pr.Pos.Tx, pr.Pos.Ty, pr.Pos.Tz + (target.Removed ? 0 : target.DimZ / 2)),
+                null, pr.WeaponShape, pr.AmmoShape, pr.Attacker);
+            return;
+        }
+
         if (!target.Removed && !target.IsDead && target != pr.Attacker && centre.Distance2d(pr.Pos) < 3)
         {
             hit = pr.AutoHit || TryToHit(target, pr.AttVal);

@@ -4,6 +4,7 @@ using Godot;
 using U7.Actors;
 using U7.Core;
 using U7.Data;
+using U7.Gumps;
 using U7.Usecode;
 
 namespace U7.Game;
@@ -18,9 +19,9 @@ namespace U7.Game;
 public partial class U7Game
 {
     const string AgentHelp =
-        "look [r] | find <text> | npc <num|name> | state | inv [npcnum] | flags | timer [n] [hours-ago] | stubs | " +
-        "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | " +
-        "cont [n|all] | choose <answer|#n> | num <n> | click <id> | wait <sec> | hour <h> | shot <name> | " +
+        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags | timer [n] [hours-ago] | stubs | " +
+        "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | book [page] | cast <spell> | " +
+        "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> | shot <name> | " +
         "save <slot> | load <slot> | tile <x> <y> [z] | arena | combat [off] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
@@ -186,7 +187,7 @@ public partial class U7Game
             case "state":
                 break; // AgentStatus prints it
             case "inv":
-                AgentInventory(parts.Length > 1 ? AgentNpc(arg) ?? av : av, 0);
+                AgentInventory(parts.Length > 1 ? AgentNpc(arg) ?? AgentTarget(arg) ?? av : av, 0);
                 break;
             case "flags":
                 for (var i = 0; i < _usecode!.GFlags.Length; i++)
@@ -235,6 +236,45 @@ public partial class U7Game
                     : "cannot take it (too heavy or no room)");
                 break;
             }
+            case "put":
+            {
+                // A drag into a container's gump (also takes a readied item off).
+                var item = AgentTarget(parts[1]) ?? throw new ArgumentException("no such object");
+                var cont = AgentTarget(parts[2]) ?? throw new ArgumentException("no such container");
+                AgentLog(Equipment.TryPlace(_map, item, cont, 8, 8, _catalog)
+                    ? $"put {AgentDescribe(item)} into {AgentName(cont)}"
+                    : "it does not fit");
+                break;
+            }
+            case "book":
+            case "cast":
+            {
+                if (_gumps.Open.OfType<SpellbookGump>().LastOrDefault() is not { } sb)
+                {
+                    AgentLog("no spellbook open (use one first)");
+                    break;
+                }
+
+                if (verb == "cast")
+                {
+                    // A double-click on the spell.
+                    var spell = int.Parse(parts[1]);
+                    var mana = av.GetProp(ActorProp.Mana);
+                    AgentLog(sb.DoSpell(spell)
+                        ? $"cast spell {spell} (usecode 0x{Spellbook.BaseSpellsUsecode + spell:X3}), mana {mana} -> {av.GetProp(ActorProp.Mana)}"
+                        : $"cannot cast spell {spell} (not in the book, or mana {mana}, level {av.GetLevel()} or reagents short)");
+                    break;
+                }
+
+                if (parts.Length > 1)
+                {
+                    sb.ChangePage(int.Parse(parts[1]) - sb.Page);
+                }
+
+                AgentLog($"spellbook page {sb.Page}, bookmark {sb.Book.SpellBookmark}: " +
+                         string.Join(", ", sb.PageSpells().Select(p => sb.Page == 0 ? $"{p.Spell}" : $"{p.Spell} (x{p.Available})")));
+                break;
+            }
             case "cont":
             {
                 var n = arg == "all" ? 60 : parts.Length > 1 ? int.Parse(parts[1]) : 1;
@@ -269,11 +309,12 @@ public partial class U7Game
                 break;
             case "click":
             {
-                var target = AgentTarget(arg) ?? throw new ArgumentException("no such object");
+                // An object, or a tile (Exult click_on_item: no object, the tile's coordinates).
+                var target = parts.Length >= 3 ? null : AgentTarget(arg) ?? throw new ArgumentException("no such object");
                 var arr = UsecodeValue.FromArray(4, UsecodeValue.FromObject(target));
-                arr.PutElem(1, UsecodeValue.FromInt(target.Tx));
-                arr.PutElem(2, UsecodeValue.FromInt(target.Ty));
-                arr.PutElem(3, UsecodeValue.FromInt(target.Tz));
+                arr.PutElem(1, UsecodeValue.FromInt(target?.Tx ?? int.Parse(parts[1])));
+                arr.PutElem(2, UsecodeValue.FromInt(target?.Ty ?? int.Parse(parts[2])));
+                arr.PutElem(3, UsecodeValue.FromInt(target?.Tz ?? (parts.Length > 3 ? int.Parse(parts[3]) : av.Tz)));
                 _usecode!.ResumeWait(arr);
                 _conversation.Refresh();
                 break;
@@ -593,6 +634,11 @@ public partial class U7Game
             sb.Append($" egg usecode 0x{obj.GetUsecode():X3}");
         }
 
+        if (obj.SpellCircles is { } circles)
+        {
+            sb.Append($" spells {Convert.ToHexString(circles)}");
+        }
+
         if (obj.Quality != 0 && !obj.IsActor)
         {
             sb.Append($" q={obj.Quality}");
@@ -632,6 +678,12 @@ public partial class U7Game
         AgentLog($"@ {av.Tx},{av.Ty},{av.Tz} {_clock.HudText()} hp {av.GetProp(ActorProp.Health)} gold {gold} party [{party}]" +
                  (ObjFlag.DontMoveMode(av) ? " (avatar flag 16/22)" : "") +
                  (vm.InUsecodeControl(av) ? $" (avatar under usecode control, {scripts} scripts)" : ""));
+        if (_effects.Sprites.Count > 0)
+        {
+            AgentLog("sprites " + string.Join(", ", _effects.Sprites.Select(e =>
+                $"{e.Sprite} frame {e.Frame}/{e.Frames} at {e.Pos.Tx},{e.Pos.Ty},{e.Pos.Tz}")));
+        }
+
         if (vm.WaitingForChoice)
         {
             AgentLog($"WAIT {vm.Wait}" + (vm.Wait == UsecodeWait.ClickToContinue ? $": {vm.Conv.NpcText.Replace('\n', ' ')}" : "") +

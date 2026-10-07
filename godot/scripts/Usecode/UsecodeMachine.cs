@@ -71,6 +71,9 @@ public sealed class UsecodeMachine
     public U7.Actors.CombatEngine? Combat { get; set; }
     public U7.Audio.MusicPlayer? Music { get; set; }
     public U7.World.EggHatcher? Eggs { get; set; }
+    public U7.World.EffectsManager? Effects { get; set; }
+    /// <summary>Exult <c>telekenesis_fun</c>: a script's next call of this function is a double-click.</summary>
+    public int TelekenesisFun { get; set; } = -1;
     /// <summary>Called when a script steps the avatar, so eggs and followers react.</summary>
     public Action<U7Object>? AvatarMovedByScript { get; set; }
     /// <summary>Exult <c>fade_palette</c>: true while the screen is faded to black.</summary>

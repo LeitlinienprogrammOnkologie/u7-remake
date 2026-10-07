@@ -100,6 +100,9 @@ public static class TextMessages
     /// <summary>A random message from <paramref name="first"/> to <paramref name="last"/> (Exult <c>Actor::say(from, to)</c>).</summary>
     public static string Random(int first, int last) => Get(first + System.Random.Shared.Next(last - first + 1));
 
+    /// <summary>Exult <c>get_misc_name</c>: TEXT.FLX entries from 0x500 on (reagents, "Circle", ...).</summary>
+    public static string MiscName(int num) => Entry(0x500 + num);
+
     public static string Get(int msg)
     {
         if (msg >= 0x100)
@@ -107,8 +110,12 @@ public static class TextMessages
             return ExultMessages.GetValueOrDefault(msg, "");
         }
 
+        return Entry(0x400 + msg);
+    }
+
+    static string Entry(int index)
+    {
         _flex ??= new FlexFile(Path.Combine(U7Paths.StaticDir, "TEXT.FLX"));
-        var index = 0x400 + msg;
         if (index >= _flex.Count)
         {
             return "";

@@ -1,3 +1,4 @@
+using U7.Actors;
 using U7.Core;
 using U7.Data;
 using U7.Rendering;
@@ -23,6 +24,12 @@ public sealed class GumpManager
     public Action<U7Object>? DroppedInWorld { get; set; }
     public Action? ToggleCombat { get; set; }
     public Func<bool>? IsCombatOn { get; set; }
+    /// <summary>GUMPS.VGA, for gumps laid out from their art's sizes (the spellbook).</summary>
+    public VgaShapeFile? GumpsVga { get; set; }
+    /// <summary>Runs a spell's usecode (function, caster) as a double-click.</summary>
+    public Action<int, U7Object>? CastSpell { get; set; }
+    ItemQuantity? _quantities;
+    public ItemQuantity Quantities => _quantities ??= new ItemQuantity(Catalog, Map, null, null);
 
     public IReadOnlyList<Gump> Open => _open;
     public bool ShowingGumps => _open.Count > 0;
@@ -94,6 +101,10 @@ public sealed class GumpManager
         if (shapenum == U7Constants.GumpStats)
         {
             gump = new StatsGump(obj ?? Avatar, x, y);
+        }
+        else if (shapenum == SpellbookGump.BookShape && obj is not null && GumpsVga is not null)
+        {
+            gump = new SpellbookGump(obj, x, y, GumpsVga, Spellbook.Available(obj, Quantities));
         }
         else if (actorGump && obj is not null)
         {
@@ -189,6 +200,13 @@ public sealed class GumpManager
 
     public bool ShowGump(U7Object obj)
     {
+        if (Catalog[obj.Shape].IsSpellbookClass)
+        {
+            // Exult Spellbook_object::activate.
+            Add(obj, SpellbookGump.BookShape);
+            return true;
+        }
+
         var gumpShape = Catalog[obj.Shape].GumpShape;
         if (gumpShape < 0)
         {
@@ -217,6 +235,11 @@ public sealed class GumpManager
         {
             if (gump is not null)
             {
+                if (gump.OnButton(view, mx, my)?.DoubleClick() == true)
+                {
+                    return true;
+                }
+
                 var inside = gump.FindObject(view, mx, my);
                 if (inside is not null)
                 {

@@ -18,14 +18,18 @@ public sealed class ShapeCache
     readonly Dictionary<(int Shape, int Frame), Image?> _gumpImg = new();
     readonly Dictionary<(int Font, int Frame), Texture2D?> _fontTex = new();
     readonly Dictionary<(int Shape, int Frame), Texture2D?> _faceTex = new();
+    readonly Dictionary<(int Sprite, int Frame), Texture2D?> _spriteTex = new();
     readonly ShapeCatalog _catalog;
     readonly VgaShapeFile _gumpsVga;
     readonly VgaShapeFile _fontsVga;
     readonly VgaShapeFile _facesVga;
+    readonly VgaShapeFile _spritesVga;
     readonly byte[] _palette;
+    readonly byte[] _spritePalette;
 
     public VgaShapeFile GumpsVga => _gumpsVga;
     public VgaShapeFile FontsVga => _fontsVga;
+    public VgaShapeFile SpritesVga => _spritesVga;
 
     public ShapeCache(ShapeCatalog catalog)
     {
@@ -33,7 +37,9 @@ public sealed class ShapeCache
         _gumpsVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "GUMPS.VGA"));
         _fontsVga = VgaFont.File;
         _facesVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "FACES.VGA"));
+        _spritesVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "SPRITES.VGA"));
         _palette = U7Palette.DayRgb();
+        _spritePalette = U7Palette.DayRgbaTranslucent();
     }
 
     public void WarmTiles()
@@ -237,6 +243,21 @@ public sealed class ShapeCache
         }
 
         _faceTex[key] = tex;
+        return tex;
+    }
+
+    /// <summary>A SPRITES.VGA frame; Exult always paints these with translucency.</summary>
+    public Texture2D? GetSprite(int sprite, int frame)
+    {
+        var key = (sprite, frame);
+        if (_spriteTex.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        var image = _spritesVga.DecodeRgba(sprite, frame, _spritePalette);
+        var tex = image is null ? null : ImageTexture.CreateFromImage(image);
+        _spriteTex[key] = tex;
         return tex;
     }
 }

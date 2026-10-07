@@ -527,7 +527,7 @@ public class CombatSchedule : Schedule
     /// <summary>
     /// Exult <c>Combat_schedule::teleport</c>: at most every 2-4 s, to a free
     /// spot within 4 of the target (not too far, half the time), if it can see
-    /// it. (Exult's fire field left behind and the stars are not shown.)
+    /// it. (Exult's fire field left behind is not ported.)
     /// </summary>
     bool Teleport()
     {
@@ -552,6 +552,7 @@ public class CombatSchedule : Schedule
         if (Runner.IsStraightPath(Npc, trg))
         {
             Map.MoveObject(Npc, dest.Tx, dest.Ty, dest.Tz);
+            Runner.Effects?.AddSprite(7, Npc, 0, 0); // The stars.
         }
 
         return true;
@@ -570,9 +571,10 @@ public class CombatSchedule : Schedule
         return true;
     }
 
-    /// <summary>Exult <c>Combat_schedule::be_invisible</c> (without its sound and sparkles).</summary>
+    /// <summary>Exult <c>Combat_schedule::be_invisible</c> (without its sound).</summary>
     void BeInvisible()
     {
+        Runner.Effects?.AddSprite(12, Npc, 0, 0);
         Npc.SetFlag(ObjFlag.Invisible);
         Start(Std, Std);
     }

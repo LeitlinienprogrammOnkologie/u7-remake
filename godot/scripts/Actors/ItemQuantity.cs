@@ -65,6 +65,35 @@ public sealed class ItemQuantity
         return total;
     }
 
+    /// <summary>Exult <c>Container_game_object::find_item</c>: the first match, depth first.</summary>
+    public static U7Object? FindItem(U7Object cont, int shape, int qual, int frame)
+    {
+        if (cont.Contents.Count == 0 || !CanBeAdded(cont, shape, allowLocked: true))
+        {
+            return null;
+        }
+
+        foreach (var obj in cont.Contents)
+        {
+            if (obj.Removed)
+            {
+                continue;
+            }
+
+            if (obj.Shape == shape && Matches(obj, shape, qual, frame))
+            {
+                return obj;
+            }
+
+            if (FindItem(obj, shape, qual, frame) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Exult <c>Game_object::modify_quantity</c>: add (delta &gt;= 0) or remove.
     /// Returns what could not be added or removed (negative when removing).

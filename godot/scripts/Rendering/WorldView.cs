@@ -16,6 +16,7 @@ public partial class WorldView : Node2D
     public ShapeCatalog Catalog = null!;
     public ShapeCache Shapes = null!;
     public U7Object Avatar = null!;
+    public U7.World.EffectsManager? Effects;
     public int SkipAboveLift = U7Constants.NoRoof;
     public int InDungeonLift;
 
@@ -121,6 +122,8 @@ public partial class WorldView : Node2D
         {
             PaintDungeonBlackness(c0x, c0y, c1x, c1y);
         }
+
+        PaintSprites();
 
         // Exult paints text effects after the map; the bark overlay draws these on screen.
         _barkBack.Clear();
@@ -351,6 +354,32 @@ public partial class WorldView : Node2D
         var hit = ticks < obj.HitUntilMsec;
         DrawTexture(tex, pos, hit ? new Color(1f, 0.35f, 0.35f) : Colors.White);
         obj.PaintStamp = ((long)_frameNo << 32) | (uint)(++_paintCounter);
+    }
+
+    /// <summary>
+    /// Exult <c>Sprites_effect::paint</c>, after the map: the frame's hotspot
+    /// at the tile's corner, raised by half the lift in whole tiles.
+    /// </summary>
+    void PaintSprites()
+    {
+        if (Effects is null)
+        {
+            return;
+        }
+
+        foreach (var e in Effects.Sprites)
+        {
+            if (!e.Visible || Shapes.GetSprite(e.Sprite, e.Frame) is not { } tex)
+            {
+                continue;
+            }
+
+            var fi = Shapes.SpritesVga.Get(e.Sprite, e.Frame);
+            var lp = e.Pos.Tz / 2;
+            var x = e.XOff + (e.Pos.Tx - lp) * U7Constants.TileSize;
+            var y = e.YOff + (e.Pos.Ty - lp) * U7Constants.TileSize;
+            DrawTexture(tex, new Vector2(x - fi.XLeft, y - fi.YAbove));
+        }
     }
 
     void PaintDungeonBlackness(int c0x, int c0y, int c1x, int c1y)

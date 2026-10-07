@@ -41,6 +41,7 @@ public sealed class ShapeRecord
     public bool HasQuality => ShapeClass is 2 or 6 or 7 or 11 or 12 or 13;
     public bool IsContainerClass => ShapeClass == 6;
     public bool IsBargeClass => ShapeClass == 9;
+    public bool IsSpellbookClass => ShapeClass == 8;
     public bool IsHatchable => ShapeClass == 7 ||
         ClassName.Equals("hatchable", StringComparison.OrdinalIgnoreCase);
     public bool IsBuilding => ShapeClass == U7.Core.U7Constants.ShapeClassBuilding;

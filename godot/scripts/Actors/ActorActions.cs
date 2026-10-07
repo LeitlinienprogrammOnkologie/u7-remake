@@ -105,6 +105,112 @@ public sealed class SequenceAction(int speed, params IActorAction[] actions) : I
     }
 }
 
+/// <summary>Exult <c>Usecode_actor_action</c>: run a usecode function on an item, with an event.</summary>
+public sealed class UsecodeAction(int fun, U7Object item, int eventId) : IActorAction
+{
+    /// <summary>Exult <c>call_usecode(fun, item, event)</c>.</summary>
+    public static Action<int, U7Object, int>? Call { get; set; }
+
+    public int HandleEvent(U7Object actor)
+    {
+        if (!item.Removed)
+        {
+            Call?.Invoke(fun, item, eventId);
+        }
+
+        return 0;
+    }
+}
+
+/// <summary>
+/// Exult <c>If_else_path_actor_action</c>: an A* walk (giving up after 6
+/// blocked tries), then the success action if it got there, else the
+/// failure action, if any.
+/// </summary>
+public sealed class IfElsePathAction : IActorAction
+{
+    readonly PathWalk? _walk;
+    readonly IActorAction? _success;
+    IActorAction? _failure;
+    bool _succeeded;
+    bool _failed;
+    bool _done;
+
+    public IfElsePathAction(GameMap map, U7Object actor, TileCoord dest, IActorAction? success, IActorAction? failure = null)
+    {
+        _success = success;
+        _failure = failure;
+        _walk = PathWalk.Astar(map, actor, dest, maxBlocked: 6);
+        if (_walk is null && (actor.Tx != dest.Tx || actor.Ty != dest.Ty || actor.Tz != dest.Tz))
+        {
+            _done = _failed = true;
+        }
+    }
+
+    /// <summary>Exult <c>done_and_failed</c>: there was no way there.</summary>
+    public bool DoneAndFailed => _done && _failed;
+
+    /// <summary>Called after every step of the walk (from x, y).</summary>
+    public Action<U7Object, int, int>? Stepped
+    {
+        get => _walk?.Stepped;
+        set
+        {
+            if (_walk is not null)
+            {
+                _walk.Stepped = value;
+            }
+        }
+    }
+
+    /// <summary>Exult <c>set_failure</c>: also run when the path could not be found.</summary>
+    public void SetFailure(IActorAction failure)
+    {
+        _failure = failure;
+        _done = false;
+    }
+
+    public int HandleEvent(U7Object actor)
+    {
+        if (_done)
+        {
+            return 0;
+        }
+
+        int delay;
+        if (_succeeded || _failed)
+        {
+            delay = (_succeeded ? _success : _failure)?.HandleEvent(actor) ?? 0;
+            _done = delay == 0;
+            return delay;
+        }
+
+        delay = _walk?.HandleEvent(actor) ?? 0;
+        if (delay != 0)
+        {
+            return delay;
+        }
+
+        if (_walk is { ReachedEnd: false })
+        {
+            // Didn't get there.
+            if (_failure is not null)
+            {
+                _failed = true;
+                delay = _failure.HandleEvent(actor);
+            }
+        }
+        else if (_success is not null)
+        {
+            _succeeded = true;
+            delay = _success.HandleEvent(actor);
+        }
+
+        _done = delay == 0;
+        return delay;
+    }
+}
+
 /// <summary>
 /// Exult <c>Sit_actor_action</c>: bow, then sit, in front of a chair facing
 /// the way the chair faces (frame 0 north, 1 east, ...). Gives up if someone

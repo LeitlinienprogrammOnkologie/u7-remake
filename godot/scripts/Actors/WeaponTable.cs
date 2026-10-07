@@ -30,6 +30,8 @@ public sealed class WeaponRecord
     public int RotationSpeed;
     /// <summary>Exult <c>actor_frames</c>: the attack frames, 0 reach, 1 raise, 2 fast swing, 3 slow swing; bits 2-3 when shooting or throwing.</summary>
     public int ActorFrames = 2;
+    /// <summary>Exult <c>Weapon_info::usecode</c>: run on whatever it hits, with the weapon event (0: none).</summary>
+    public int Usecode;
 
     public bool UsesCharges => Ammo == -2;
 }
@@ -89,6 +91,7 @@ public sealed class WeaponTable
         var iSpeed = Col("missile_speed");
         var iRot = Col("rotation_speed");
         var iFrames = Col("actor_frames");
+        var iUsecode = Col("usecode");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
         int Num(string[] c, int i, int fallback = 0) =>
@@ -126,7 +129,8 @@ public sealed class WeaponTable
                 DeleteDepleted = Num(c, iDelete) != 0,
                 MissileSpeed = Num(c, iSpeed, 4),
                 RotationSpeed = Num(c, iRot),
-                ActorFrames = Num(c, iFrames, 2)
+                ActorFrames = Num(c, iFrames, 2),
+                Usecode = Num(c, iUsecode)
             };
         }
 

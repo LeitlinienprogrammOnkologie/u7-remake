@@ -66,7 +66,7 @@ public static class SaveGame
         w.Write((ushort)clock.Day);
         w.Write((ushort)clock.Hour);
         w.Write((ushort)clock.Minute);
-        w.Write((uint)0); // special light
+        w.Write((uint)clock.SpecialLight);
         var track = music?.CurrentTrack ?? -1;
         w.Write(unchecked((uint)track));
         w.Write((uint)((music is { Repeat: true } ? 1u : 0u) | ((uint)(music?.EggCount ?? 0) << 16)));
@@ -76,7 +76,7 @@ public static class SaveGame
         w.Write((byte)0); // infravision
     }
 
-    public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCombat, int Track, bool Repeat);
+    public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCombat, int Track, bool Repeat, int SpecialLight);
 
     /// <summary>Exult <c>Game_window::read_gwin</c> (the parts we keep).</summary>
     public static GwinState? ReadGwin()
@@ -98,9 +98,10 @@ public static class SaveGame
             var track = -1;
             var repeat = false;
             var combat = false;
+            var light = 0;
             if (r.BaseStream.Length - r.BaseStream.Position >= 12)
             {
-                r.ReadUInt32();
+                light = (int)r.ReadUInt32();
                 track = unchecked((int)r.ReadUInt32());
                 repeat = (r.ReadUInt32() & 1) != 0;
                 if (r.BaseStream.Length - r.BaseStream.Position >= 3)
@@ -111,7 +112,7 @@ public static class SaveGame
                 }
             }
 
-            return new GwinState(day, hour, minute, combat, track, repeat);
+            return new GwinState(day, hour, minute, combat, track, repeat, light);
         }
         catch (Exception ex)
         {

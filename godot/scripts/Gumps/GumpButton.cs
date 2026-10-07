@@ -11,21 +11,31 @@ public enum GumpButtonKind
     Disk,
     Combat,
     Halo,
-    CombatMode
+    CombatMode,
+    /// <summary>Spellbook page corner (<see cref="GumpButton.Index"/> -1 back, 1 forward).</summary>
+    SpellPage,
+    SpellBookmark,
+    /// <summary>A spell in a spellbook (<see cref="GumpButton.Index"/> is the spell).</summary>
+    Spell
 }
 
 /// <summary>
-/// Checkmark / heart / disk / combat / halo / combat-mode.
+/// Checkmark / heart / disk / combat / halo / combat-mode, and the
+/// spellbook's page corners, bookmark and spells.
 /// Coords are relative to the parent gump hotspot.
 /// </summary>
 public sealed class GumpButton
 {
     public Gump Parent { get; }
     public GumpButtonKind Kind { get; }
-    public int X { get; }
-    public int Y { get; }
+    public int X { get; set; }
+    public int Y { get; set; }
     public int Shape { get; }
     public bool Pushed;
+    /// <summary>The spell, or the page delta.</summary>
+    public int Index;
+    /// <summary>The frame always painted (spellbook buttons are never drawn pushed), or -1.</summary>
+    public int Frame = -1;
 
     public GumpButton(Gump parent, GumpButtonKind kind, int x, int y, int shape)
     {
@@ -50,6 +60,7 @@ public sealed class GumpButton
             GumpButtonKind.Combat => view.Gumps.IsCombatOn?.Invoke() == true ? 1 : 0,
             GumpButtonKind.Halo => owner is { CombatProtected: true } ? 1 : 0,
             GumpButtonKind.CombatMode => owner?.AttackMode ?? 0,
+            _ when Frame >= 0 => Frame,
             _ => Pushed ? 1 : 0
         };
     }
@@ -106,6 +117,27 @@ public sealed class GumpButton
                 }
 
                 break;
+            case GumpButtonKind.SpellPage:
+                (Parent as SpellbookGump)?.ChangePage(Index);
+                break;
+            case GumpButtonKind.SpellBookmark:
+                (Parent as SpellbookGump)?.TurnToBookmark();
+                break;
+            case GumpButtonKind.Spell:
+                (Parent as SpellbookGump)?.SelectSpell(Index);
+                break;
         }
+    }
+
+    /// <summary>Exult <c>Gump_button::double_clicked</c>: a spell is cast. False if the button does nothing.</summary>
+    public bool DoubleClick()
+    {
+        if (Kind != GumpButtonKind.Spell || Parent is not SpellbookGump book)
+        {
+            return false;
+        }
+
+        book.DoSpell(Index);
+        return true;
     }
 }

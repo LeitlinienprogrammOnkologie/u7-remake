@@ -18,6 +18,10 @@ public sealed class GameClock
     public int Slot => Hour / 3;
     /// <summary>Exult <c>Game_clock::get_total_hours</c>.</summary>
     public int TotalHours => Day * 24 + Hour;
+    /// <summary>Exult <c>Game_clock::get_total_minutes</c>.</summary>
+    public int TotalMinutes => TotalHours * 60 + Minute;
+    /// <summary>Exult <c>Game_window::special_light</c>: the game minute a light spell ends, 0 for none.</summary>
+    public int SpecialLight { get; set; }
 
     public event Action<int>? HourChanged;
     public event Action<int>? SlotChanged;
@@ -42,6 +46,12 @@ public sealed class GameClock
             return PaletteDay;
         }
     }
+
+    /// <summary>
+    /// Exult <c>get_final_palette</c>: a light spell matters at dusk and
+    /// night (Exult's PALETTE_SPELL; here a glow round the avatar).
+    /// </summary>
+    public bool LightSpellShows => SpecialLight != 0 && TimePalette is PaletteNight or PaletteDusk;
 
     public Color WorldModulate => TimePalette switch
     {
@@ -79,6 +89,12 @@ public sealed class GameClock
             }
         }
 
+        // Exult Game_render::paint_map: the light spell ends.
+        if (SpecialLight != 0 && TotalMinutes > SpecialLight)
+        {
+            SpecialLight = 0;
+        }
+
         if (Hour != oldHour)
         {
             HourChanged?.Invoke(Hour);
@@ -87,6 +103,17 @@ public sealed class GameClock
                 SlotChanged?.Invoke(Slot);
             }
         }
+    }
+
+    /// <summary>Exult <c>Game_window::add_special_light</c>: Light is 500 units, Great Light 5000, a minute per 20.</summary>
+    public void AddSpecialLight(int units)
+    {
+        if (SpecialLight == 0)
+        {
+            SpecialLight = TotalMinutes;
+        }
+
+        SpecialLight += units / 20;
     }
 
     /// <summary>Restore the time of day from a saved game.</summary>

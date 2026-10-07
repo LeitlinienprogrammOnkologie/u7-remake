@@ -36,7 +36,9 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
   UI look) go to the user, ideally with rendered options. The user picked
   MedievalSharp and the "dark wood & gold" conversation panel, and accepted
   (for now) books and scrolls in the original GUMPS.VGA art and FONTS.VGA font 4,
-  scaled to fit the window. Engineering
+  scaled to fit the window. The light spell is drawn as an animated glow round
+  the avatar (the user's idea), not Exult's whole-screen palette; its rules
+  stay Exult's. Engineering
   questions with an Exult answer don't need asking.
 
 ## Layout
@@ -58,8 +60,9 @@ godot/scripts/
               Actor_action kinds), PathWalk (Path_walking_actor_action),
               CombatEngine, PartyManager, Equipment, Inventory, ItemQuantity,
               ActorWalker (steps, Actor::is_blocked), tables
-  World/      GameClock, EggHatcher, Pathfinder (Exult Find_path + clients)
-  Rendering/  WorldView (map painting, bark anchors), ShapeCache
+  World/      GameClock, EggHatcher, Pathfinder (Exult Find_path + clients),
+              EffectsManager (Exult Sprites_effect, SPRITES.VGA animations)
+  Rendering/  WorldView (map painting, sprites, bark anchors), ShapeCache
   UI/         ConversationPanel, BarkOverlay, UiTheme
   Core/       U7Paths (data paths, ReadGameDat), U7Constants, TileCoord
 scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers)
@@ -86,7 +89,11 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
    - `save <slot>` / `load <slot>` keep progress across restarts; `timer`
      lists or sets usecode timers.
    - The user may have local saves `quest1`–`quest4`, Trinsic checkpoints
-     (`quest4` = outside the east gate with Iolo and Spark). Don't count on them.
+     (`quest4` = outside the east gate with Iolo and Spark; it carries stray
+     flags and broken spellbooks from old bugs), `britain0`–`britain3`
+     (`quest4` cleaned up, then after Lord British, after Batlin, in the
+     castle storeroom), `cove0` (Rudyom's Wand in hand) and `minoc0`
+     (Batlin's package delivered). Don't count on them.
    - After a code change, the running game still has the old assembly:
      rebuild, then `restart.ps1`.
 3. For visuals, run windowed (no `--headless`) and use the console's `shot`
@@ -177,8 +184,14 @@ Done and play-tested: the whole Trinsic murder chapter.
 - **Leaving town:** the map quiz, the password "Blackbird", Johnson raises
   the portcullis.
 
+Also played: Britain's first visit (Lord British's leads, Clint, Patterson,
+Batlin's examination and package, the storeroom key, the Orb of the Moons),
+Cove (Rudyom's notebook and wand, the blackrock explosion) and Elynor taking
+the package in Minoc.
+
 Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
+SPRITES.VGA effects (`sprite_effect`, translucent), the spellbook and casting,
 Exult's walking (blocking, A*, path following with doors, speeds, actors
 stepping aside), saves with timers, party order and restored NPC schedules,
 NPC proximity remarks and woken sleepers, all of Black Gate's schedules
@@ -188,14 +201,17 @@ console.
 
 Next, in priority order:
 
-1. **Remaining intrinsics:** 48 stubbed; the most-used are `sprite_effect`,
-   `flash_mouse`, `set_to_attack`, `is_not_blocked` and `is_readied`.
+1. **Remaining intrinsics:** 35 stubbed, none reachable from Trinsic's or
+   Britain's NPCs; the most-used are `flash_mouse` (needs Exult's cursors),
+   `is_readied`, `get_barge`, `set_attack_mode` and `kill_npc`. Spells still
+   reach 11 (summon, wizard eye, clone, armageddon, ...), and the light
+   sources' palettes (`set_light`, `set_time_palette`) are not ported.
 2. **Signs:** `display_runes` still uses the conversation panel; port
    Exult's `Sign_gump` (runic signs, plaques, gravestones).
 3. **Walking follow-ups:** `Walk_to_schedule`'s off-screen legs, dormant
    NPCs, speed cursors.
-4. **Story:** continue to Britain (the Crown Jewel, the Man with the Hook,
-   Lord British), played through the agent console from `quest4`.
+4. **Story:** Minoc's sawmill murders (the gypsies, Owen and the Crown
+   Jewel, William), from `minoc0`.
 
 Known small gaps:
 - Exult shows the avatar's portrait next to the answers.

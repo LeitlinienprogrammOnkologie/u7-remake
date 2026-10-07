@@ -188,7 +188,13 @@ public sealed class AvatarController
         if (inUsecodeControl)
         {
             // Exult: no walking while a script moves the avatar, and its frames are the script's.
-            ClearPath();
+            // Only the player's own walk is dropped: a walk of usecode's keeps its speed.
+            if (_walk is not null)
+            {
+                ClearPath();
+            }
+
+            _steerDir = -1;
             return;
         }
 

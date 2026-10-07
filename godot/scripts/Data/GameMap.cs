@@ -555,9 +555,12 @@ public sealed class GameMap
 
     /// <summary>
     /// Objects of <paramref name="shape"/> (-359 = any) within Chebyshev
-    /// <paramref name="dist"/> tiles of <paramref name="origin"/>.
+    /// <paramref name="dist"/> tiles of <paramref name="origin"/>, of the
+    /// given quality and frame (-359 = any).
     /// </summary>
-    public List<U7Object> FindNearby(TileCoord origin, int shape, int dist, int mask = 0)
+    public List<U7Object> FindNearby(
+        TileCoord origin, int shape, int dist, int mask = 0,
+        int qual = U7Constants.AnyShape, int frame = U7Constants.AnyShape)
     {
         var npcOnly = mask == 8;
         var includeActors = (mask & 8) != 0 || (mask & 0x80) != 0;
@@ -595,6 +598,12 @@ public sealed class GameMap
                     }
 
                     if (shape != U7Constants.AnyShape && obj.Shape != shape)
+                    {
+                        continue;
+                    }
+
+                    if ((qual != U7Constants.AnyShape && obj.Quality != qual) ||
+                        (frame != U7Constants.AnyShape && obj.Frame != frame))
                     {
                         continue;
                     }
@@ -1216,7 +1225,8 @@ public sealed class GameMap
                 continue;
             }
 
-            if (testlen is not (6 or 10 or 18))
+            // (Exult skips an 18-byte entry that is not a spellbook as invalid.)
+            if (testlen is not (6 or 10) && !(testlen == 18 && info.IsSpellbookClass))
             {
                 continue;
             }
@@ -1224,6 +1234,20 @@ public sealed class GameMap
             var lift = NibbleSwap(entry[liftIndex]) & 0xf;
             var qualityIndex = extended ? 6 : 5;
             var quality = qualityIndex < entry.Length ? entry[qualityIndex] : 0;
+            byte[]? circles = null;
+            var bookmark = -1;
+            if (testlen == 18)
+            {
+                // Exult Spellbook_object: five circles, the lift, four circles, three unknowns, the bookmark.
+                var b = extended ? 1 : 0;
+                circles = new byte[9];
+                entry.Slice(4 + b, 5).CopyTo(circles);
+                entry.Slice(10 + b, 4).CopyTo(circles.AsSpan(5));
+                lift = NibbleSwap(entry[9 + b]) & 0xf;
+                quality = 0;
+                bookmark = entry[17 + b] == 255 ? -1 : entry[17 + b];
+            }
+
             var flags = inherit;
             if (testlen == 10 && qualityIndex + 1 < entry.Length && (entry[qualityIndex + 1] & 1) != 0)
             {
@@ -1253,6 +1277,8 @@ public sealed class GameMap
             {
                 var nested = MakeObject(tilex, tiley, lift, shape, frame, quality, ObjectKind.Ireg);
                 nested.Flags = flags;
+                nested.SpellCircles = circles;
+                nested.SpellBookmark = bookmark;
                 nested.Container = container;
                 nested.ReadySlot = ActorReadySlot(container, readyIndex);
                 container.Contents.Add(nested);
@@ -1271,6 +1297,8 @@ public sealed class GameMap
                     wcx * 16 + tilex, wcy * 16 + tiley, lift, shape, frame, quality,
                     ObjectKind.Ireg);
                 obj.Flags = flags;
+                obj.SpellCircles = circles;
+                obj.SpellBookmark = bookmark;
                 ChunkObjects[wcx][wcy].Add(obj);
                 last = obj;
             }
@@ -1577,6 +1605,21 @@ public sealed class GameMap
                 w.Write((byte)1);
             }
 
+            return;
+        }
+
+        if (info.IsSpellbookClass)
+        {
+            // Exult Spellbook_object::write_ireg: the circles the way U7 stores them, around the lift (no flags).
+            var circles = obj.SpellCircles ?? new byte[9];
+            WriteCommonIreg(w, obj, 18, contained);
+            w.Write(circles, 0, 5);
+            w.Write((byte)NibbleSwap(obj.Tz));
+            w.Write(circles, 5, 4);
+            w.Write((byte)0);
+            w.Write((byte)0);
+            w.Write((byte)0);
+            w.Write((byte)(obj.SpellBookmark >= 0 ? obj.SpellBookmark : 255));
             return;
         }
 

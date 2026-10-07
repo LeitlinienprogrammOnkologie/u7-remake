@@ -59,9 +59,19 @@ public sealed class VgaShapeFile
     /// <summary>
     /// Decode one RLE frame to RGBA. Palette is 256×RGB (8-bit).
     /// </summary>
-    public Image? Decode(int shape, int frame, ReadOnlySpan<byte> paletteRgb)
+    public Image? Decode(int shape, int frame, ReadOnlySpan<byte> paletteRgb) =>
+        Decode(shape, frame, paletteRgb, 3);
+
+    /// <summary>
+    /// Decode one RLE frame with a 256×RGBA palette, for translucent colours
+    /// (Exult paints those through its xform tables).
+    /// </summary>
+    public Image? DecodeRgba(int shape, int frame, ReadOnlySpan<byte> paletteRgba) =>
+        Decode(shape, frame, paletteRgba, 4);
+
+    Image? Decode(int shape, int frame, ReadOnlySpan<byte> pal, int stride)
     {
-        if (_flex is null || (uint)shape >= (uint)_flex.Count || paletteRgb.Length < 768)
+        if (_flex is null || (uint)shape >= (uint)_flex.Count || pal.Length < 256 * stride)
         {
             return null;
         }
@@ -98,7 +108,7 @@ public sealed class VgaShapeFile
 
             if (!encoded)
             {
-                PlotRaw(rgba, w, h, x, y, rle, ref i, scanlen, paletteRgb);
+                PlotRaw(rgba, w, h, x, y, rle, ref i, scanlen, pal, stride);
                 continue;
             }
 
@@ -120,11 +130,11 @@ public sealed class VgaShapeFile
                     }
 
                     var pix = rle[i++];
-                    PlotRun(rgba, w, h, x, y, bcnt, pix, paletteRgb);
+                    PlotRun(rgba, w, h, x, y, bcnt, pix, pal, stride);
                 }
                 else
                 {
-                    PlotRaw(rgba, w, h, x, y, rle, ref i, bcnt, paletteRgb);
+                    PlotRaw(rgba, w, h, x, y, rle, ref i, bcnt, pal, stride);
                 }
 
                 x += bcnt;
@@ -137,24 +147,24 @@ public sealed class VgaShapeFile
 
     static void PlotRaw(
         byte[] rgba, int w, int h, int x, int y, ReadOnlySpan<byte> rle, ref int i, int count,
-        ReadOnlySpan<byte> pal)
+        ReadOnlySpan<byte> pal, int stride)
     {
         for (var n = 0; n < count && i < rle.Length; n++, x++)
         {
-            Plot(rgba, w, h, x, y, rle[i++], pal);
+            Plot(rgba, w, h, x, y, rle[i++], pal, stride);
         }
     }
 
     static void PlotRun(
-        byte[] rgba, int w, int h, int x, int y, int count, byte pix, ReadOnlySpan<byte> pal)
+        byte[] rgba, int w, int h, int x, int y, int count, byte pix, ReadOnlySpan<byte> pal, int stride)
     {
         for (var n = 0; n < count; n++, x++)
         {
-            Plot(rgba, w, h, x, y, pix, pal);
+            Plot(rgba, w, h, x, y, pix, pal, stride);
         }
     }
 
-    static void Plot(byte[] rgba, int w, int h, int x, int y, byte pix, ReadOnlySpan<byte> pal)
+    static void Plot(byte[] rgba, int w, int h, int x, int y, byte pix, ReadOnlySpan<byte> pal, int stride)
     {
         if ((uint)x >= (uint)w || (uint)y >= (uint)h)
         {
@@ -162,11 +172,11 @@ public sealed class VgaShapeFile
         }
 
         var o = (y * w + x) * 4;
-        var p = pix * 3;
+        var p = pix * stride;
         rgba[o] = pal[p];
         rgba[o + 1] = pal[p + 1];
         rgba[o + 2] = pal[p + 2];
-        rgba[o + 3] = 255;
+        rgba[o + 3] = stride == 4 ? pal[p + 3] : (byte)255;
     }
 
     static bool TryFrameRle(
@@ -297,5 +307,44 @@ public static class U7Palette
         }
 
         return rgb;
+    }
+
+    /// <summary>
+    /// Exult <c>Shape_manager::load</c>'s <c>hard_blends</c> (the values of
+    /// its blends.dat): colour and alpha of the 17 translucent colours, which
+    /// start at index 0xEE. They approximate the original's XFORM.TBL tables.
+    /// </summary>
+    static readonly byte[] Blends =
+    [
+        208, 216, 224, 192, 136, 44, 148, 198, 248, 252, 80, 211,
+        144, 148, 252, 247, 64, 216, 64, 201, 204, 60, 84, 140,
+        144, 40, 192, 128, 96, 40, 16, 128, 100, 108, 116, 192,
+        68, 132, 28, 128, 255, 208, 48, 64, 28, 52, 255, 128,
+        8, 68, 0, 128, 255, 8, 8, 118, 255, 244, 248, 128,
+        56, 40, 32, 128, 228, 224, 214, 82
+    ];
+
+    public const int FirstTranslucent = 0xEE;
+
+    /// <summary>The day palette as RGBA, with the translucent colours blended (Exult <c>paint_rle_translucent</c>).</summary>
+    public static byte[] DayRgbaTranslucent()
+    {
+        var rgb = DayRgb();
+        var rgba = new byte[1024];
+        for (var i = 0; i < 256; i++)
+        {
+            if (i is >= FirstTranslucent and <= 0xFE)
+            {
+                Blends.AsSpan((i - FirstTranslucent) * 4, 4).CopyTo(rgba.AsSpan(i * 4));
+                continue;
+            }
+
+            rgba[i * 4] = rgb[i * 3];
+            rgba[i * 4 + 1] = rgb[i * 3 + 1];
+            rgba[i * 4 + 2] = rgb[i * 3 + 2];
+            rgba[i * 4 + 3] = 255;
+        }
+
+        return rgba;
     }
 }

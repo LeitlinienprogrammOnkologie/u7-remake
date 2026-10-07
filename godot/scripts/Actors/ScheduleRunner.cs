@@ -46,6 +46,8 @@ public sealed class ScheduleRunner
     public WeaponTable? Weapons { get; set; }
     /// <summary>Combat (Exult's <c>Combat_schedule</c> statics, hits and missiles).</summary>
     public CombatEngine? Combat { get; set; }
+    /// <summary>Exult <c>Effects_manager</c>, for the sprites of spells.</summary>
+    public EffectsManager? Effects { get; set; }
     /// <summary>Exult <c>call_usecode(fun, item, double_click)</c>; false if usecode cannot run now.</summary>
     public Func<int, U7Object, bool>? CallUsecode { get; set; }
     /// <summary>Whether usecode is running (Exult <c>in_usecode</c>).</summary>
@@ -303,6 +305,16 @@ public sealed class ScheduleRunner
         var prev = Avatar.ScheduleType;
         Avatar.ScheduleType = type;
         b.Schedule = type == ScheduleType.Combat ? new CombatSchedule(b, prev) : null;
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::set_action</c> and <c>start(speed, delay)</c> from
+    /// usecode; the avatar's runs on its own brain, as its schedule's would.
+    /// </summary>
+    public void StartAction(U7Object npc, IActorAction action, int speedMs, int delayMs)
+    {
+        var b = npc == Avatar ? _avatarBrain ??= new NpcBrain(this, Avatar) { WasNearby = true } : BrainOf(npc);
+        b?.StartAction(action, speedMs, delayMs);
     }
 
     /// <summary>A monster from an egg, usecode or a save: its schedule runs here (Exult <c>Monster_actor</c>).</summary>
@@ -765,6 +777,10 @@ public sealed class ScheduleRunner
                 else if (action is ApproachAction { Stepped: null } approach)
                 {
                     approach.Stepped = AvatarMoved;
+                }
+                else if (action is IfElsePathAction { Stepped: null } ifElse)
+                {
+                    ifElse.Stepped = AvatarMoved;
                 }
             }
 

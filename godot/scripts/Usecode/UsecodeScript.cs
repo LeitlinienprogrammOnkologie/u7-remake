@@ -341,6 +341,12 @@ public sealed class UsecodeScript
                     {
                         ev = UsecodeEvent.EggProximity;
                     }
+                    else if (fun == _vm.TelekenesisFun)
+                    {
+                        // The telekinesis spell's call.
+                        ev = UsecodeEvent.DoubleClick;
+                        _vm.TelekenesisFun = -1;
+                    }
 
                     _vm.Call(fun, Obj, ev);
                     break;
@@ -366,8 +372,16 @@ public sealed class UsecodeScript
                     break;
                 }
                 case Weather:
-                    ++_i; // no weather yet
+                {
+                    // Seems to match the originals (Exult).
+                    var type = Int(++_i) & 0xff;
+                    if (type == 0xff || (_vm.Effects?.GetWeather() ?? 0) != 0)
+                    {
+                        _vm.Effects?.SetWeather(type == 0xff ? 0 : type);
+                    }
+
                     break;
+                }
                 case Hit:
                 {
                     var hps = Int(++_i);
@@ -376,7 +390,13 @@ public sealed class UsecodeScript
                     break;
                 }
                 case Attack:
-                    break; // usecode_attack: not ported
+                    // Finish set_to_attack.
+                    if (Obj.IsActor)
+                    {
+                        _vm.Combat?.UsecodeAttack(Obj);
+                    }
+
+                    break;
                 case Resurrect:
                     _vm.Resurrect(Obj);
                     break;

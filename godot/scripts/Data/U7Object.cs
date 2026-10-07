@@ -86,6 +86,11 @@ public sealed class U7Object
     public int EggAreaW;
     public int EggAreaH;
 
+    /// <summary>Exult <c>Spellbook_object::circles</c>: a bit per spell for each of the 9 circles (null: none yet).</summary>
+    public byte[]? SpellCircles;
+    /// <summary>Exult <c>Spellbook_object::bookmark</c>: the marked spell, or -1.</summary>
+    public int SpellBookmark = -1;
+
     public bool HasSavedGumpPos => GumpX != int.MinValue && GumpY != int.MinValue;
     public bool IsContained => Container is not null;
     public bool IsNpc => NpcNum >= 0;
@@ -96,6 +101,10 @@ public sealed class U7Object
     public U7Object? CombatTarget;
     /// <summary>Exult <c>Actor::oppressor</c>: the numbered NPC (or avatar) attacking it, if any.</summary>
     public U7Object? Oppressor;
+    /// <summary>Exult <c>Actor::target_object</c> / <c>target_tile</c> / <c>attack_weapon</c>: what usecode's <c>set_to_attack</c> set up.</summary>
+    public U7Object? AttackTargetObj;
+    public U7.Core.TileCoord? AttackTargetTile;
+    public int AttackWeapon = -1;
     public ulong HitUntilMsec;
     public bool IsDead => GetFlag(U7.Actors.ObjFlag.Dead);
     /// <summary>Exult <c>Actor::Attack_mode</c> (combat-mode button).</summary>
