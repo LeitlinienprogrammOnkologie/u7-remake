@@ -421,10 +421,7 @@ public sealed class ScheduleRunner
             }
         }
 
-        if (_avatarBrain is { } avatar)
-        {
-            TickAvatar(avatar, delta);
-        }
+        TickAvatar(delta);
     }
 
     /// <summary>A monster acts while near the avatar; far off it waits (Exult: dormant).</summary>
@@ -443,13 +440,19 @@ public sealed class ScheduleRunner
     /// only when the avatar has no action of the player's; a walk of the
     /// player's replaces the schedule's.
     /// </summary>
-    void TickAvatar(NpcBrain b, double delta)
+    void TickAvatar(double delta)
     {
         if (Avatar.IsDead || (AvatarBusy?.Invoke() ?? false))
         {
-            b.CurrentAction = null;
-            b.ActionDone = null;
-            if (b.Schedule is SitSchedule)
+            if (_avatarBrain is { } busy)
+            {
+                busy.CurrentAction = null;
+                busy.ActionDone = null;
+            }
+
+            // (Also a schedule restored from a save, which has no brain yet.)
+            if (!Avatar.IsDead && Avatar.ScheduleType is not (ScheduleType.FollowAvatar or ScheduleType.Combat) &&
+                !Avatar.GetFlag(ObjFlag.Asleep))
             {
                 // Exult start_actor: walking puts the avatar back in its follow schedule.
                 SetAvatarSchedule(ScheduleType.FollowAvatar);
@@ -458,7 +461,7 @@ public sealed class ScheduleRunner
             return;
         }
 
-        if (b.Schedule is null && b.CurrentAction is null)
+        if (_avatarBrain is not { } b || (b.Schedule is null && b.CurrentAction is null))
         {
             return;
         }

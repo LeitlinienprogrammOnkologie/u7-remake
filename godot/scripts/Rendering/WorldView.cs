@@ -447,12 +447,6 @@ public partial class WorldView : Node2D
         y = (ty + 1) * U7Constants.TileSize - 1 - lift;
     }
 
-    public static Vector2 AvatarCameraPoint(U7Object avatar)
-    {
-        ShapeLocation(avatar.Tx, avatar.Ty, avatar.Tz, out var x, out var y);
-        return new Vector2(x, y);
-    }
-
     public static TileCoord WorldToTile(Vector2 world, int lift = 0)
     {
         var liftPx = 4 * lift;

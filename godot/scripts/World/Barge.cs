@@ -39,8 +39,10 @@ public sealed class Barge
     /// <summary>Exult <c>frame_time</c>: milliseconds between moves, 0 when not moving.</summary>
     public int FrameTime { get; private set; }
     public bool IsMoving => FrameTime > 0;
-    /// <summary>Exult <c>activate_eggs</c> after a step: the barge moved by (dx, dy).</summary>
-    public Action<int, int>? Stepped { get; set; }
+    /// <summary>Exult <c>activate_eggs</c> after a step: the barge stepped from this tile.</summary>
+    public Action<TileCoord>? Stepped { get; set; }
+    /// <summary>Exult <c>finish_move</c>'s <c>scroll_if_needed(center)</c>: the barge and all on it moved.</summary>
+    public Action? Moved { get; set; }
     /// <summary>Runs an object's usecode as a double-click (the sails, in <see cref="Done"/>).</summary>
     public static Action<U7Object>? Activate { get; set; }
 
@@ -200,7 +202,7 @@ public sealed class Barge
         }
 
         Move(t.Tx, t.Ty, t.Tz);
-        Stepped?.Invoke(t.Tx - cur.Tx, t.Ty - cur.Ty);
+        Stepped?.Invoke(cur);
         return true;
     }
 
@@ -238,6 +240,7 @@ public sealed class Barge
 
         _map.MoveGroup(objs, positions, frames);
         SetCenter();
+        Moved?.Invoke();
     }
 
     /// <summary>Exult <c>face_direction</c>: 0-7, north first.</summary>
@@ -288,6 +291,7 @@ public sealed class Barge
         Obj.BargeDir = (Obj.BargeDir + quads) % 4;
         _map.MoveGroup(objs, positions, frames);
         SetCenter();
+        Moved?.Invoke();
     }
 
     /// <summary>
@@ -409,14 +413,18 @@ public sealed class Barges(GameMap map)
     /// <summary>Exult <c>moving_barge</c>: the barge the player steers, if any.</summary>
     public Barge? Moving { get; private set; }
 
-    /// <summary>The barge moved (dx, dy): the eggs where it went.</summary>
-    public Action<int, int>? Stepped { get; set; }
+    /// <summary>A barge stepped from a tile: the eggs where it went.</summary>
+    public Action<Barge, TileCoord>? Stepped { get; set; }
+    /// <summary>A barge and all on it moved (or turned).</summary>
+    public Action<Barge>? Moved { get; set; }
 
     public Barge Of(U7Object bargeObj)
     {
         if (!_all.TryGetValue(bargeObj, out var barge))
         {
-            barge = new Barge(map, bargeObj) { Stepped = (dx, dy) => Stepped?.Invoke(dx, dy) };
+            var b = barge = new Barge(map, bargeObj);
+            b.Stepped = from => Stepped?.Invoke(b, from);
+            b.Moved = () => Moved?.Invoke(b);
             _all[bargeObj] = barge;
         }
 

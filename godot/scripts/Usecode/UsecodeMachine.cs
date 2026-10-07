@@ -78,6 +78,8 @@ public sealed class UsecodeMachine
     public int TelekenesisFun { get; set; } = -1;
     /// <summary>Called when a script steps the avatar, so eggs and followers react.</summary>
     public Action<U7Object>? AvatarMovedByScript { get; set; }
+    /// <summary>Exult <c>set_camera</c>: the view follows this actor, or centres on this object.</summary>
+    public Action<U7Object>? SetCamera { get; set; }
     /// <summary>Exult <c>fade_palette</c>: true while the screen is faded to black.</summary>
     public bool FadedOut { get; set; }
     /// <summary>Set by the restart_game intrinsic; the game reloads from the initial data.</summary>

@@ -93,8 +93,9 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
      flags and broken spellbooks from old bugs), `britain0`–`britain3`
      (`quest4` cleaned up, then after Lord British, after Batlin, in the
      castle storeroom), `cove0` (Rudyom's Wand in hand), `minoc0`
-     (Batlin's package delivered), `minoc1` (after the murder trail) and
-     `ship0` (on the Golden Ankh in barge mode). Saves from before barges
+     (Batlin's package delivered), `minoc1` (after the murder trail),
+     `ship0` (on the Golden Ankh in barge mode) and `den1` (ashore at
+     Buccaneer's Den, the Golden Ankh at its pier). Saves from before barges
      were read lack the ships and the carpet: `scripts/repair_barges.py`.
      Don't count on them.
    - After a code change, the running game still has the old assembly:
@@ -195,7 +196,8 @@ the package in Minoc.
 Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
 SPRITES.VGA effects (`sprite_effect`, translucent), the spellbook and casting,
-explosions and lightning, ships, carts and the flying carpet (Exult's barges),
+explosions and lightning, ships, carts, the flying carpet and the Skara Brae
+ferry (Exult's barges, with gangplanks, titles and the ferry's horns),
 Exult's walking (blocking, A*, path following with doors, speeds, actors
 stepping aside), saves with timers, party order and restored NPC schedules,
 NPC proximity remarks and woken sleepers, all of Black Gate's schedules
@@ -205,7 +207,7 @@ console.
 
 Next, in priority order:
 
-1. **Remaining intrinsics:** 32 stubbed, none reachable from Trinsic's or
+1. **Remaining intrinsics:** 31 stubbed, none reachable from Trinsic's or
    Britain's NPCs; the most-used are `flash_mouse` (needs Exult's cursors),
    `is_readied`, `set_attack_mode`, `kill_npc` and `set_oppressor`. Spells still
    reach 11 (summon, wizard eye, clone, armageddon, ...), and the light
@@ -216,8 +218,8 @@ Next, in priority order:
    NPCs, speed cursors.
 4. **Story:** the Minoc leads point to Paws (the Crown Jewel), Moonglow's
    observatory, the Wisps of Yew and Hook in Buccaneer's Den; the Golden
-   Ankh (Lord British's deed) and the flying carpet now travel. From `minoc1`
-   or `ship0`.
+   Ankh (Lord British's deed) and the flying carpet travel. From `minoc1`,
+   or `den1` for Buccaneer's Den.
 
 Known small gaps:
 - Exult shows the avatar's portrait next to the answers.

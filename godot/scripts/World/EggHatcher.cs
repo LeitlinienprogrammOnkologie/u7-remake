@@ -89,6 +89,27 @@ public sealed class EggHatcher
     }
 
     /// <summary>
+    /// Exult <c>Barge_object::step</c>: the eggs on the tile the barge's hot
+    /// spot stepped onto hatch for <paramref name="actor"/> (the avatar), as
+    /// if it had walked there from the barge's last tile. None unhatch.
+    /// </summary>
+    public void ActivateAt(U7Object actor, TileCoord tile, int fromTx, int fromTy)
+    {
+        if (_map.EggsAt(tile.Tx, tile.Ty) is not { } eggs)
+        {
+            return;
+        }
+
+        foreach (var egg in eggs.ToList())
+        {
+            if (!egg.Removed && IsActive(egg, actor, tile.Tx, tile.Ty, tile.Tz, fromTx, fromTy))
+            {
+                Hatch(egg, actor, false);
+            }
+        }
+    }
+
+    /// <summary>
     /// Exult <c>Map_chunk::try_all_eggs</c>: after a teleport or map load, hatch
     /// every active egg within <see cref="TryAllDist"/> except jukebox and
     /// teleport eggs. Guarded against re-entry so chained teleports stop.

@@ -19,7 +19,7 @@ namespace U7.Game;
 public partial class U7Game
 {
     const string AgentHelp =
-        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags | timer [n] [hours-ago] | stubs | " +
+        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> | shot <name> | " +
         "save <slot> | load <slot> | tile <x> <y> [z] | arena | combat [off] | close";
@@ -190,6 +190,15 @@ public partial class U7Game
                 AgentInventory(parts.Length > 1 ? AgentNpc(arg) ?? AgentTarget(arg) ?? av : av, 0);
                 break;
             case "flags":
+                if (parts.Length > 2)
+                {
+                    // A test shortcut (e.g. 0x1B3, Seance's sight of the dead).
+                    var flag = Convert.ToInt32(parts[1], 16);
+                    _usecode!.GFlags[flag] = byte.Parse(parts[2]);
+                    AgentLog($"flag 0x{flag:X3} = {_usecode.GFlags[flag]}");
+                    break;
+                }
+
                 for (var i = 0; i < _usecode!.GFlags.Length; i++)
                 {
                     if (_usecode.GFlags[i] != _agentFlags0[i])
@@ -701,6 +710,15 @@ public partial class U7Game
         {
             AgentLog($"barge mode: barge at {moving.Obj.Tx},{moving.Obj.Ty},{moving.Obj.Tz} centre {moving.Center.Tx},{moving.Center.Ty} " +
                      $"facing {"NESW"[moving.Obj.BargeDir]}{(moving.IsMoving ? ", moving" : "")}");
+        }
+
+        if (_cameraTile is { } viewTile)
+        {
+            AgentLog($"view centred on {viewTile.Tx},{viewTile.Ty},{viewTile.Tz}");
+        }
+        else if (_cameraActor is { } viewActor)
+        {
+            AgentLog($"view follows {AgentName(viewActor)} at {viewActor.Tx},{viewActor.Ty}");
         }
 
         if (_effects.Sprites.Count > 0)

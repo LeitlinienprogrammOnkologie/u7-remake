@@ -423,9 +423,35 @@ public sealed class UsecodeScript
         return delay;
     }
 
-    /// <summary>Exult <c>Usecode_script::step</c>: forced one-tile move with the walk frame.</summary>
+    /// <summary>
+    /// Exult <c>Usecode_script::step</c>: an actor makes a forced one-tile
+    /// move with its walk frame, a barge four forced steps (the Skara Brae
+    /// ferry); anything else stays put.
+    /// </summary>
     void DoStep(int dir, int dz)
     {
+        if (Obj.IsBarge)
+        {
+            if (_vm.Barges is { } barges)
+            {
+                var barge = barges.Of(Obj);
+                for (var i = 0; i < 4; i++)
+                {
+                    var t = dir >= 0
+                        ? new TileCoord(U7Constants.WrapTile(Obj.Tx + DirDx[dir]), U7Constants.WrapTile(Obj.Ty + DirDy[dir]), Obj.Tz)
+                        : new TileCoord(Obj.Tx, Obj.Ty, Obj.Tz);
+                    barge.Step(t with { Tz = Math.Max(0, t.Tz + dz / 4 + (i == 0 ? dz % 4 : 0)) }, force: true);
+                }
+            }
+
+            return;
+        }
+
+        if (!Obj.IsActor)
+        {
+            return;
+        }
+
         var tx = Obj.Tx;
         var ty = Obj.Ty;
         if (dir >= 0)
@@ -435,17 +461,10 @@ public sealed class UsecodeScript
         }
 
         var tz = Math.Max(0, Obj.Tz + dz);
-        if (Obj.IsActor)
+        ActorWalker.MoveTo(_vm.Map, Obj, tx, ty, tz, dir >= 0 ? dir : 4);
+        if (Obj.NpcNum == 0)
         {
-            ActorWalker.MoveTo(_vm.Map, Obj, tx, ty, tz, dir >= 0 ? dir : 4);
-            if (Obj.NpcNum == 0)
-            {
-                _vm.AvatarMovedByScript?.Invoke(Obj);
-            }
-        }
-        else
-        {
-            _vm.Map.MoveObject(Obj, tx, ty, tz);
+            _vm.AvatarMovedByScript?.Invoke(Obj);
         }
     }
 }

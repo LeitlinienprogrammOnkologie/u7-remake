@@ -37,6 +37,10 @@ public partial class U7Game : Node2D
     Barges _barges = null!;
     /// <summary>The mouse is steering the barge in barge mode (it stops when the button is let go).</summary>
     bool _bargeMouse;
+    /// <summary>Exult <c>camera_actor</c>: whom the view follows when not the avatar (<c>set_camera</c>).</summary>
+    U7Object? _cameraActor;
+    /// <summary>Exult <c>center_view</c> on an object: the view stays there (a moving barge takes it along) until the avatar walks.</summary>
+    TileCoord? _cameraTile;
     LightSpellOverlay _lightSpell = null!;
     LightningFlash _lightningFlash = null!;
     /// <summary>The world's tint, eased towards the time of day's (a lightning flash shows over it).</summary>
@@ -120,7 +124,11 @@ public partial class U7Game : Node2D
             _combat = new CombatEngine(_map, avatar, _catalog);
             _music = new MusicPlayer();
             _eggs = new EggHatcher(_map, _clock) { Combat = _combat, Music = _music, Party = _party };
-            _avatar.WalkStarted = () => _party.CallFollowers();
+            _avatar.WalkStarted = () =>
+            {
+                _cameraTile = null;
+                _party.CallFollowers();
+            };
             _avatar.Moved = (actor, fromTx, fromTy) =>
             {
                 _eggs.Activate(actor, fromTx, fromTy);
@@ -284,8 +292,16 @@ public partial class U7Game : Node2D
             _eggs.Usecode = _usecode;
             _barges = new Barges(_map)
             {
-                // Exult Barge_object::step: the eggs where the barge went, for the avatar.
-                Stepped = (dx, dy) => _eggs.Activate(avatar, avatar.Tx - dx, avatar.Ty - dy)
+                // Exult Barge_object::step: the eggs on the barge's new tile, for the avatar.
+                Stepped = (barge, from) => _eggs.ActivateAt(avatar, new TileCoord(barge.Obj.Tx, barge.Obj.Ty, barge.Obj.Tz), from.Tx, from.Ty),
+                // Exult finish_move scrolls to the barge's centre: a view centred elsewhere follows it.
+                Moved = barge =>
+                {
+                    if (_cameraTile is not null)
+                    {
+                        _cameraTile = barge.Center;
+                    }
+                }
             };
             _map.IsMovingBarge = obj => _barges.Moving?.Obj == obj;
             _map.MoveBarge = (obj, tx, ty, tz) => _barges.Of(obj).Move(tx, ty, tz);
@@ -298,6 +314,18 @@ public partial class U7Game : Node2D
                 }
             };
             _usecode.Barges = _barges;
+            _usecode.SetCamera = obj =>
+            {
+                if (obj.IsActor)
+                {
+                    _cameraActor = obj == avatar ? null : obj;
+                    _cameraTile = null;
+                }
+                else
+                {
+                    _cameraTile = new TileCoord(obj.Tx, obj.Ty, obj.Tz);
+                }
+            };
             _schedules.Barges = _barges;
             if (_map.LoadedMovingBarge is { } movingBarge)
             {
@@ -527,16 +555,10 @@ public partial class U7Game : Node2D
 
         KeyboardWalk(canWalk);
         AgentUpdate(delta, ref click);
-        if (click is { } c)
+        if (click is { } c && _barges.Moving is null)
         {
-            if (_barges.Moving is { } clickBarge)
-            {
-                SteerBarge(clickBarge, new TileCoord(c.X, c.Y, _avatar.Avatar.Tz), WalkSpeed.Keyboard(false, false, false));
-            }
-            else
-            {
-                _avatar.PathTo(new TileCoord(c.X, c.Y, _avatar.Avatar.Tz), WalkSpeed.Keyboard(false, false, false));
-            }
+            // (Exult start_actor_along_path: "For now, don't do barges.")
+            _avatar.PathTo(new TileCoord(c.X, c.Y, _avatar.Avatar.Tz), WalkSpeed.Keyboard(false, false, false));
         }
 
         if (!Input.IsMouseButtonPressed(MouseButton.Left))
@@ -612,8 +634,11 @@ public partial class U7Game : Node2D
         }
 
         var av = _avatar.Avatar;
-        var cam = WorldView.AvatarCameraPoint(av);
-        camera.GlobalPosition = new Vector2(Mathf.Round(cam.X), Mathf.Round(cam.Y)) + QuakeOffset(delta);
+        var focus = _cameraTile ?? (_cameraActor is { Removed: false } ca
+            ? new TileCoord(ca.Tx, ca.Ty, ca.Tz)
+            : new TileCoord(av.Tx, av.Ty, av.Tz));
+        WorldView.ShapeLocation(focus.Tx, focus.Ty, focus.Tz, out var camX, out var camY);
+        camera.GlobalPosition = new Vector2(camX, camY) + QuakeOffset(delta);
 
         var under = WorldView.WorldToTile(camera.GetGlobalMousePosition(), av.Tz);
         var picked = _world.PickObject(camera.GetGlobalMousePosition());
@@ -913,6 +938,11 @@ public partial class U7Game : Node2D
 
         if (Time.GetTicksMsec() - _walkPressMsec < QuickClickMsec)
         {
+            if (_barges.Moving is not null)
+            {
+                return; // Exult start_actor_along_path: "For now, don't do barges."
+            }
+
             var world = _camera.GetGlobalMousePosition();
             _avatar.PathTo(WorldView.WorldToTile(world, _avatar.Avatar.Tz), MouseWalkSpeed(world));
         }

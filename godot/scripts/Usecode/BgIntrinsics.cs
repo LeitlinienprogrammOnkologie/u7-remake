@@ -131,7 +131,8 @@ public sealed class BgIntrinsics
             0x6e => GetContainer(p),
             0x6f => RemoveItem(p),
             0x71 => ReduceHealth(p),
-            0x79 => UsecodeValue.FromInt(_vm.InUsecode ? 1 : 0),
+            0x79 => InUsecode(p),
+            0x92 => SetCamera(p),
             0x7e => CloseGumps(),
             0x7f => ItemSay(p),
             0x80 => CloseGump(p),
@@ -1644,6 +1645,24 @@ public sealed class BgIntrinsics
 
         return Zero();
     }
+
+    /// <summary>
+    /// Exult <c>set_camera(obj)</c>: the view follows an actor (the avatar
+    /// again, after the Ferryman's crossing), or centres on another object.
+    /// </summary>
+    UsecodeValue SetCamera(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { } obj)
+        {
+            _vm.SetCamera?.Invoke(obj);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>in_usecode(item)</c>: whether a script is running on the item.</summary>
+    UsecodeValue InUsecode(UsecodeValue[] p) =>
+        UsecodeValue.FromInt(_vm.GetItem(p[0]) is { } obj && _vm.HasScript(obj) ? 1 : 0);
 
     UsecodeValue GetItemFlag(UsecodeValue[] p)
     {
