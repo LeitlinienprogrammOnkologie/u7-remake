@@ -161,6 +161,9 @@ public sealed class BgIntrinsics
             0x41 => SetToAttack(p),
             0x95 => Telekenesis(p),
             0x29 => FindObject(p),
+            0x58 => UsecodeValue.FromObject(_vm.GetItem(p[0]) is { } bargeOf ? _vm.Barges?.GetBarge(bargeOf)?.Obj : null),
+            0x6d => OnBarge(),
+            0x46 => SitDown(p),
             0x85 => IsNotBlocked(p),
             0x7d => PathRunUsecode(p),
             0x8b => SetPathFailure(p),
@@ -1651,25 +1654,109 @@ public sealed class BgIntrinsics
         }
 
         var fnum = (int)p[1].IntValue;
+        if (IsMovingBargeFlag(fnum))
+        {
+            // Exult: whether the barge it is on (or is) is the one in barge mode.
+            var moving = _vm.Barges?.Moving;
+            return UsecodeValue.FromInt(moving is not null && _vm.Barges!.GetBarge(obj) == moving ? 1 : 0);
+        }
+
+        if (fnum == U7.Actors.ObjFlag.OkayToLand)
+        {
+            return UsecodeValue.FromInt(_vm.Barges?.GetBarge(obj)?.OkayToLand() == true ? 1 : 0);
+        }
+
         if (fnum == 24) // is_solid
         {
             return UsecodeValue.FromInt(obj.Solid ? 1 : 0);
         }
 
+        if (fnum == U7.Actors.ObjFlag.ActiveSailor)
+        {
+            // Exult: the sailor itself, as the Ferryman's usecode checks.
+            return UsecodeValue.FromObject(_sailor);
+        }
+
         return UsecodeValue.FromInt(obj.GetFlag(fnum) ? 1 : 0);
     }
+
+    /// <summary>Exult <c>sailor</c>: the barge's current captain (the Ferryman or the sails).</summary>
+    U7Object? _sailor;
+
+    /// <summary>Exult <c>Is_moving_barge_flag</c> (BG): on_moving_barge and active_barge.</summary>
+    static bool IsMovingBargeFlag(int fnum) => fnum is U7.Actors.ObjFlag.OnMovingBarge or U7.Actors.ObjFlag.ActiveBarge;
 
     UsecodeValue SetItemFlag(UsecodeValue[] p)
     {
         var obj = _vm.GetItem(p[0]);
-        obj?.SetFlag((int)p[1].IntValue);
+        var flag = (int)p[1].IntValue;
+        if (obj is null)
+        {
+            return Zero();
+        }
+
+        if (flag == U7.Actors.ObjFlag.ActiveSailor)
+        {
+            _sailor = obj;
+            return Zero();
+        }
+
+        obj.SetFlag(flag);
+        if (IsMovingBargeFlag(flag) && _vm.Barges is { } barges && barges.GetBarge(obj) is { } barge)
+        {
+            // Set the barge in motion.
+            barges.SetMoving(barge, _vm.Avatar);
+        }
+
         return Zero();
     }
 
     UsecodeValue ClearItemFlag(UsecodeValue[] p)
     {
         var obj = _vm.GetItem(p[0]);
-        obj?.ClearFlag((int)p[1].IntValue);
+        var flag = (int)p[1].IntValue;
+        if (obj is null)
+        {
+            return Zero();
+        }
+
+        obj.ClearFlag(flag);
+        if (IsMovingBargeFlag(flag) && _vm.Barges is { } barges && barges.GetBarge(obj) is { } barge && barge == barges.Moving)
+        {
+            // Stop the barge it is on or part of.
+            barges.SetMoving(null, _vm.Avatar);
+        }
+        else if (flag == U7.Actors.ObjFlag.ActiveSailor)
+        {
+            _sailor = null;
+        }
+
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_on_barge</c> (BG: the flying carpet's usecode): whether
+    /// the avatar is on a barge with the whole party in its footprint.
+    /// </summary>
+    UsecodeValue OnBarge()
+    {
+        if (_vm.Barges?.GetBarge(_vm.Avatar) is not { } barge)
+        {
+            return Zero();
+        }
+
+        var party = _vm.Party?.Members.Prepend(_vm.Avatar) ?? [_vm.Avatar];
+        return UsecodeValue.FromInt(party.All(m => barge.InFootprint(m.Tx, m.Ty)) ? 1 : 0);
+    }
+
+    /// <summary>Exult <c>UI_sit_down(npc, chair)</c>: the NPC's schedule becomes sitting on that chair.</summary>
+    UsecodeValue SitDown(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { IsActor: true } npc && _vm.GetItem(p[1]) is { } chair)
+        {
+            _vm.Schedules?.SitOn(npc, chair);
+        }
+
         return Zero();
     }
 

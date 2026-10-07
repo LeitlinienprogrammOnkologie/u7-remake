@@ -151,8 +151,69 @@ public sealed class GameMap
         }
     }
 
+    /// <summary>A barge in barge mode when the map was read (Exult <c>set_moving_barge</c> on reading).</summary>
+    public U7Object? LoadedMovingBarge { get; set; }
+
+    /// <summary>Whether a barge is the one in barge mode, for saving.</summary>
+    public Func<U7Object, bool>? IsMovingBarge { get; set; }
+
+    /// <summary>Exult <c>Barge_object::move</c>: moving a barge (by usecode too) takes all on it along.</summary>
+    public Action<U7Object, int, int, int>? MoveBarge { get; set; }
+
+    /// <summary>
+    /// Exult <c>Barge_object::finish_move</c>: take every object out of the
+    /// world first, then put each back at its new place (and frame).
+    /// </summary>
+    public void MoveGroup(IReadOnlyList<U7Object> objs, IReadOnlyList<TileCoord> positions, IReadOnlyList<int>? frames = null)
+    {
+        foreach (var obj in objs)
+        {
+            RemoveFromChunk(obj);
+            if (obj.IsEgg)
+            {
+                UpdateEgg(obj, add: false);
+            }
+        }
+
+        for (var k = 0; k < objs.Count; k++)
+        {
+            var obj = objs[k];
+            if (frames is not null)
+            {
+                SetFrameDims(obj, frames[k]);
+            }
+
+            obj.Tx = U7Constants.WrapTile(positions[k].Tx);
+            obj.Ty = U7Constants.WrapTile(positions[k].Ty);
+            obj.Tz = positions[k].Tz;
+            if (obj.IsEgg)
+            {
+                SetEggArea(obj);
+                UpdateEgg(obj, add: true);
+            }
+
+            InsertIntoChunk(obj);
+        }
+    }
+
+    /// <summary>A new frame, and the footprint that goes with it (reflected frames swap x and y).</summary>
+    void SetFrameDims(U7Object obj, int frame)
+    {
+        obj.Frame = frame;
+        var info = Catalog[obj.Shape];
+        var reflected = (frame & 32) != 0;
+        obj.DimX = reflected ? info.DimY : info.DimX;
+        obj.DimY = reflected ? info.DimX : info.DimY;
+    }
+
     public void MoveObject(U7Object obj, int newTx, int newTy, int newTz)
     {
+        if (obj.IsBarge && !obj.Removed && MoveBarge is { } moveBarge)
+        {
+            moveBarge(obj, newTx, newTy, newTz);
+            return;
+        }
+
         if (obj.Removed)
         {
             // A removed object (dead NPC) keeps a position but never re-enters a chunk.
@@ -1108,7 +1169,9 @@ public sealed class GameMap
 
     const uint OkayToTakeFlag = 1u << 11;
 
-    void ParseIreg(byte[] data, ref int i, int scx, int scy, U7Object? container, uint inherit = OkayToTakeFlag)
+    /// <param name="untilEnd">Stop at the next end of a list (a barge's parts, placed in the world).</param>
+    void ParseIreg(byte[] data, ref int i, int scx, int scy, U7Object? container, uint inherit = OkayToTakeFlag,
+        bool untilEnd = false)
     {
         var readyIndex = -1;
         U7Object? last = null;
@@ -1117,7 +1180,7 @@ public sealed class GameMap
             var entlen = data[i++];
             if (entlen == 0 || entlen == 1)
             {
-                if (container is not null)
+                if (container is not null || untilEnd)
                 {
                     return;
                 }
@@ -1314,8 +1377,7 @@ public sealed class GameMap
         int shape, int frame, U7Object? parent, int readyIndex)
     {
         var info = Catalog[shape];
-        var skip = info.IsBargeClass ||
-                   info.Name.Contains("jawbone", StringComparison.OrdinalIgnoreCase);
+        var skip = info.Name.Contains("jawbone", StringComparison.OrdinalIgnoreCase);
         var type = entry[4] + 256 * entry[5];
         // 13-byte entries are Exult Dead_body records: npc num at [8..9], lift at [10].
         var isBody = testlen == 13;
@@ -1353,6 +1415,23 @@ public sealed class GameMap
                     ChunkObjects[wcx][wcy].Add(obj);
                 }
             }
+        }
+
+        if (info.IsBargeClass && obj is not null && parent is null)
+        {
+            // Exult Barge_object: size, facing in quality bits 1-2, barge mode in bit 3.
+            obj.IsBarge = true;
+            obj.BargeXTiles = entry[4];
+            obj.BargeYTiles = entry[5];
+            obj.BargeDir = (quality >> 1) & 3;
+            if ((quality & 8) != 0)
+            {
+                LoadedMovingBarge ??= obj;
+            }
+
+            // Its "contents" (the rest of the chunk in the originals, none in saves) go into the world.
+            ParseIreg(data, ref i, scx, scy, null, flags & ~1u, untilEnd: true);
+            return obj;
         }
 
         if (type != 0)
@@ -1605,6 +1684,22 @@ public sealed class GameMap
                 w.Write((byte)1);
             }
 
+            return;
+        }
+
+        if (obj.IsBarge)
+        {
+            // Exult Barge_object::write_ireg: size, facing and barge mode; its parts are written as world objects.
+            WriteCommonIreg(w, obj, 12, contained);
+            w.Write((byte)obj.BargeXTiles);
+            w.Write((byte)obj.BargeYTiles);
+            w.Write((byte)0);
+            w.Write((byte)((obj.BargeDir << 1) | (IsMovingBarge?.Invoke(obj) == true ? 8 : 0)));
+            w.Write((byte)0);
+            w.Write((byte)NibbleSwap(obj.Tz));
+            w.Write((byte)0);
+            w.Write((byte)0);
+            w.Write((byte)1); // A 01 ends the (empty) list.
             return;
         }
 

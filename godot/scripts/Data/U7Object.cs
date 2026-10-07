@@ -86,6 +86,12 @@ public sealed class U7Object
     public int EggAreaW;
     public int EggAreaH;
 
+    /// <summary>Exult <c>Barge_object</c> (shape class barge): its footprint in tiles and facing (0 N, 1 E, 2 S, 3 W).</summary>
+    public bool IsBarge;
+    public int BargeXTiles;
+    public int BargeYTiles;
+    public int BargeDir;
+
     /// <summary>Exult <c>Spellbook_object::circles</c>: a bit per spell for each of the 9 circles (null: none yet).</summary>
     public byte[]? SpellCircles;
     /// <summary>Exult <c>Spellbook_object::bookmark</c>: the marked spell, or -1.</summary>

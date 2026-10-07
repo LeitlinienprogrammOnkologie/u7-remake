@@ -26,7 +26,8 @@ Last update: 2026-10-07.
 | Books and scrolls (`book_mode`) | Done (original gumps and font, Exult page layout) |
 | Story (played through the agent console) | Trinsic chapter; Britain's first visit (Lord British, Batlin, the storeroom, the Orb) |
 | Sprite effects (SPRITES.VGA) | Done (`sprite_effect`, `obj_sprite_effect`, notes, spell sparkles, explosions, lightning flashes; weather not drawn) |
-| Intro movie, barges | Not started |
+| Barges (ships, carts, flying carpet) | Done (Exult's Barge_object: boarding by usecode, seats, sailing, flying, turning, landing, saved) |
+| Intro movie | Not started |
 | Serpent Isle | Out of scope |
 
 `dotnet build` of `godot/U7.csproj` is clean.
@@ -56,7 +57,7 @@ Open the **`godot/`** project in Godot 4.7 (C# / .NET 8). Data root is the repo 
 
 ### Agent console (automated play-testing)
 
-With the environment variable `U7_AGENT=<dir>` set, `Game/U7Game.Agent.cs` reads one command per line from `<dir>/cmd.txt` and appends results to `<dir>/out.txt`, each ending in `DONE <n>`. Game time is frozen between commands, music is off, and conversation text and barks are logged. Commands: `look [r]`, `find <text>`, `npc <num|name>`, `state`, `inv [npc|id]`, `flags`, `timer [n] [hours-ago]`, `stubs`, `tile <x> <y> [z]`, `walk <x> <y>`, `walkto <id|npc:num>`, `steer <dir> <sec> [ms]`, `tp <x> <y> [z]`, `talk`/`use <id|npc>`, `take <id>`, `put <id> <container-id>` (a drag into a container, also off a ready spot), `book [page]` (the open spellbook's page, spells and bookmark; turns to a page) and `cast <spell>` (a double-click on a spell in it), `close`, `cont [n|all]`, `choose <answer|#n>`, `num <n>`, `click <id>` or `click <x> <y> [z]` (a tile, for `click_on_item`), `wait <sec>`, `hour <h>`, `save`/`load <slot>`, `shot <name>` (windowed only). Object ids come from `look`/`find` output. Helpers: `pwsh scripts/agent/restart.ps1 [-Load <slot>]` starts it headless (I/O in `agent_io/`), `python scripts/agent/agent.py "<cmd>" ...` sends commands and prints the results. The Trinsic murder chapter (opening, stables, Finnigan, Spark, the chest, Gilberto, Gargan, the report and map quiz, Johnson's gate) and Britain's first visit were played through this way.
+With the environment variable `U7_AGENT=<dir>` set, `Game/U7Game.Agent.cs` reads one command per line from `<dir>/cmd.txt` and appends results to `<dir>/out.txt`, each ending in `DONE <n>`. Game time is frozen between commands, music is off, and conversation text and barks are logged. Commands: `look [r]`, `find <text>`, `npc <num|name>`, `state`, `inv [npc|id]`, `flags`, `timer [n] [hours-ago]`, `stubs`, `tile <x> <y> [z]`, `walk <x> <y>`, `walkto <id|npc:num>`, `steer <dir> <sec> [ms]`, `tp <x> <y> [z]`, `talk`/`use <id|npc>`, `take <id>`, `sail <x> <y>` (in barge mode: the barge's centre heads there, as with the button held, until it stops), `put <id> <container-id>` (a drag into a container, also off a ready spot), `book [page]` (the open spellbook's page, spells and bookmark; turns to a page) and `cast <spell>` (a double-click on a spell in it), `close`, `cont [n|all]`, `choose <answer|#n>`, `num <n>`, `click <id>` or `click <x> <y> [z]` (a tile, for `click_on_item`), `wait <sec>`, `hour <h>`, `save`/`load <slot>`, `shot <name>` (windowed only). Object ids come from `look`/`find` output. Helpers: `pwsh scripts/agent/restart.ps1 [-Load <slot>]` starts it headless (I/O in `agent_io/`), `python scripts/agent/agent.py "<cmd>" ...` sends commands and prints the results. The Trinsic murder chapter (opening, stables, Finnigan, Spark, the chest, Gilberto, Gargan, the report and map quiz, Johnson's gate) and Britain's first visit were played through this way.
 
 ## Done milestones
 
@@ -191,7 +192,7 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 - Homing missiles, attacks on tiles, blood, arrest
 - Party: dead-party list, party items intrinsics, sleeping/paralysed members, attack modes other than nearest
 - Exult's arrest schedule and scripted (0x80+) schedules, `im_dormant`; in combat: spellbooks, powder kegs set off by explosions (breakable objects), guards called by witnesses (`fight_back`'s bully code), invisible actors not drawn, combat difficulty and pausing
-- Hunger, poison, barges, weather, dungeon lights
+- Hunger, poison, weather, dungeon lights
 - True 8-bit palette cycling (world PNGs are day-baked RGBA)
 - Intro / endgame, SFX, speech playback, music on non-Windows
 - SI paperdolls (`PAPERDOL.VGA`), save/load gumps
@@ -205,7 +206,7 @@ exult/exult-1.12.1/   source of truth (untracked; Exult 1.12.1 source release)
 
 Remaining BG intrinsics and full schedule classes. Intro, barges and arrest can wait.
 
-`python scripts/usecode_stub_report.py` ranks the stubbed intrinsics by static reachability (Trinsic NPCs by default, `--npcs` for others, plus all of USECODE). In game, every stub hit is counted and written to `stub_report.txt` (repo root, untracked) on exit. Nothing reachable from the Trinsic NPCs or the Britain NPCs (Lord British's castle and town, NPCs 23-73, `--npcs 23,24,...`) is stubbed any more; 35 intrinsics remain game-wide (top: `flash_mouse`, `is_readied`, `get_barge`, `set_attack_mode`, `kill_npc`); from the 72 spells' usecode 11 are left (`summon`, `wizard_eye`, `display_map`, `clone`, `kill_npc`, `armageddon`, `stop_time`, ...). `flash_mouse` waits for Exult's mouse cursors (POINTERS.SHP), which the game does not draw yet.
+`python scripts/usecode_stub_report.py` ranks the stubbed intrinsics by static reachability (Trinsic NPCs by default, `--npcs` for others, plus all of USECODE). In game, every stub hit is counted and written to `stub_report.txt` (repo root, untracked) on exit. Nothing reachable from the Trinsic NPCs or the Britain NPCs (Lord British's castle and town, NPCs 23-73, `--npcs 23,24,...`) is stubbed any more; 32 intrinsics remain game-wide (top: `flash_mouse`, `is_readied`, `set_attack_mode`, `kill_npc`, `set_oppressor`); from the 72 spells' usecode 11 are left (`summon`, `wizard_eye`, `display_map`, `clone`, `kill_npc`, `armageddon`, `stop_time`, ...). `flash_mouse` waits for Exult's mouse cursors (POINTERS.SHP), which the game does not draw yet.
 
 ### Opening scene (current)
 
@@ -214,6 +215,14 @@ Remaining BG intrinsics and full schedule classes. Intro, barges and arrest can 
 - The scene itself is the game's usecode: the cached-in egg (0x06C2) calls Iolo's 0x0401 with the egg event (music 35, barks), 0x06AA creates and animates the red moongate, 0x0618 clears flag 16, Iolo greets the Avatar, Petre interrupts, 0x08DD makes the NPCs react and shakes the screen (Forge of Virtue earthquake), Iolo joins, 0x06FA remarks on the tremor. Verified headless end to end.
 - Usecode control (Exult `Actor::in_usecode_control`: flag 16/22 or a started, halting script): the player cannot walk the avatar and NPC schedules wait, so script steps and frames are not overwritten. The avatar returns to its standing frame once when a walk or swing ends (Exult `Actor::stop`), facing the way it already faces, instead of every idle frame.
 - Barks (`item_say`, script `say`) follow Exult `Text_effect` (one per speaker, '@' shown as '"', drawn after the map) but in screen space: `UI/BarkOverlay` draws MedievalSharp in yellow with a dark outline, sized with the zoom, centred above the speaker's sprite and kept on screen. `WorldView.Barks` supplies the anchors.
+
+### Barges (current)
+
+- `World/Barge` ports Exult's `Barge_object`: an invisible footprint (shape 961, hot spot at the lower right, size and facing from its IREG entry) whose parts (hull, decks, sails, seats, the carpet's pieces) and passengers are gathered from the footprint (its lift up to five above, its own parts from one below; no eggs) and moved together (`GameMap.MoveGroup`). Under way it makes two steps per move after the first, straight at its target (Exult's Zombie path), turning first to face that way: round its centre, each part on its rotated frame (seats by facing, barge parts by Exult's rule, others reflected), a quarter turn only if the new footprint is clear. A ship on water swims, a cart walks, a carpet in the air levitates; nothing rises or drops. Cart wheels turn and draft horses trot. Eggs fire for the avatar as it goes.
+- Barge mode (Exult `moving_barge`, `World/Barges`): usecode starts and stops it by setting or clearing flag 10 or 26 on a part, asks it with those flags, asks flag 21 whether the carpet may land (`okay_to_land`: nothing below, no water), and flag 20 marks the sailor. `get_barge`, `on_barge` (the whole party in the footprint) and `sit_down` (the sit schedule on that seat) are ported; once the whole party sits on a barge's seats, the sit schedule calls the barge usecode 0x634 (Exult). In barge mode the player's walking steers the barge instead: holding the button or a direction key heads its centre for that spot at twice walking speed, letting go stops it. Leaving barge mode furls a ship's sails (Exult `done`); combat ends it. Moving a barge object by usecode (`set_lift`, `move_object`) takes its parts along. Saved in Exult's 12-byte entry with the barge-mode bit, restored on load.
+- IREG: the entries after a barge in the originals are its "contents", which Exult puts in the world; they used to be dropped, and with them the flying carpet, most ships' hulls, holds and cargo, the carts and the Skara Brae ferry. Saves made before lack them: `python scripts/repair_barges.py <slot>` adds them from INITGAME.DAT (done for `britain0`-`britain3`, `cove0`, `minoc0`, `minoc1`).
+- Exult `Main_actor::get_followers`: when the player sets the avatar walking, party members not fighting, waiting or loitering follow again, so those seated on a barge or chair get up.
+- Verified: the flying carpet at 630,1052 (double-click a piece: the party sits, it rises to lift 9, flies east and south, lands, everyone gets up and follows); the Golden Ankh at Vesper (2192,1316) with Lord British's deed: the sails go up, the party sits, it sails south, turns west and east (blocked by sea rocks where they are), the barge mode survives a save and load (`ship0`), and the sails come down again.
 
 ### Spellbook and magic (current)
 
@@ -225,6 +234,7 @@ Remaining BG intrinsics and full schedule classes. Intro, barges and arrest can 
 ### Minoc (current)
 
 - From `cove0`: Elynor (`npc 81`, at the sawmill) speaks of the murders of Frederico and Tania, the gypsies camped southeast of town, and sends you to Owen about the Crown Jewel. Asked about her job a second time (the first answer sets flag 0x11F) she remembers Batlin's message; "deliver", "No" (unopened) and she takes the sealed box (`find_object` in the party, quality 1) and pays 50 gold. `minoc0` is saved after that.
+- The sawmill murders (`minoc1`): the victims are scenery (shape 867, no usecode) among blood; the door egg (0x6AB) sets flag 0x122 and releases Owen, Rutherford, Xanthia and Zorn from their npc.dat "wait" schedule to loiter (Exult's `schedule_npcs` leaves waiting NPCs alone, so a new game finds Owen at 1355,455 until then). William found the bodies; Burnside and Gregor on the monument; Jergi, Sasha and Margareta at the gypsy camp southeast of town (her paid fortune names Moonglow's observatory, the Time Lord, the Wisps of Yew and Empath Abbey); Owen: the Crown Jewel left for Paws, a man with a hook was in town; Rutherford: Hook is a pirate of Buccaneer's Den. No stubs were hit.
 
 ### Cove (current)
 

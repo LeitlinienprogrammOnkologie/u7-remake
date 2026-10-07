@@ -3,23 +3,43 @@ using U7.Data;
 namespace U7.Actors;
 
 /// <summary>
-/// Exult <c>Sit_schedule</c>: sit on a chair and stay there; if made to get
-/// up, sit down again a second or two later. (Barge seats, which set a ship
-/// sailing once the whole party sits, are not ported.)
+/// Exult <c>Sit_schedule</c>: sit on a chair (the one usecode's
+/// <c>sit_down</c> names, or the nearest) and stay there; if made to get up,
+/// sit down again a second or two later. Once the whole party sits on a
+/// barge's seats, the barge usecode (0x634) sets it going.
 /// </summary>
-public sealed class SitSchedule(NpcBrain brain) : Schedule(brain)
+public sealed class SitSchedule(NpcBrain brain, U7Object? chair = null) : Schedule(brain)
 {
     public static readonly int[] ChairShapes = [873, 292];
+    const int BargeUsecode = 0x634;
 
-    U7Object? _chair;
+    U7Object? _chair = chair;
     bool _sat;
+    bool _didBargeUsecode;
 
     public override void NowWhat()
     {
         var chair = _chair is { Removed: false } c ? c : null;
         if (chair is not null && (Npc.Frame & 0xf) == ActorWalker.SitFrame && Here(Npc).Distance(Here(chair)) <= 1)
         {
-            return; // Already sitting.
+            // Already sitting. A barge seat starts the barge, but not more than once.
+            if (Map.Catalog[chair.Shape].BargeType != 2 || _didBargeUsecode)
+            {
+                return;
+            }
+
+            _didBargeUsecode = true;
+            if (Runner.Barges?.Moving is not null || !Npc.GetFlag(ObjFlag.InParty) ||
+                Runner.Party is not { } party ||
+                party.Members.Prepend(Runner.Avatar).Any(m => (m.Frame & 0xf) != ActorWalker.SitFrame) ||
+                Map.FindNearby(Here(chair), U7.World.Barge.Shape, 24).Count == 0)
+            {
+                return;
+            }
+
+            // (With the avatar as item, so that nearby barges are left alone.)
+            Runner.CallUsecode?.Invoke(BargeUsecode, Runner.Avatar);
+            return;
         }
 
         // Wait a while if we got up.

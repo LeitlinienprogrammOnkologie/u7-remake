@@ -20,7 +20,7 @@ public partial class U7Game
 {
     const string AgentHelp =
         "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags | timer [n] [hours-ago] | stubs | " +
-        "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | book [page] | cast <spell> | " +
+        "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> | shot <name> | " +
         "save <slot> | load <slot> | tile <x> <y> [z] | arena | combat [off] | close";
 
@@ -204,6 +204,9 @@ public partial class U7Game
                 break;
             case "walk":
                 AgentWalk(int.Parse(parts[1]), int.Parse(parts[2]));
+                break;
+            case "sail":
+                AgentSail(int.Parse(parts[1]), int.Parse(parts[2]));
                 break;
             case "walkto":
             {
@@ -452,6 +455,22 @@ public partial class U7Game
         }
     }
 
+    /// <summary>In barge mode, steer the barge's centre to the tile (a held click there) until it stops.</summary>
+    void AgentSail(int tx, int ty)
+    {
+        if (_barges.Moving is not { } barge)
+        {
+            AgentLog("not in barge mode");
+            return;
+        }
+
+        SteerBarge(barge, new TileCoord(tx, ty, _avatar.Avatar.Tz), WalkSpeed.Keyboard(false, false, false));
+        Engine.TimeScale = 6;
+        _agentElapsed = 0;
+        _agentLimit = 120;
+        _agentBusy = () => barge.IsMoving && _usecode is not { WaitingForChoice: true };
+    }
+
     void AgentWalk(int tx, int ty)
     {
         // Open containers put the game in gump mode, which stops walking (Exult default).
@@ -678,6 +697,12 @@ public partial class U7Game
         AgentLog($"@ {av.Tx},{av.Ty},{av.Tz} {_clock.HudText()} hp {av.GetProp(ActorProp.Health)} gold {gold} party [{party}]" +
                  (ObjFlag.DontMoveMode(av) ? " (avatar flag 16/22)" : "") +
                  (vm.InUsecodeControl(av) ? $" (avatar under usecode control, {scripts} scripts)" : ""));
+        if (_barges.Moving is { } moving)
+        {
+            AgentLog($"barge mode: barge at {moving.Obj.Tx},{moving.Obj.Ty},{moving.Obj.Tz} centre {moving.Center.Tx},{moving.Center.Ty} " +
+                     $"facing {"NESW"[moving.Obj.BargeDir]}{(moving.IsMoving ? ", moving" : "")}");
+        }
+
         if (_effects.Sprites.Count > 0)
         {
             AgentLog("sprites " + string.Join(", ", _effects.Sprites.Select(e =>

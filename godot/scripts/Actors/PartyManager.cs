@@ -42,6 +42,25 @@ public sealed class PartyManager
 
     public ScheduleRunner? Schedules { get; set; }
     public IReadOnlyList<U7Object> Members => _members;
+
+    /// <summary>
+    /// Exult <c>Main_actor::get_followers</c>: when the avatar sets off,
+    /// members not fighting, waiting or loitering follow again (those sitting
+    /// on a barge or a chair get up).
+    /// </summary>
+    public void CallFollowers()
+    {
+        foreach (var npc in _members)
+        {
+            if (npc.GetFlag(ObjFlag.Asleep) || npc.IsDead ||
+                npc.ScheduleType is ScheduleType.Combat or ScheduleType.Wait or ScheduleType.Loiter or ScheduleType.FollowAvatar)
+            {
+                continue;
+            }
+
+            Schedules?.SetScheduleType(npc, ScheduleType.FollowAvatar);
+        }
+    }
     public int Count => _members.Count;
 
     public PartyManager(GameMap map, U7Object avatar, List<U7Object?> npcs)

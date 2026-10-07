@@ -72,6 +72,8 @@ public sealed class UsecodeMachine
     public U7.Audio.MusicPlayer? Music { get; set; }
     public U7.World.EggHatcher? Eggs { get; set; }
     public U7.World.EffectsManager? Effects { get; set; }
+    /// <summary>Exult's barges (ships, carts, the flying carpet).</summary>
+    public U7.World.Barges? Barges { get; set; }
     /// <summary>Exult <c>telekenesis_fun</c>: a script's next call of this function is a double-click.</summary>
     public int TelekenesisFun { get; set; } = -1;
     /// <summary>Called when a script steps the avatar, so eggs and followers react.</summary>

@@ -165,6 +165,11 @@ public static class ObjFlag
     public const int Poisoned = 8;
     public const int Protection = 9;
     public const int OnMovingBarge = 10;
+    /// <summary>Exult <c>active_sailor</c>: usecode marks the Ferryman or the sails with it.</summary>
+    public const int ActiveSailor = 20;
+    /// <summary>Exult <c>okay_to_land</c>: asked of the flying carpet.</summary>
+    public const int OkayToLand = 21;
+    public const int ActiveBarge = 26;
     public const int Tournament = 29;
     public const int SiZombie = 30;
     public const int NoSpellCasting = 31;

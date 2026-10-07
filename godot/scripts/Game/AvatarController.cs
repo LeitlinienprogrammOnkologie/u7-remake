@@ -30,6 +30,8 @@ public sealed class AvatarController
 
     /// <summary>The avatar stepped (from x, y): eggs and followers react.</summary>
     public Action<U7Object, int, int>? Moved;
+    /// <summary>The player set the avatar walking (Exult <c>start_actor</c>, which calls the party along).</summary>
+    public Action? WalkStarted;
 
     public bool IsPlayerMoving => _walk is not null;
 
@@ -154,6 +156,7 @@ public sealed class AvatarController
         if (!moving)
         {
             _waitMs = 0;
+            WalkStarted?.Invoke();
         }
     }
 

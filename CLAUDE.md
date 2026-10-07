@@ -92,8 +92,11 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
      (`quest4` = outside the east gate with Iolo and Spark; it carries stray
      flags and broken spellbooks from old bugs), `britain0`–`britain3`
      (`quest4` cleaned up, then after Lord British, after Batlin, in the
-     castle storeroom), `cove0` (Rudyom's Wand in hand) and `minoc0`
-     (Batlin's package delivered). Don't count on them.
+     castle storeroom), `cove0` (Rudyom's Wand in hand), `minoc0`
+     (Batlin's package delivered), `minoc1` (after the murder trail) and
+     `ship0` (on the Golden Ankh in barge mode). Saves from before barges
+     were read lack the ships and the carpet: `scripts/repair_barges.py`.
+     Don't count on them.
    - After a code change, the running game still has the old assembly:
      rebuild, then `restart.ps1`.
 3. For visuals, run windowed (no `--headless`) and use the console's `shot`
@@ -192,6 +195,7 @@ the package in Minoc.
 Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
 SPRITES.VGA effects (`sprite_effect`, translucent), the spellbook and casting,
+explosions and lightning, ships, carts and the flying carpet (Exult's barges),
 Exult's walking (blocking, A*, path following with doors, speeds, actors
 stepping aside), saves with timers, party order and restored NPC schedules,
 NPC proximity remarks and woken sleepers, all of Black Gate's schedules
@@ -201,17 +205,19 @@ console.
 
 Next, in priority order:
 
-1. **Remaining intrinsics:** 35 stubbed, none reachable from Trinsic's or
+1. **Remaining intrinsics:** 32 stubbed, none reachable from Trinsic's or
    Britain's NPCs; the most-used are `flash_mouse` (needs Exult's cursors),
-   `is_readied`, `get_barge`, `set_attack_mode` and `kill_npc`. Spells still
+   `is_readied`, `set_attack_mode`, `kill_npc` and `set_oppressor`. Spells still
    reach 11 (summon, wizard eye, clone, armageddon, ...), and the light
    sources' palettes (`set_light`, `set_time_palette`) are not ported.
 2. **Signs:** `display_runes` still uses the conversation panel; port
    Exult's `Sign_gump` (runic signs, plaques, gravestones).
 3. **Walking follow-ups:** `Walk_to_schedule`'s off-screen legs, dormant
    NPCs, speed cursors.
-4. **Story:** Minoc's sawmill murders (the gypsies, Owen and the Crown
-   Jewel, William), from `minoc0`.
+4. **Story:** the Minoc leads point to Paws (the Crown Jewel), Moonglow's
+   observatory, the Wisps of Yew and Hook in Buccaneer's Den; the Golden
+   Ankh (Lord British's deed) and the flying carpet now travel. From `minoc1`
+   or `ship0`.
 
 Known small gaps:
 - Exult shows the avatar's portrait next to the answers.

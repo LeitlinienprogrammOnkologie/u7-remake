@@ -30,6 +30,10 @@ public sealed class ShapeRecord
     public bool Occludes;
     public bool Transparent;
     public bool Translucent;
+    /// <summary>TFA <c>barge_part</c>: a piece of a ship, cart or carpet (Exult <c>is_barge_part</c>).</summary>
+    public bool BargePart;
+    /// <summary>Exult <c>Shape_info::Barge_types</c> (BG <c>shape_info.txt</c>): 2 seat, 3 sails, 4 wheel, 5 draft animal.</summary>
+    public int BargeType;
     public bool Door;
     /// <summary>Exult <c>is_poisonous</c>: swamp tiles.</summary>
     public bool Poisonous;
@@ -200,6 +204,7 @@ public sealed class ShapeCatalog
         var iOcc = IndexOf(cols, "occludes");
         var iTrans = IndexOf(cols, "transparent");
         var iTluc = IndexOf(cols, "translucency");
+        var iBargePart = IndexOf(cols, "barge_part");
         var iDoor = IndexOf(cols, "door");
         var iPoison = IndexOf(cols, "poisonous");
         var iLight = IndexOf(cols, "light_source");
@@ -227,6 +232,8 @@ public sealed class ShapeCatalog
             rec.Occludes = Get(c, iOcc) == "1";
             rec.Transparent = Get(c, iTrans) == "1";
             rec.Translucent = Get(c, iTluc) == "1";
+            rec.BargePart = Get(c, iBargePart) == "1";
+            rec.BargeType = shape switch { 292 => 2, 251 => 3, 774 => 4, 796 => 5, _ => 0 };
             rec.Door = Get(c, iDoor) == "1";
             rec.Poisonous = Get(c, iPoison) == "1";
             rec.LightSource = Get(c, iLight) == "1";

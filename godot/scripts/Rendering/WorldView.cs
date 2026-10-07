@@ -317,7 +317,8 @@ public partial class WorldView : Node2D
             }
         }
 
-        if (obj.Removed || obj.Container is not null || obj.InvisibleEgg ||
+        // (Exult paints no barge: its parts are objects of their own.)
+        if (obj.Removed || obj.Container is not null || obj.InvisibleEgg || obj.IsBarge ||
             (obj.IsActor && obj.GetFlag(U7.Actors.ObjFlag.DontMove)))
         {
             return;

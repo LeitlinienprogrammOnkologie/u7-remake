@@ -34,6 +34,9 @@ public partial class U7Game : Node2D
     ScheduleRunner _schedules = null!;
     EggHatcher _eggs = null!;
     EffectsManager _effects = null!;
+    Barges _barges = null!;
+    /// <summary>The mouse is steering the barge in barge mode (it stops when the button is let go).</summary>
+    bool _bargeMouse;
     LightSpellOverlay _lightSpell = null!;
     LightningFlash _lightningFlash = null!;
     /// <summary>The world's tint, eased towards the time of day's (a lightning flash shows over it).</summary>
@@ -117,6 +120,7 @@ public partial class U7Game : Node2D
             _combat = new CombatEngine(_map, avatar, _catalog);
             _music = new MusicPlayer();
             _eggs = new EggHatcher(_map, _clock) { Combat = _combat, Music = _music, Party = _party };
+            _avatar.WalkStarted = () => _party.CallFollowers();
             _avatar.Moved = (actor, fromTx, fromTy) =>
             {
                 _eggs.Activate(actor, fromTx, fromTy);
@@ -278,6 +282,27 @@ public partial class U7Game : Node2D
                 _usecode.Call(0x60E, avatar, UsecodeEvent.Weapon);
             };
             _eggs.Usecode = _usecode;
+            _barges = new Barges(_map)
+            {
+                // Exult Barge_object::step: the eggs where the barge went, for the avatar.
+                Stepped = (dx, dy) => _eggs.Activate(avatar, avatar.Tx - dx, avatar.Ty - dy)
+            };
+            _map.IsMovingBarge = obj => _barges.Moving?.Obj == obj;
+            _map.MoveBarge = (obj, tx, ty, tz) => _barges.Of(obj).Move(tx, ty, tz);
+            // (Exult furls the sails from within usecode too; here only outside of it.)
+            Barge.Activate = obj =>
+            {
+                if (!_usecode.InUsecode && !_usecode.WaitingForChoice)
+                {
+                    RunUsecode(obj);
+                }
+            };
+            _usecode.Barges = _barges;
+            _schedules.Barges = _barges;
+            if (_map.LoadedMovingBarge is { } movingBarge)
+            {
+                _barges.SetMoving(_barges.Of(movingBarge), avatar);
+            }
             // Walkers open doors through the doors' own usecode (Exult Path_walking_actor_action::open_door).
             PathWalk.ActivateDoor = door =>
             {
@@ -487,6 +512,12 @@ public partial class U7Game : Node2D
                     _eggs.Activate(_avatar.Avatar, fromTx, fromTy);
                 }
             }
+            else if (_walkPress && _barges.Moving is { } steered)
+            {
+                // Exult start_actor in barge mode: the barge heads for the cursor instead.
+                SteerBarge(steered, tile, MouseWalkSpeed(world));
+                _bargeMouse = true;
+            }
             else if (_walkPress)
             {
                 // Exult start_actor: holding the button steers toward the cursor.
@@ -498,12 +529,25 @@ public partial class U7Game : Node2D
         AgentUpdate(delta, ref click);
         if (click is { } c)
         {
-            _avatar.PathTo(new TileCoord(c.X, c.Y, _avatar.Avatar.Tz), WalkSpeed.Keyboard(false, false, false));
+            if (_barges.Moving is { } clickBarge)
+            {
+                SteerBarge(clickBarge, new TileCoord(c.X, c.Y, _avatar.Avatar.Tz), WalkSpeed.Keyboard(false, false, false));
+            }
+            else
+            {
+                _avatar.PathTo(new TileCoord(c.X, c.Y, _avatar.Avatar.Tz), WalkSpeed.Keyboard(false, false, false));
+            }
         }
 
         if (!Input.IsMouseButtonPressed(MouseButton.Left))
         {
             _suppressWalk = false;
+            if (_bargeMouse)
+            {
+                // Exult stop_actor.
+                _bargeMouse = false;
+                _barges.Moving?.Stop();
+            }
         }
 
         var frozen = inUsecode || gumpBusy || _avatar.Avatar.IsDead;
@@ -549,6 +593,13 @@ public partial class U7Game : Node2D
         if (!inUsecode && !_gumps.GumpMode)
         {
             _effects.Update(delta);
+            _barges.Update(delta);
+        }
+
+        if (_combat.InCombat && _barges.Moving is not null)
+        {
+            // Exult toggle_combat: combat ends barge mode.
+            _barges.SetMoving(null, _avatar.Avatar);
         }
 
         var camera = _camera;
@@ -911,16 +962,40 @@ public partial class U7Game : Node2D
         {
             var av = _avatar.Avatar;
             WorldView.ShapeLocation(av.Tx, av.Ty, av.Tz, out var ax, out var ay);
-            _avatar.Steer(new Vector2(ax + 50 * x, ay + 50 * y),
-                WalkSpeed.Keyboard(Input.IsKeyPressed(Key.Shift), _combat.InCombat, HostileNearby()));
+            var aim = new Vector2(ax + 50 * x, ay + 50 * y);
+            var speed = WalkSpeed.Keyboard(Input.IsKeyPressed(Key.Shift), _combat.InCombat, HostileNearby());
+            if (_barges.Moving is { } barge)
+            {
+                SteerBarge(barge, WorldView.WorldToTile(aim, av.Tz), speed);
+            }
+            else
+            {
+                _avatar.Steer(aim, speed);
+            }
+
             _keyWalking = true;
         }
         else if (_keyWalking)
         {
             _keyWalking = false;
-            _avatar.Stop();
+            if (_barges.Moving is { } barge)
+            {
+                barge.Stop();
+            }
+            else
+            {
+                _avatar.Stop();
+            }
         }
     }
+
+    /// <summary>
+    /// Exult <c>start_actor</c> in barge mode: the barge goes so that its
+    /// centre heads for the tile, twice as fast as walking.
+    /// </summary>
+    static void SteerBarge(Barge barge, TileCoord tile, int speedMs) =>
+        barge.TravelTo(new TileCoord(
+            tile.Tx + barge.Obj.Tx - barge.Center.Tx, tile.Ty + barge.Obj.Ty - barge.Center.Ty, barge.Obj.Tz), speedMs / 2);
 
     /// <summary>
     /// Exult <c>Get_click</c> while a book page is shown: releasing the left

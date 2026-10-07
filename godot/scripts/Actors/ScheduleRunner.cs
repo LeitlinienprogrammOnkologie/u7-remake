@@ -46,6 +46,8 @@ public sealed class ScheduleRunner
     public WeaponTable? Weapons { get; set; }
     /// <summary>Combat (Exult's <c>Combat_schedule</c> statics, hits and missiles).</summary>
     public CombatEngine? Combat { get; set; }
+    /// <summary>Exult's barges: the one in barge mode, for seats.</summary>
+    public Barges? Barges { get; set; }
     /// <summary>Exult <c>Effects_manager</c>, for the sprites of spells.</summary>
     public EffectsManager? Effects { get; set; }
     /// <summary>Exult <c>call_usecode(fun, item, double_click)</c>; false if usecode cannot run now.</summary>
@@ -317,6 +319,16 @@ public sealed class ScheduleRunner
         b?.StartAction(action, speedMs, delayMs);
     }
 
+    /// <summary>Exult <c>UI_sit_down</c>: the sit schedule on this chair (the avatar too).</summary>
+    public void SitOn(U7Object npc, U7Object chair)
+    {
+        var b = npc == Avatar ? _avatarBrain ??= new NpcBrain(this, Avatar) { WasNearby = true } : BrainOf(npc);
+        if (b is not null)
+        {
+            SetSchedule(b, ScheduleType.Sit, new SitSchedule(b, chair));
+        }
+    }
+
     /// <summary>A monster from an egg, usecode or a save: its schedule runs here (Exult <c>Monster_actor</c>).</summary>
     public void AddMonster(U7Object monster)
     {
@@ -437,6 +449,12 @@ public sealed class ScheduleRunner
         {
             b.CurrentAction = null;
             b.ActionDone = null;
+            if (b.Schedule is SitSchedule)
+            {
+                // Exult start_actor: walking puts the avatar back in its follow schedule.
+                SetAvatarSchedule(ScheduleType.FollowAvatar);
+            }
+
             return;
         }
 
