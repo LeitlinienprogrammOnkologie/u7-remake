@@ -31,6 +31,8 @@ public sealed class MonsterRecord
     /// attack mode when it is made.
     /// </summary>
     public int AttackModeClass = 2;
+    /// <summary>Exult <c>equip_offset</c>: its EQUIP.DAT record, from 1; 0 for none.</summary>
+    public int EquipOffset;
 }
 
 /// <summary>
@@ -53,6 +55,9 @@ public static class ActorFlags
     public static bool CanTeleport(int shape) => Flags.TryGetValue(shape, out var f) && f.Teleports;
     public static bool CanSummon(int shape) => Flags.TryGetValue(shape, out var f) && f.Summons;
     public static bool CanBeInvisible(int shape) => Flags.TryGetValue(shape, out var f) && f.TurnInvis;
+
+    /// <summary>Exult <c>survives_armageddon</c> (<c>armageddon_safe</c>): Batlin (403, 482) and Lord British (466).</summary>
+    public static bool SurvivesArmageddon(int shape) => shape is 403 or 482 or 466;
 }
 
 /// <summary>Loads <c>assets/data/monsters.csv</c>.</summary>
@@ -113,6 +118,7 @@ public sealed class MonsterTable
         var iCantYell = Col("cant_yell");
         var iFlags = Col("move_flags");
         var iMode = Col("attack_mode");
+        var iEquip = Col("equip_offset");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
         int Num(string[] c, int i, int fallback = 0) =>
@@ -146,7 +152,8 @@ public sealed class MonsterTable
                 CantYell = Num(c, iCantYell) != 0,
                 NoBody = Get(c, iFlags).Contains("no_body", StringComparison.OrdinalIgnoreCase),
                 MoveFlags = ParseMoveFlags(Get(c, iFlags)),
-                AttackModeClass = Math.Clamp(Num(c, iMode, 2), 0, 4)
+                AttackModeClass = Math.Clamp(Num(c, iMode, 2), 0, 4),
+                EquipOffset = Num(c, iEquip)
             };
             table._byShape[shape] = rec;
         }

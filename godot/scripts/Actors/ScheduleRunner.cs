@@ -329,6 +329,13 @@ public sealed class ScheduleRunner
         }
     }
 
+    /// <summary>Exult <c>UI_nap_time</c>'s <c>set_bed</c>: the avatar's sleep schedule takes this bed.</summary>
+    public void NapIn(U7Object bed)
+    {
+        var b = _avatarBrain ??= new NpcBrain(this, Avatar) { WasNearby = true };
+        SetSchedule(b, ScheduleType.Sleep, new SleepSchedule(b) { NapBed = bed });
+    }
+
     /// <summary>A monster from an egg, usecode or a save: its schedule runs here (Exult <c>Monster_actor</c>).</summary>
     public void AddMonster(U7Object monster)
     {
@@ -394,8 +401,15 @@ public sealed class ScheduleRunner
         }
 
         Ticks += delta * 1000;
+        // Exult Actor::handle_event: under a Time Stop only the party acts.
+        var stopped = _clock.TimeStopped;
         foreach (var b in _brains.Values)
         {
+            if (stopped && Party?.IsInParty(b.Npc) != true)
+            {
+                continue;
+            }
+
             ProximityCheck(b, delta);
             Tick(b, delta);
         }
@@ -406,6 +420,11 @@ public sealed class ScheduleRunner
             if (b.Npc.IsDead || b.Npc.Removed)
             {
                 (gone ??= new List<U7Object>()).Add(b.Npc);
+                continue;
+            }
+
+            if (stopped)
+            {
                 continue;
             }
 

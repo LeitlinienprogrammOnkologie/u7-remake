@@ -84,8 +84,40 @@ public sealed class GameClock
         return IsDarkPalette(from) || IsDarkPalette(to);
     }
 
+    /// <summary>
+    /// Exult <c>Game_window::time_stopped</c>: the milliseconds left of a Time
+    /// Stop (-1 for good), 0 while time runs. The clock stands still, and so
+    /// does everyone outside the party.
+    /// </summary>
+    public double TimeStoppedMs { get; private set; }
+    public bool TimeStopped => TimeStoppedMs != 0;
+
+    /// <summary>Exult <c>Game_window::set_time_stopped</c>: -1 for good, 0 to end, else at least this long.</summary>
+    public void StopTime(int ms)
+    {
+        if (ms is -1 or 0)
+        {
+            TimeStoppedMs = ms;
+        }
+        else if (TimeStoppedMs < 0 || ms > TimeStoppedMs)
+        {
+            TimeStoppedMs = ms;
+        }
+    }
+
     public void Update(double delta)
     {
+        if (TimeStoppedMs > 0)
+        {
+            TimeStoppedMs = Math.Max(0, TimeStoppedMs - delta * 1000);
+        }
+
+        // Exult Game_clock::handle_event: no time passes while it is stopped.
+        if (TimeStopped)
+        {
+            return;
+        }
+
         _accum += delta;
         var step = U7Constants.StandardDelayMs / 1000.0;
         while (_accum >= step)
@@ -160,6 +192,32 @@ public sealed class GameClock
         Hour = Math.Clamp(hour, 0, 23);
         Minute = Math.Clamp(minute, 0, 59);
         Ticks = 0;
+    }
+
+    /// <summary>
+    /// Exult <c>Game_clock::increment</c>: forward by the minutes rounded to the
+    /// nearest quarter hour; the schedules change once, for the hour reached.
+    /// </summary>
+    public void Increment(int minutes)
+    {
+        var oldHour = Hour;
+        var oldSlot = Slot;
+        minutes += 7;
+        minutes -= minutes % 15;
+        var newMin = Minute + minutes;
+        Hour += newMin / 60;
+        Minute = newMin % 60;
+        Ticks = 0;
+        Day += Hour / 24;
+        Hour %= 24;
+        if (Hour != oldHour)
+        {
+            HourChanged?.Invoke(Hour);
+            if (Slot != oldSlot)
+            {
+                SlotChanged?.Invoke(Slot);
+            }
+        }
     }
 
     public void SkipHours(int delta)

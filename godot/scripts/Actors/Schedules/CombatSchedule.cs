@@ -688,6 +688,7 @@ public class CombatSchedule : Schedule
             if (CantDie)
             {
                 Npc.AttackMode = AttackMode.Nearest;
+                Npc.UserSetAttack = false;
             }
             else if (_fleed > 2 && !Combat.InCombat && Runner.Party?.IsInParty(Npc) == true)
             {

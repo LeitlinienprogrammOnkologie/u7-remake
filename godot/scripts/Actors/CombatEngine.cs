@@ -22,6 +22,8 @@ public sealed class CombatEngine
     readonly WeaponTable _weapons;
     readonly ArmorTable _armor;
     readonly AmmoTable _ammo = AmmoTable.Load();
+    readonly MonsterEquipment _equipment = MonsterEquipment.Load();
+    ItemQuantity? _quantities;
     readonly List<Missile> _missiles = new();
     readonly List<HomingMissile> _homing = new();
     readonly Dictionary<U7Object, MissileLauncher> _launchers = new();
@@ -69,6 +71,8 @@ public sealed class CombatEngine
     /// <summary>Party members fight alongside the avatar and are targets for monsters.</summary>
     public PartyManager? Party { get; set; }
     public bool InCombat { get; private set; }
+    /// <summary>Exult <c>Game_window::armageddon</c>: the spell was cast, so monster eggs hatch no more (saved in GAMEWIN.DAT).</summary>
+    public bool Armageddon { get; set; }
     public bool AvatarInvincible { get; private set; }
     public string LastMessage { get; private set; } = "";
     public IReadOnlyList<U7Object> Spawned => _spawned;
@@ -141,7 +145,7 @@ public sealed class CombatEngine
         foreach (var act in PartyAndAvatar())
         {
             // Did usecode set them to flee? (Exult keeps a mode the player chose.)
-            if (act.AttackMode == AttackMode.Flee)
+            if (act.AttackMode == AttackMode.Flee && !act.UserSetAttack)
             {
                 act.AttackMode = AttackMode.Nearest;
             }
@@ -200,6 +204,11 @@ public sealed class CombatEngine
         var info = _catalog[mshape];
         if (info.IsNpcClass || _monsters.Contains(mshape))
         {
+            if (Armageddon)
+            {
+                return;
+            }
+
             var num = cnt;
             if (num > 1)
             {
@@ -240,10 +249,15 @@ public sealed class CombatEngine
             return null;
         }
 
-        var npc = CreateMonster(shape, frame, sched < 0 ? ScheduleType.Loiter : sched, align);
-        npc.Tx = spot.Value.Tx;
-        npc.Ty = spot.Value.Ty;
-        npc.Tz = spot.Value.Tz;
+        return Place(CreateMonster(shape, frame, sched < 0 ? ScheduleType.Loiter : sched, align, equip: true), spot.Value);
+    }
+
+    /// <summary>A new temporary monster goes into the world at the spot, its schedule run by the monster AI.</summary>
+    U7Object Place(U7Object npc, TileCoord spot)
+    {
+        npc.Tx = spot.Tx;
+        npc.Ty = spot.Ty;
+        npc.Tz = spot.Tz;
         npc.SetFlag(ObjFlag.Temporary);
         _map.AddObject(npc);
         _spawned.Add(npc);
@@ -254,10 +268,58 @@ public sealed class CombatEngine
     }
 
     /// <summary>
-    /// Exult <c>Monster_actor::create</c> without placing it: stats from
-    /// monsters.csv, alignment from <paramref name="align"/> unless neutral.
+    /// Exult <c>UI_summon(shape)</c>: a monster of the shape (equipped and
+    /// fighting) within 5 tiles of the avatar, under a roof if the avatar is,
+    /// else in the open; good, or of the caster's alignment when a caster
+    /// outside the party summons it. Null if the shape is no monster or there
+    /// is no room.
     /// </summary>
-    public U7Object CreateMonster(int shape, int frame, int sched, int align)
+    public U7Object? Summon(int shape, U7Object? caster)
+    {
+        if (!_monsters.Contains(shape))
+        {
+            return null;
+        }
+
+        var start = new TileCoord(_avatar.Tx, _avatar.Ty, _avatar.Tz);
+        var inside = _map.RoofHeight(_avatar.Tx, _avatar.Ty, _avatar.Tz) < U7Constants.NoRoof;
+        if (_map.FindSpot(start, 5, shape, 0, 1, -1, inside) is not { } dest)
+        {
+            return null;
+        }
+
+        var align = caster is { IsActor: true } c && Party?.IsInParty(c) != true && c != _avatar ? c.Alignment : Alignment.Good;
+        return Place(CreateMonster(shape, 0, ScheduleType.Combat, align, equip: true), dest);
+    }
+
+    /// <summary>
+    /// Exult <c>UI_clone(npc)</c> (<c>Actor::clone</c>): a monster of the NPC's
+    /// shape beside it (within its larger footprint side), equipped, then good
+    /// and fighting. Null if there is no room (where Exult would crash).
+    /// </summary>
+    public U7Object? Clone(U7Object npc)
+    {
+        var info = _catalog[npc.Shape];
+        var reflected = (npc.Frame & 32) != 0;
+        var xs = reflected ? info.DimY : info.DimX;
+        var ys = reflected ? info.DimX : info.DimY;
+        if (_map.FindSpot(new TileCoord(npc.Tx, npc.Ty, npc.Tz), Math.Max(xs, ys), npc.Shape, 0, 1) is not { } pos)
+        {
+            return null;
+        }
+
+        var clone = Place(CreateMonster(npc.Shape, 0, npc.ScheduleType, npc.Alignment, equip: true), pos);
+        clone.Alignment = Alignment.Good;
+        SetSchedule(clone, ScheduleType.Combat);
+        return clone;
+    }
+
+    /// <summary>
+    /// Exult <c>Monster_actor::create</c> without placing it: stats from
+    /// monsters.csv, alignment from <paramref name="align"/> unless neutral,
+    /// its EQUIP.DAT equipment (temporary) if <paramref name="equip"/>.
+    /// </summary>
+    public U7Object CreateMonster(int shape, int frame, int sched, int align, bool equip = false)
     {
         var inf = _monsters[shape];
         var rec = _catalog[shape];
@@ -293,13 +355,76 @@ public sealed class CombatEngine
         }
 
         npc.AttackMode = Modes[inf.AttackModeClass, i];
-        if (sched == ScheduleType.Combat)
+        if (equip)
         {
-            ReadyBestWeapon(npc);
+            Equip(npc, inf);
+            if (sched == ScheduleType.Combat)
+            {
+                ReadyBestWeapon(npc);
+            }
         }
 
         return npc;
     }
+
+    /// <summary>
+    /// Exult <c>Monster_actor::equip</c>: each item of its EQUIP.DAT record by
+    /// its chance, as temporary objects: food in the monster's own frame
+    /// (<c>monster_food</c>) or one of any frame per piece, charged weapons
+    /// with their charges as quality, stacks of 1 to the quantity, and 2-20 of
+    /// the ammunition a weapon fires.
+    /// </summary>
+    void Equip(U7Object npc, MonsterRecord inf)
+    {
+        if (_equipment[inf.EquipOffset] is not { } rec)
+        {
+            return;
+        }
+
+        var quantities = _quantities ??= new ItemQuantity(_catalog, _map, _weapons, _ammo);
+        foreach (var elem in rec)
+        {
+            if (elem.Shape <= 0 || 1 + _rng.Next(100) > elem.Probability)
+            {
+                continue;
+            }
+
+            var frame = elem.Shape == FoodShape ? MonsterEquipment.FoodFrame(npc.Shape) : 0;
+            if (frame < 0)
+            {
+                var frames = Math.Max(1, _catalog[elem.Shape].FrameCount);
+                for (var n = 0; n < elem.Quantity; n++)
+                {
+                    quantities.Create(npc, 1, elem.Shape, U7Constants.AnyShape, _rng.Next(frames), true);
+                }
+
+                continue;
+            }
+
+            var einfo = _catalog[elem.Shape];
+            var winfo = _weapons[elem.Shape];
+            if (einfo.HasQuality && winfo is { UsesCharges: true })
+            {
+                quantities.Create(npc, 1, elem.Shape, elem.Quantity, frame, true);
+            }
+            else if (einfo.HasQuantity)
+            {
+                quantities.Create(npc, 1 + _rng.Next(Math.Max(1, elem.Quantity)), elem.Shape, U7Constants.AnyShape, frame, true);
+            }
+            else
+            {
+                quantities.Create(npc, elem.Quantity, elem.Shape, U7Constants.AnyShape, frame, true);
+            }
+
+            if (winfo is { Ammo: >= 0 } fires)
+            {
+                quantities.Create(npc, 1 + _rng.Next(10) + 1 + _rng.Next(10), fires.Ammo, U7Constants.AnyShape, 0, true);
+            }
+        }
+    }
+
+    /// <summary>The food shape (Exult's monster food special case).</summary>
+    const int FoodShape = 377;
 
     /// <summary>Let the monster AI drive a monster that usecode placed in the world.</summary>
     public void AdoptMonster(U7Object npc)
@@ -1314,6 +1439,25 @@ public sealed class CombatEngine
     }
 
     /// <summary>
+    /// Exult <c>UI_fire_projectile(attacker, dir, sprite, attval, weapon, ammo)</c>:
+    /// a missile from the attacker's missile tile to 31 tiles on in the
+    /// direction, at speed 4, until it runs into something (the cannon).
+    /// </summary>
+    public void FireProjectile(U7Object attacker, int dir, int sprite, int attval, int weaponShape, int ammoShape)
+    {
+        var pos = MissileTile(attacker);
+        var adj = pos.Neighbor(dir % 8);
+        var dest = new TileCoord(U7Constants.WrapTile(pos.Tx + 31 * U7Constants.TileDelta(pos.Tx, adj.Tx)),
+            U7Constants.WrapTile(pos.Ty + 31 * U7Constants.TileDelta(pos.Ty, adj.Ty)), pos.Tz);
+        var pr = NewMissile(attacker, null, pos, dest, _weapons[weaponShape], weaponShape, ammoShape, sprite, attval);
+        pr.Speed = 4;
+    }
+
+    /// <summary>Exult <c>Game_object::get_missile_tile</c>: the middle of the footprint, three quarters up.</summary>
+    static TileCoord MissileTile(U7Object obj) =>
+        new(obj.Tx - (Math.Max(1, obj.DimX) - 1) / 2, obj.Ty - (Math.Max(1, obj.DimY) - 1) / 2, obj.Tz + obj.DimZ * 3 / 4);
+
+    /// <summary>
     /// Exult <c>Projectile_effect::init</c>: a missile from <paramref name="start"/>
     /// to <paramref name="dest"/> at the weapon's speed, autohitting or
     /// flying through things if its weapon or ammunition says so. A homing
@@ -1947,6 +2091,15 @@ public sealed class CombatEngine
         points = 1;
         shape = -1;
         return null;
+    }
+
+    /// <summary>Exult <c>UI_kill_npc</c>: <c>Actor::die</c> with no attacker, whatever its health.</summary>
+    public void Kill(U7Object npc)
+    {
+        if (npc.IsActor && !npc.IsDead)
+        {
+            Die(npc, null);
+        }
     }
 
     void Die(U7Object victim, U7Object? attacker)

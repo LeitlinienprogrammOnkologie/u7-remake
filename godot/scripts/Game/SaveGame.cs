@@ -24,7 +24,7 @@ public static class SaveGame
     public static bool Exists(string slot) => File.Exists(Path.Combine(SlotDir(slot), "NPC.DAT"));
 
     public static void Write(string slot, GameMap map, List<U7Object?> npcs, UsecodeMachine? usecode,
-        GameClock clock, bool inCombat, MusicPlayer? music, IEnumerable<U7Object>? monsters = null)
+        GameClock clock, bool inCombat, MusicPlayer? music, IEnumerable<U7Object>? monsters = null, bool armageddon = false)
     {
         var dir = SlotDir(slot);
         Directory.CreateDirectory(dir);
@@ -43,7 +43,7 @@ public static class SaveGame
         }
 
         File.Delete(Path.Combine(dir, OldGwinName));
-        WriteGwin(Path.Combine(dir, GwinName), clock, inCombat, music);
+        WriteGwin(Path.Combine(dir, GwinName), clock, inCombat, music, armageddon);
         var identity = Path.Combine(U7Paths.RepoRoot, "u7", "GAMEDAT", "IDENTITY");
         if (File.Exists(identity))
         {
@@ -58,7 +58,7 @@ public static class SaveGame
     const string OldGwinName = "GWIN.DAT";
 
     /// <summary>Exult <c>Game_window::write_gwin</c>.</summary>
-    static void WriteGwin(string path, GameClock clock, bool inCombat, MusicPlayer? music)
+    static void WriteGwin(string path, GameClock clock, bool inCombat, MusicPlayer? music, bool armageddon)
     {
         using var w = new BinaryWriter(File.Create(path));
         w.Write((ushort)0); // scrolltx
@@ -70,13 +70,13 @@ public static class SaveGame
         var track = music?.CurrentTrack ?? -1;
         w.Write(unchecked((uint)track));
         w.Write((uint)((music is { Repeat: true } ? 1u : 0u) | ((uint)(music?.EggCount ?? 0) << 16)));
-        w.Write((byte)0); // armageddon
+        w.Write((byte)(armageddon ? 1 : 0));
         w.Write((byte)0); // ambient light
         w.Write((byte)(inCombat ? 1 : 0));
         w.Write((byte)0); // infravision
     }
 
-    public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCombat, int Track, bool Repeat, int SpecialLight);
+    public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCombat, int Track, bool Repeat, int SpecialLight, bool Armageddon);
 
     /// <summary>Exult <c>Game_window::read_gwin</c> (the parts we keep).</summary>
     public static GwinState? ReadGwin()
@@ -98,6 +98,7 @@ public static class SaveGame
             var track = -1;
             var repeat = false;
             var combat = false;
+            var armageddon = false;
             var light = 0;
             if (r.BaseStream.Length - r.BaseStream.Position >= 12)
             {
@@ -106,13 +107,13 @@ public static class SaveGame
                 repeat = (r.ReadUInt32() & 1) != 0;
                 if (r.BaseStream.Length - r.BaseStream.Position >= 3)
                 {
-                    r.ReadByte();
+                    armageddon = r.ReadByte() == 1;
                     r.ReadByte();
                     combat = r.ReadByte() != 0;
                 }
             }
 
-            return new GwinState(day, hour, minute, combat, track, repeat, light);
+            return new GwinState(day, hour, minute, combat, track, repeat, light, armageddon);
         }
         catch (Exception ex)
         {

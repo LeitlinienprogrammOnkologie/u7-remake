@@ -60,6 +60,9 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
     objects glow and light their surroundings, "strong", 60% brighter by day
     too, see-through parts glowing fully, each in its own colour
     (`GlowTable.Magic`).
+  - **Crystal ball and Wizard Eye:** Exult's frame (SPRITES.VGA sprite 10)
+    at the world's zoom over the original 320x200 screen, black outside it
+    (not redrawn smooth, not the view filling the window).
   - **Red flash:** a badly hurt avatar (Exult's rule) gets a faint red pulse
     at the screen's edges, 0.35 strong and 0.12 wide, not the RED palette.
   - **Weather look** (`WeatherLook`): rain as streaks with faint splashes,
@@ -279,10 +282,9 @@ shows through its windows.
 
 Next, in priority order:
 
-1. **Remaining intrinsics:** 29 stubbed, none reachable from Trinsic's or
-   Britain's NPCs; the most-used are `flash_mouse` (needs Exult's cursors),
-   `is_readied`, `set_attack_mode`, `kill_npc` and `set_oppressor`. Spells still
-   reach 10 (summon, wizard eye, clone, armageddon, ...).
+1. **Remaining intrinsics:** 4 stubbed. `flash_mouse` needs Exult's
+   cursors (POINTERS.SHP; their look is the user's to pick); `call_guards`
+   and `attack_avatar` are arrest, `run_endgame` the endgame.
 2. **Signs:** `display_runes` still uses the conversation panel; port
    Exult's `Sign_gump` (runic signs, plaques, gravestones).
 3. **Walking follow-ups:** `Walk_to_schedule`'s off-screen legs, dormant

@@ -197,7 +197,9 @@ public partial class U7Game
             case "npc":
                 if (AgentNpc(arg) is { } npcObj)
                 {
-                    AgentLog(AgentDescribe(npcObj) + $" typeflags 0x{npcObj.TypeFlags:X}");
+                    AgentLog(AgentDescribe(npcObj) + $" typeflags 0x{npcObj.TypeFlags:X}" +
+                             $" amode {AttackModeNames[npcObj.AttackMode & 0xf]}{(npcObj.UserSetAttack ? " (player's)" : "")}" +
+                             (npcObj.Oppressor is { } oppr ? $" oppressor {AgentName(oppr)}" : ""));
                 }
 
                 break;
@@ -274,6 +276,35 @@ public partial class U7Game
                 AgentUse(target);
                 break;
             }
+            case "eye":
+            {
+                // Wizard Eye: what holding the right button towards a direction (0 north, clockwise) does, a tile a step.
+                var dir = int.Parse(parts[1]) & 7;
+                var steps = parts.Length > 2 ? int.Parse(parts[2]) : 1;
+                for (var i = 0; i < steps; i++)
+                {
+                    _usecode!.MoveWizardEye(EyeDeltas[2 * dir], EyeDeltas[2 * dir + 1]);
+                }
+
+                break;
+            }
+            case "call":
+            {
+                // A test shortcut: run a usecode function (hex) on an object, by default the avatar, event 1.
+                if (_usecode!.InUsecode || _usecode.WaitingForChoice)
+                {
+                    AgentLog("usecode is running");
+                    break;
+                }
+
+                var fun = Convert.ToInt32(parts[1], 16);
+                var target = parts.Length > 2 ? AgentTarget(parts[2]) ?? throw new ArgumentException("no such object/npc") : av;
+                var ev = parts.Length > 3 ? int.Parse(parts[3]) : (int)UsecodeEvent.DoubleClick;
+                _usecode.Call(fun, target, (UsecodeEvent)ev);
+                _conversation.Refresh();
+                AgentLog($"called 0x{fun:X3} on {AgentName(target)}, event {ev}");
+                break;
+            }
             case "take":
             {
                 var target = AgentTarget(arg) ?? throw new ArgumentException("no such object");
@@ -324,11 +355,21 @@ public partial class U7Game
             case "cont":
             {
                 var n = arg == "all" ? 60 : parts.Length > 1 ? int.Parse(parts[1]) : 1;
-                for (var i = 0; i < n && _usecode is { Wait: UsecodeWait.ClickToContinue or UsecodeWait.BookPage }; i++)
+                for (var i = 0; i < n && _usecode is { Wait: UsecodeWait.ClickToContinue or UsecodeWait.BookPage or UsecodeWait.Picture or UsecodeWait.WizardEye }; i++)
                 {
                     if (_usecode.Wait == UsecodeWait.BookPage)
                     {
                         _usecode.TurnBookPage();
+                        _conversation.Refresh();
+                    }
+                    else if (_usecode.Wait == UsecodeWait.Picture)
+                    {
+                        _usecode.ClosePicture();
+                        _conversation.Refresh();
+                    }
+                    else if (_usecode.Wait == UsecodeWait.WizardEye)
+                    {
+                        _usecode.EndWizardEye(); // Esc
                         _conversation.Refresh();
                     }
                     else
@@ -546,7 +587,7 @@ public partial class U7Game
                 _gumps.CloseAll();
                 break;
             case "save":
-                SaveGame.Write(arg, _map, _npcs, _usecode, _clock, _combat.InCombat, _music, _combat.Spawned);
+                SaveGame.Write(arg, _map, _npcs, _usecode, _clock, _combat.InCombat, _music, _combat.Spawned, _combat.Armageddon);
                 AgentLog($"saved to {SaveGame.SlotDir(arg)}");
                 break;
             case "load":
@@ -750,6 +791,13 @@ public partial class U7Game
     static string Singular(string name) =>
         name.StartsWith('/') && name.IndexOf('/', 1) is var end and > 0 ? name[1..end] : name;
 
+    /// <summary>Exult <c>Actor::Attack_mode</c> by number (the combat-mode button's frames).</summary>
+    static readonly string[] AttackModeNames =
+    [
+        "nearest", "weakest", "strongest", "berserk", "protect", "defend", "flank", "flee", "random", "manual",
+        "10", "11", "12", "13", "14", "15"
+    ];
+
     string AgentDescribe(U7Object obj)
     {
         _agentIds[obj.Id] = obj;
@@ -867,6 +915,11 @@ public partial class U7Game
         if (vm.WaitingForChoice)
         {
             AgentLog($"WAIT {vm.Wait}" + (vm.Wait == UsecodeWait.ClickToContinue ? $": {vm.Conv.NpcText.Replace('\n', ' ')}" : "") +
+                     (vm is { Wait: UsecodeWait.Picture or UsecodeWait.WizardEye, Picture: { } pic }
+                         ? $": sprite {pic.Sprite}:{pic.Frame}" + (pic.Mark is { } mark ? $", mark at {mark.X},{mark.Y}" : "") +
+                           (pic.Area is { } at ? $", view at {at.Tx},{at.Ty}" : "") +
+                           (vm.Wait == UsecodeWait.WizardEye ? $", {vm.WizardEyeMs / 1000:0.0} s left" : "")
+                         : "") +
                      (vm.Wait is UsecodeWait.Converse or UsecodeWait.SelectMenu or UsecodeWait.SelectMenuIndex
                          ? $"  answers: {string.Join(" | ", vm.Conv.Answers)}"
                          : ""));

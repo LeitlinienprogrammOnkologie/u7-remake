@@ -92,6 +92,10 @@ public sealed class U7Object
     public int BargeYTiles;
     public int BargeDir;
 
+    /// <summary>Exult <c>Virtue_stone_object</c>: where the stone takes the party (0,0 until marked), and on which map.</summary>
+    public U7.Core.TileCoord VirtueTarget;
+    public int VirtueMap;
+
     /// <summary>Exult <c>Spellbook_object::circles</c>: a bit per spell for each of the 9 circles (null: none yet).</summary>
     public byte[]? SpellCircles;
     /// <summary>Exult <c>Spellbook_object::bookmark</c>: the marked spell, or -1.</summary>
@@ -115,6 +119,8 @@ public sealed class U7Object
     public bool IsDead => GetFlag(U7.Actors.ObjFlag.Dead);
     /// <summary>Exult <c>Actor::Attack_mode</c> (combat-mode button).</summary>
     public int AttackMode;
+    /// <summary>Exult <c>did_user_set_attack</c>: the player chose the mode, so combat keeps a flee.</summary>
+    public bool UserSetAttack;
     /// <summary>Exult halo / <c>is_combat_protected</c>.</summary>
     public bool CombatProtected;
 

@@ -41,6 +41,9 @@ public partial class U7Game : Node2D
     U7Object? _cameraActor;
     /// <summary>Exult <c>center_view</c> on an object: the view stays there (a moving barge takes it along) until the avatar walks.</summary>
     TileCoord? _cameraTile;
+    /// <summary>Exult <c>center_view</c> from usecode (<c>view_tile</c>): the view stays there until the avatar moves.</summary>
+    TileCoord? _viewTile;
+    TileCoord _viewTileFrom;
     SceneLighting _lighting = null!;
     ScreenFx _screenFx = null!;
     MusicPlayer _music = null!;
@@ -142,6 +145,7 @@ public partial class U7Game : Node2D
             _combat.AdoptMonsters(NpcDat.LoadMonsters(_map));
             if (gwin is { } g1)
             {
+                _combat.Armageddon = g1.Armageddon;
                 if (g1.InCombat)
                 {
                     _combat.SetInCombat(true);
@@ -420,6 +424,13 @@ public partial class U7Game : Node2D
             _schedules.InUsecodeControl = _usecode.InUsecodeControl;
             _conversation.Machine = _usecode;
             _gumpView.ShownBook = () => _usecode is { Wait: UsecodeWait.BookPage } vm ? vm.Book : null;
+            _gumpView.ShownPicture = () => _usecode is { Wait: UsecodeWait.Picture or UsecodeWait.WizardEye } vm ? vm.Picture : null;
+            _usecode.ViewTile = tile =>
+            {
+                _viewTile = tile;
+                _viewTileFrom = new TileCoord(_avatar.Avatar.Tx, _avatar.Avatar.Ty, _avatar.Avatar.Tz);
+            };
+            _usecode.ViewRecentred = () => _viewTile = null;
             _usecode.Say += _ => _conversation.Refresh();
             _usecode.AnswersChanged += _conversation.Refresh;
             _usecode.FacesChanged += _conversation.Refresh;
@@ -600,7 +611,14 @@ public partial class U7Game : Node2D
             }
         }
 
-        var frozen = inUsecode || gumpBusy || _avatar.Avatar.IsDead;
+        // Exult's Wizard Eye loop runs the time queue: the world goes on while the player looks about.
+        var eye = _usecode is { Wait: UsecodeWait.WizardEye };
+        var frozen = (inUsecode && !eye) || gumpBusy || _avatar.Avatar.IsDead;
+        if (eye)
+        {
+            UpdateWizardEye(delta);
+        }
+
         if (canWalk)
         {
             _avatar.Update(delta, _schedules.AvatarActing,
@@ -647,10 +665,20 @@ public partial class U7Game : Node2D
         var fadedOut = _usecode is { FadedOut: true };
         _screenFx.Fade = _usecode?.FadeLevel ?? 1f;
         _world.Frozen = fadedOut;
-        _world.RotateColors = !fadedOut && _usecode is not { Wait: UsecodeWait.ClickOnItem };
+        // Exult's Get_click (a target, the map, the crystal ball) holds the colours still.
+        _world.RotateColors = !fadedOut && _usecode is not { Wait: UsecodeWait.ClickOnItem or UsecodeWait.Picture };
 
         var av = _avatar.Avatar;
-        var focus = _cameraTile ?? (_cameraActor is { Removed: false } ca
+        // Exult display_area: the view goes to the area while it is shown (up to lift 4, no dungeon),
+        // Wizard Eye to where the player has moved it; view_tile until the avatar moves.
+        var area = _usecode is { Wait: UsecodeWait.Picture or UsecodeWait.WizardEye, Picture.Area: { } shown } ? shown : (TileCoord?)null;
+        _world.RemoteView = _lighting.RemoteView = area is not null && _usecode!.Wait == UsecodeWait.Picture;
+        if (_viewTile is not null && (av.Tx, av.Ty, av.Tz) != (_viewTileFrom.Tx, _viewTileFrom.Ty, _viewTileFrom.Tz))
+        {
+            _viewTile = null;
+        }
+
+        var focus = area ?? _viewTile ?? _cameraTile ?? (_cameraActor is { Removed: false } ca
             ? new TileCoord(ca.Tx, ca.Ty, ca.Tz)
             : new TileCoord(av.Tx, av.Ty, av.Tz));
         WorldView.ShapeLocation(focus.Tx, focus.Ty, focus.Tz, out var camX, out var camY);
@@ -823,6 +851,28 @@ public partial class U7Game : Node2D
                 return;
             }
 
+            if (_usecode is { Wait: UsecodeWait.Picture } viewer &&
+                key.Keycode is Key.Escape or Key.Space or Key.Enter or Key.KpEnter)
+            {
+                viewer.ClosePicture();
+                _conversation.Refresh();
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            // Exult Wizard_eye: Esc closes the eye; no other key does anything.
+            if (_usecode is { Wait: UsecodeWait.WizardEye } looker)
+            {
+                if (key.Keycode == Key.Escape)
+                {
+                    looker.EndWizardEye();
+                    _conversation.Refresh();
+                }
+
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             // Exult restricts key actions in dont_move mode; debug, save, music and zoom stay.
             if (ObjFlag.DontMoveMode(_avatar.Avatar) &&
                 key.Keycode is Key.Home or Key.E or Key.I or Key.C or Key.F3 or Key.F6 or Key.Pageup or Key.Pagedown)
@@ -881,7 +931,7 @@ public partial class U7Game : Node2D
                 case Key.F5:
                     try
                     {
-                        SaveGame.Write(SaveGame.QuickSlot, _map, _npcs, _usecode, _clock, _combat.InCombat, _music, _combat.Spawned);
+                        SaveGame.Write(SaveGame.QuickSlot, _map, _npcs, _usecode, _clock, _combat.InCombat, _music, _combat.Spawned, _combat.Armageddon);
                         _statusExtra = "game saved";
                     }
                     catch (Exception ex)
@@ -1047,21 +1097,70 @@ public partial class U7Game : Node2D
         barge.TravelTo(new TileCoord(
             tile.Tx + barge.Obj.Tx - barge.Center.Tx, tile.Ty + barge.Obj.Ty - barge.Center.Ty, barge.Obj.Tz), speedMs / 2);
 
+    double _eyeStep;
+
     /// <summary>
-    /// Exult <c>Get_click</c> while a book page is shown: releasing the left
-    /// button turns the page, and no other click reaches the game. Only a
-    /// press made while reading counts, not the double-click that opened the book.
+    /// Exult <c>Wizard_eye</c>'s loop: every 50 ms, with the right button held,
+    /// the eye moves a tile towards the mouse (<c>Shift_wizards_eye</c>, eight
+    /// directions from the screen's centre); the time running out closes it.
+    /// </summary>
+    void UpdateWizardEye(double delta)
+    {
+        _eyeStep += delta;
+        while (_eyeStep >= 0.05)
+        {
+            _eyeStep -= 0.05;
+            if (Input.IsMouseButtonPressed(MouseButton.Right))
+            {
+                var centre = GetViewport().GetVisibleRect().Size / 2;
+                var m = GetViewport().GetMousePosition();
+                var dir = ActorWalker.DirectionNoWrap((int)(centre.Y - m.Y), (int)(m.X - centre.X));
+                _usecode!.MoveWizardEye(EyeDeltas[2 * dir], EyeDeltas[2 * dir + 1]);
+            }
+        }
+
+        _usecode!.UpdateWizardEye(delta);
+        if (_usecode.Wait != UsecodeWait.WizardEye)
+        {
+            _conversation.Refresh();
+        }
+    }
+
+    /// <summary>Exult <c>Shift_wizards_eye</c>'s steps by direction (north clockwise).</summary>
+    static readonly int[] EyeDeltas = [0, -1, 1, -1, 1, 0, 1, 1, 0, 1, -1, 1, -1, 0, -1, -1];
+
+    /// <summary>
+    /// Exult <c>Get_click</c> while a book page or a picture (the map) is
+    /// shown: releasing the left button turns the page or closes the picture,
+    /// and no other click reaches the game. Only a press made while reading
+    /// counts, not the double-click that opened the book.
     /// </summary>
     bool HandleBookClick(InputEventMouseButton mb)
     {
-        var reading = _usecode is { Wait: UsecodeWait.BookPage };
+        // Exult Wizard_eye: the buttons only steer the eye (held right button, UpdateWizardEye).
+        if (_usecode is { Wait: UsecodeWait.WizardEye })
+        {
+            _suppressWalk = true;
+            GetViewport().SetInputAsHandled();
+            return true;
+        }
+
+        var reading = _usecode is { Wait: UsecodeWait.BookPage or UsecodeWait.Picture };
         if (mb.ButtonIndex == MouseButton.Left)
         {
             var pressedWhileReading = _bookPress;
             _bookPress = mb.Pressed && reading;
             if (reading && !mb.Pressed && pressedWhileReading)
             {
-                _usecode!.TurnBookPage();
+                if (_usecode!.Wait == UsecodeWait.Picture)
+                {
+                    _usecode.ClosePicture();
+                }
+                else
+                {
+                    _usecode.TurnBookPage();
+                }
+
                 _conversation.Refresh();
             }
         }
@@ -1180,6 +1279,12 @@ public partial class U7Game : Node2D
     void RunUsecode(U7Object obj)
     {
         if (_usecode is null)
+        {
+            return;
+        }
+
+        // Exult Actor::activate: under a Time Stop only the party answers.
+        if (obj.IsActor && obj != _avatar.Avatar && !_party.IsInParty(obj) && _clock.TimeStopped)
         {
             return;
         }

@@ -219,6 +219,9 @@ public partial class WorldView : Node2D
     /// <summary>The palettes and lights to show the frame with.</summary>
     public SceneLighting? Lighting;
     public int SkipAboveLift = U7Constants.NoRoof;
+    /// <summary>The view shows the world elsewhere (Exult <c>display_area</c>, <c>paint_map_at_tile</c>).</summary>
+    public bool RemoteView;
+    public const int RemoteViewSkipLift = 4;
     public int InDungeonLift;
     /// <summary>
     /// Whether the palette's colours cycle. Exult rotates them in its main
@@ -283,8 +286,9 @@ public partial class WorldView : Node2D
             return;
         }
 
-        SkipAboveLift = Map.RoofHeight(Avatar.Tx, Avatar.Ty, Avatar.Tz);
-        InDungeonLift = Map.DungeonHeight(Avatar.Tx, Avatar.Ty);
+        // Exult display_area paints the view elsewhere up to lift 4, dungeons not dark.
+        SkipAboveLift = RemoteView ? RemoteViewSkipLift : Map.RoofHeight(Avatar.Tx, Avatar.Ty, Avatar.Tz);
+        InDungeonLift = RemoteView ? 0 : Map.DungeonHeight(Avatar.Tx, Avatar.Ty);
         _frameNo++;
         _paintCounter = 0;
 

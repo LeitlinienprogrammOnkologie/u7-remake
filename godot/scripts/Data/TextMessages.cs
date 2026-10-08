@@ -80,6 +80,10 @@ public static class TextMessages
     public const int FirstWaiterServe = 0x108;
     public const int LastWaiterServe = 0x109;
 
+    /// <summary>A party member, when the avatar would nap in someone's bed (Exult <c>first_bed_occupied</c>).</summary>
+    public const int FirstBedOccupied = 0x10a;
+    public const int LastBedOccupied = 0x10c;
+
     /// <summary>Exult's own messages (data/exultmsg.txt, 0x500 on), as far as they are used here.</summary>
     static readonly Dictionary<int, string> ExultMessages = new()
     {
@@ -92,7 +96,10 @@ public static class TextMessages
         [0x106] = "Everything okay?",
         [0x107] = "Ready for dessert?",
         [0x108] = "Enjoy!",
-        [0x109] = "Specialty of the house!"
+        [0x109] = "Specialty of the house!",
+        [0x10a] = "Avatar!  Please restrain thyself!",
+        [0x10b] = "Hast thou noticed that this bed is occupied?",
+        [0x10c] = "The resident of this bed may not be desirouth of company at the moment."
     };
 
     static FlexFile? _flex;

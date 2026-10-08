@@ -189,6 +189,7 @@ public static class NpcDat
         var amode = r.U1();
         npc.AttackMode = amode & 0xf;
         npc.CombatProtected = (amode & (1 << 4)) != 0;
+        npc.UserSetAttack = (amode & (1 << 5)) != 0;
         r.Skip(1); // charmalign / effective alignment
         // Exult Actor::read: the original stores magic/mana two bytes later;
         // Exult's own saves put magic (high bit set) and mana here.
@@ -462,7 +463,7 @@ public static class NpcDat
         w.Write((byte)(npc.GetProp(ActorProp.Intelligence) & 0x1f));
         w.Write((byte)(npc.GetProp(ActorProp.Combat) & 0x7f));
         w.Write((byte)npc.ScheduleType);
-        w.Write((byte)((npc.AttackMode & 0xf) | (npc.CombatProtected ? 1 << 4 : 0)));
+        w.Write((byte)((npc.AttackMode & 0xf) | (npc.CombatProtected ? 1 << 4 : 0) | (npc.UserSetAttack ? 1 << 5 : 0)));
         w.Write((byte)npc.Alignment); // effective alignment
         w.Write((byte)(npc.GetProp(ActorProp.Magic) | 0x80));
         w.Write((byte)npc.GetProp(ActorProp.Mana));

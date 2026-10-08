@@ -18,6 +18,7 @@ public sealed class ShapeCache
     readonly Dictionary<(int Shape, int Frame), Image?> _gumpImg = new();
     readonly Dictionary<(int Font, int Frame), Texture2D?> _fontTex = new();
     readonly Dictionary<(int Shape, int Frame), Texture2D?> _faceTex = new();
+    readonly Dictionary<(int Sprite, int Frame, bool Translucent), Texture2D?> _spriteTex = new();
     readonly FrameTable _shapes8;
     readonly FrameTable _sprites8;
     readonly VgaShapeFile _gumpsVga;
@@ -55,6 +56,26 @@ public sealed class ShapeCache
 
     /// <summary>A SPRITES.VGA frame by palette index.</summary>
     public ShapeFrame? GetSprite8(int sprite, int frame) => _sprites8.Get(sprite, frame);
+
+    /// <summary>
+    /// A SPRITES.VGA frame as an RGBA texture in the day palette, for pictures
+    /// over the gumps: opaque (Exult <c>paint_shape</c>), or with the
+    /// translucent colours as their blend colour and alpha.
+    /// </summary>
+    public Texture2D? GetSprite(int sprite, int frame, bool translucent = false)
+    {
+        var key = (sprite, frame, translucent);
+        if (_spriteTex.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        var tex = GetSprite8(sprite, frame) is { } decoded
+            ? ImageTexture.CreateFromImage(decoded.ToImage(translucent ? _translucentPalette : _palette))
+            : null;
+        _spriteTex[key] = tex;
+        return tex;
+    }
 
     /// <summary>
     /// A SHAPES.VGA frame as an RGBA texture in the day palette, for gumps.

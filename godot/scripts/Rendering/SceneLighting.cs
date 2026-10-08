@@ -121,6 +121,8 @@ public sealed class SceneLighting
     /// <summary>The full-screen lightning sprite's flash on the ambient palette, 0 to 1.</summary>
     public float Flash { get; private set; }
 
+    /// <summary>The view shows the world elsewhere (Exult <c>display_area</c>): no dungeon, roofs from lift 4 hidden.</summary>
+    public bool RemoteView { get; set; }
     /// <summary>Exult <c>is_main_actor_inside</c>: a roof above the avatar. No rain, snow, clouds or mist then.</summary>
     public bool Inside { get; private set; }
     /// <summary>How far the overcast has come into the day palettes, 0 to 1 (eased like Exult's).</summary>
@@ -172,7 +174,8 @@ public sealed class SceneLighting
     {
         var av = _avatar;
         var ticks = _ticks = Time.GetTicksMsec();
-        InDungeon = _map.DungeonHeight(av.Tx, av.Ty) != 0;
+        // Exult display_area turns the dungeon off while it paints the view elsewhere.
+        InDungeon = !RemoteView && _map.DungeonHeight(av.Tx, av.Ty) != 0;
         (From, To, T) = _clock.PaletteBlend(InDungeon);
         // Exult get_final_palette: an invisible avatar sees the invisible
         // palette; Lightning_effect sets its palette over whatever shows.
@@ -184,7 +187,7 @@ public sealed class SceneLighting
         Class = LightSources.Classify(Level);
         Carried = LightSources.CarriedLight(av, _catalog);
         Flash = LightningFlash();
-        _skip = _map.RoofHeight(av.Tx, av.Ty, av.Tz);
+        _skip = RemoteView ? WorldView.RemoteViewSkipLift : _map.RoofHeight(av.Tx, av.Ty, av.Tz);
         Inside = _skip < U7Constants.NoRoof;
         // Exult get_final_palette: overcast and fog on the day palettes.
         var ease = (float)(delta / WeatherEaseSeconds);

@@ -50,6 +50,8 @@ public sealed class BgIntrinsics
     ];
 
     readonly UsecodeMachine _vm;
+    /// <summary>Exult <c>speech_track</c>: the last speech asked for.</summary>
+    int _speechTrack = -1;
 
     public BgIntrinsics(UsecodeMachine vm) => _vm = vm;
 
@@ -121,7 +123,24 @@ public sealed class BgIntrinsics
             0x40 => ItemSay(p),
             0x42 => GetLift(p),
             0x43 => SetLift(p),
+            0x47 => Summon(p),
+            0x48 => DisplayMap(),
+            0x4f => DisplayArea(p),
+            0x50 => WizardEye(p),
+            0x94 => ViewTile(p),
+            0x49 => KillNpc(p),
+            0x5b => Armageddon(),
+            0x56 => StopTime(p),
+            0x77 => NapTime(p),
+            0x5f => MarkVirtueStone(p),
+            0x60 => RecallVirtueStone(p),
+            0x54 => AttackObject(p),
+            0x63 => SetOrrery(p),
+            0x76 => FireProjectile(p),
             0x4a => RollToWin(p),
+            0x4b => SetAttackMode(p),
+            0x4c => SetOppressor(p),
+            0x4d => Clone(p),
             0x5a => UsecodeValue.FromInt(0), // is_pc_female: male default
             0x5e => GetArraySize(p),
             0x61 => ApplyDamage(p),
@@ -130,7 +149,15 @@ public sealed class BgIntrinsics
             0x6c => SetItemFrameRot(p),
             0x6e => GetContainer(p),
             0x6f => RemoveItem(p),
+            0x62 => IsPcInside(),
+            0x69 => UsecodeValue.FromInt(_speechTrack), // get_speech_track
+            0x70 => Zero(), // UNKNOWN: Exult's does nothing either
             0x71 => ReduceHealth(p),
+            0x72 => IsReadied(p),
+            0x74 => StartSpeech(p),
+            0x78 => AdvanceTime(p),
+            0x8f => StartSpeech(p), // start_blocking_speech
+            0x90 => IsWater(p),
             0x79 => InUsecode(p),
             0x92 => SetCamera(p),
             0x7e => CloseGumps(),
@@ -879,10 +906,11 @@ public sealed class BgIntrinsics
         return string.IsNullOrEmpty(name) ? $"shape {item.Shape}" : name;
     }
 
+    /// <summary>Exult <c>UI_is_npc</c>: any actor, monsters included.</summary>
     UsecodeValue IsNpc(UsecodeValue[] p)
     {
         var item = _vm.GetItem(p[0]);
-        return UsecodeValue.FromInt(item is { NpcNum: >= 0 } ? 1 : 0);
+        return UsecodeValue.FromInt(item is { IsActor: true } ? 1 : 0);
     }
 
     UsecodeValue IsDead(UsecodeValue[] p)
@@ -893,6 +921,424 @@ public sealed class BgIntrinsics
 
     static UsecodeValue RollToWin(UsecodeValue[] p) =>
         UsecodeValue.FromInt(U7.Actors.CombatEngine.RollToWin((int)p[0].IntValue, (int)p[1].IntValue) ? 1 : 0);
+
+    /// <summary>
+    /// Exult <c>UI_display_area(pos)</c> (the crystal ball, the orrery
+    /// viewer): the world round the tile, seen through SPRITES.VGA sprite 10,
+    /// until a click. A fourth element would be Exult's map number; Black Gate
+    /// has the one map.
+    /// </summary>
+    UsecodeValue DisplayArea(UsecodeValue[] p)
+    {
+        if (!p[0].IsArray || p[0].ArraySize < 3)
+        {
+            return Zero();
+        }
+
+        var area = new TileCoord((int)p[0].GetElem(0).IntValue, (int)p[0].GetElem(1).IntValue, 0);
+        _vm.ShowPicture(new UsecodePicture(EyeSprite, 0, null, area));
+        return Zero();
+    }
+
+    /// <summary>SPRITES.VGA's eye: the frame Exult paints over a view elsewhere (the original 320x200 screen).</summary>
+    const int EyeSprite = 10;
+
+    /// <summary>
+    /// Exult <c>UI_wizard_eye(ticks, ?)</c>: the player looks about from the
+    /// avatar's tile while the game runs, for half again the ticks (Exult's
+    /// 3 x std_delay / 2 ms each: the spell's 45 are 13.5 s, the telescope's
+    /// 10000 50 minutes), or until Esc.
+    /// </summary>
+    UsecodeValue WizardEye(UsecodeValue[] p)
+    {
+        if (_vm.Avatar is { } av)
+        {
+            _vm.StartWizardEye((int)p[0].IntValue * 3 * U7Constants.StandardDelayMs / 2, new TileCoord(av.Tx, av.Ty, av.Tz), EyeSprite);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_view_tile(pos)</c>: the view centres on the tile (until the avatar moves or a view elsewhere ends).</summary>
+    UsecodeValue ViewTile(UsecodeValue[] p)
+    {
+        if (p[0].IsArray && p[0].ArraySize >= 2)
+        {
+            _vm.ViewTile?.Invoke(new TileCoord((int)p[0].GetElem(0).IntValue, (int)p[0].GetElem(1).IntValue, 0));
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_summon(shape, ?)</c>: the monster summoned for the caller, or 0.</summary>
+    UsecodeValue Summon(UsecodeValue[] p) =>
+        _vm.Combat?.Summon((int)p[0].IntValue, _vm.CurrentFrame?.Caller) is { } monster ? UsecodeValue.FromObject(monster) : Zero();
+
+    /// <summary>Exult <c>UI_clone(npc)</c>: the NPC's fighting double, or 0.</summary>
+    UsecodeValue Clone(UsecodeValue[] p) =>
+        _vm.GetItem(p[0]) is { IsActor: true } npc && _vm.Combat?.Clone(npc) is { } clone ? UsecodeValue.FromObject(clone) : Zero();
+
+    /// <summary>Exult <c>UI_attack_object(attacker, target, weapon)</c>: <c>Combat_schedule::attack_target</c> outside combat (a powder keg set off).</summary>
+    UsecodeValue AttackObject(UsecodeValue[] p) =>
+        _vm.GetItem(p[0]) is { } att && _vm.GetItem(p[1]) is { } trg && _vm.Combat is { } combat
+            ? UsecodeValue.FromInt(combat.AttackTarget(att, trg, (int)p[2].IntValue, combat: false) ? 1 : 0)
+            : Zero();
+
+    /// <summary>Exult <c>UI_fire_projectile(attacker, dir, sprite, attval, weapon, ammo)</c>: the cannon's shot.</summary>
+    UsecodeValue FireProjectile(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { } attacker)
+        {
+            _vm.Combat?.FireProjectile(attacker, (int)p[1].IntValue, (int)p[2].IntValue, (int)p[3].IntValue,
+                (int)p[4].IntValue, (int)p[5].IntValue);
+        }
+
+        return Zero();
+    }
+
+    const int PlanetBritannia = 765, Planets = 988;
+
+    /// <summary>
+    /// Exult <c>UI_set_orrery</c>'s table (after Marzo Sette Torres Junior's
+    /// Planets.txt): for each of the ten states, where the eight planets
+    /// (frames 0-7) stand from the orrery's centre.
+    /// </summary>
+    static readonly (int Dx, int Dy)[][] OrreryOffsets =
+    [
+        [(2, -3), (3, -3), (1, -6), (6, -2), (7, -1), (8, 1), (-4, 8), (9, -2)],
+        [(3, -1), (4, -1), (-5, -3), (3, 6), (7, 2), (4, 7), (-8, 4), (8, 5)],
+        [(3, 1), (3, 2), (-3, 4), (-5, 4), (2, 7), (-2, 8), (-9, 1), (2, 9)],
+        [(1, 3), (1, 4), (4, 3), (-5, -3), (-4, 6), (-7, 4), (-9, -1), (-4, 9)],
+        [(-2, 3), (-2, 4), (5, -2), (5, -4), (-7, 2), (-8, 1), (-8, -4), (-8, 6)],
+        [(-4, 1), (-5, 1), (-5, -3), (6, 3), (-7, -2), (-7, -4), (-7, -6), (-10, 1)],
+        [(-4, 9), (-5, -1), (-3, 4), (-3, 6), (-6, -4), (-5, -6), (-7, -6), (-10, -2)],
+        [(-4, 2), (-4, -3), (4, 3), (-6, 1), (-5, -5), (-3, -7), (-4, -8), (-8, -6)],
+        [(-3, -3), (-3, -4), (5, -2), (-3, -5), (-1, -7), (0, -8), (-1, -9), (-5, -9)],
+        [(0, -4), (0, -5), (1, -6), (1, -6), (1, -7), (1, -8), (1, -9), (-1, -10)]
+    ];
+
+    /// <summary>
+    /// Exult <c>UI_set_orrery(pos, state)</c>: with planet Britannia (765)
+    /// within 24 tiles of the centre, the planets round it (988 frames 0-7,
+    /// the sun stays) are taken away and set down at the state's places.
+    /// </summary>
+    UsecodeValue SetOrrery(UsecodeValue[] p)
+    {
+        var pos = new TileCoord((int)p[0].GetElem(0).IntValue, (int)p[0].GetElem(1).IntValue, (int)p[0].GetElem(2).IntValue);
+        var state = (int)p[1].IntValue;
+        var brit = _vm.Map.FindNearby(pos, PlanetBritannia, 24, 0xb0)
+            .OrderBy(o => Math.Max(Math.Abs(o.Tx - pos.Tx), Math.Abs(o.Ty - pos.Ty)))
+            .FirstOrDefault();
+        if (brit is null || state is < 0 or > 9)
+        {
+            return Zero();
+        }
+
+        foreach (var planet in _vm.Map.FindNearby(new TileCoord(brit.Tx, brit.Ty, brit.Tz), Planets, 24))
+        {
+            if (planet.Frame <= 7)
+            {
+                _vm.Map.RemoveObject(planet);
+            }
+        }
+
+        for (var frame = 0; frame <= 7; frame++)
+        {
+            var (dx, dy) = OrreryOffsets[state][frame];
+            _vm.Map.PlaceInWorld(Quantities.NewItem(Planets, frame), pos.Tx + dx, pos.Ty + dy, pos.Tz);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_mark_virtue_stone(stone)</c>: the stone remembers where it is (its outermost container's tile).</summary>
+    UsecodeValue MarkVirtueStone(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { } stone && _vm.Catalog[stone.Shape].IsVirtueStoneClass)
+        {
+            var outer = Inventory.Outermost(stone);
+            stone.VirtueTarget = new TileCoord(outer.Tx, outer.Ty, outer.Tz);
+            stone.VirtueMap = 0;
+        }
+
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_recall_virtue_stone(stone)</c>: the gumps close, a stone
+    /// lying in the world goes to the first of the party with room (else onto
+    /// the avatar regardless), and a marked stone takes the party to its place
+    /// (<c>Game_window::teleport_party</c>).
+    /// </summary>
+    UsecodeValue RecallVirtueStone(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is not { } stone || !_vm.Catalog[stone.Shape].IsVirtueStoneClass || _vm.Avatar is not { } av)
+        {
+            return Zero();
+        }
+
+        _vm.Gumps?.CloseAll();
+        if (stone.Container is null && !PartyObjects().Any(m => Equipment.AddToActor(m, stone, _vm.Catalog, _vm.Map)))
+        {
+            Equipment.TryPlace(_vm.Map, stone, av, 255, 255, _vm.Catalog, checkLimits: false);
+        }
+
+        var t = stone.VirtueTarget;
+        if (t.Tx > 0 || t.Ty > 0)
+        {
+            _vm.Map.MoveObject(av, t.Tx, t.Ty, t.Tz);
+            _vm.Party?.FollowTeleport();
+            _vm.Lighting?.ResetPalette();
+            _vm.Eggs?.Activate(av, -1, -1);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_nap_time(bed)</c>: if someone else lies in the bed, a
+    /// party member (or the avatar, alone) says so and the avatar follows
+    /// again; otherwise the avatar goes to lie in it (<c>set_bed</c>), and
+    /// the bed's sleep usecode runs once it does.
+    /// </summary>
+    UsecodeValue NapTime(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is not { } bed || _vm.Avatar is not { } av || _vm.Schedules is not { } schedules)
+        {
+            return Zero();
+        }
+
+        if (SleepSchedule.IsBedOccupied(_vm.Map, bed, av))
+        {
+            // Exult shows the face and the message without waiting; here the panel waits for a click.
+            var members = _vm.Party?.Members ?? [];
+            var npcnum = members.Count > 0 ? members[_vm.Random(members.Count) - 1].NpcNum : 356;
+            ShowNpcFace([UsecodeValue.FromInt(-npcnum), UsecodeValue.FromInt(0)]);
+            _vm.ShowText(TextMessages.Random(TextMessages.FirstBedOccupied, TextMessages.LastBedOccupied));
+            _vm.RequestWait(UsecodeWait.ClickToContinue);
+            schedules.SetScheduleType(av, ScheduleType.FollowAvatar);
+            return Zero();
+        }
+
+        schedules.NapIn(bed);
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_stop_time(n)</c>: time stands still for n quarter seconds.</summary>
+    UsecodeValue StopTime(UsecodeValue[] p)
+    {
+        _vm.Clock?.StopTime((int)p[0].IntValue * 250);
+        return Zero();
+    }
+
+    /// <summary>Exult <c>Armageddon_death</c>'s cries.</summary>
+    static readonly string[] ArmageddonCries = ["Aiiiieee!", "Noooo!", "#!?*#%!"];
+
+    /// <summary>
+    /// Exult <c>UI_armageddon</c>: every NPC but the avatar, and the monsters
+    /// within 40 tiles of it, lie down dead where they stand, all but Lord
+    /// British and Batlin; the NPCs on the screen cry out. From then on no
+    /// monster egg hatches (Exult's <c>armageddon</c> flag).
+    /// </summary>
+    UsecodeValue Armageddon()
+    {
+        var view = _vm.Combat?.ViewTiles ?? default;
+        for (var i = 1; i < _vm.Npcs.Count; i++)
+        {
+            ArmageddonDeath(_vm.Npcs[i], view, barks: true);
+        }
+
+        if (_vm.Avatar is { } av)
+        {
+            foreach (var act in _vm.Map.FindNearby(new TileCoord(av.Tx, av.Ty, av.Tz), U7Constants.AnyShape, 40, 0x28))
+            {
+                if (act is { IsActor: true, IsMonster: true })
+                {
+                    ArmageddonDeath(act, view, barks: false);
+                }
+            }
+        }
+
+        if (_vm.Combat is { } combat)
+        {
+            combat.Armageddon = true;
+        }
+
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>Armageddon_death</c>: no body and no <c>Actor::die</c>; the
+    /// actor lies down (<c>lay_down</c>'s kneel and sleep frames) with the dead
+    /// flag, unresponsive, its health at -health/3 - 1.
+    /// </summary>
+    void ArmageddonDeath(U7Object? npc, Godot.Rect2I view, bool barks)
+    {
+        if (npc is not { Unused: false } || npc.IsDead || U7.Actors.ActorFlags.SurvivesArmageddon(npc.Shape))
+        {
+            return;
+        }
+
+        if (barks && view.HasPoint(new Godot.Vector2I(npc.Tx, npc.Ty)))
+        {
+            npc.Bark(ArmageddonCries[_vm.Random(ArmageddonCries.Length) - 1]);
+        }
+
+        var layDown = UsecodeValue.FromArray(6);
+        int[] ops = [ScriptFinish, ScriptStandFrame, ScriptKneelFrame, ScriptSfx, LayDownSfx, ScriptSleepFrame];
+        for (var i = 0; i < ops.Length; i++)
+        {
+            layDown.PutElem(i, UsecodeValue.FromInt(ops[i]));
+        }
+
+        _vm.StartScript(npc, layDown, 0);
+        npc.SetProp(ActorProp.Health, -npc.GetProp(ActorProp.Health) / 3 - 1);
+        npc.SetFlag(ObjFlag.Dead);
+    }
+
+    /// <summary>Exult <c>Ucscript</c> opcodes for <c>Actor::lay_down</c>, and its sound (game sfx 86).</summary>
+    const int ScriptFinish = 0x2c, ScriptSfx = 0x58, ScriptStandFrame = 0x61, ScriptKneelFrame = 0x6d,
+        ScriptSleepFrame = 0x6e, LayDownSfx = 86;
+
+    /// <summary>Exult <c>UI_kill_npc(npc)</c>: <c>Actor::die</c> with no attacker.</summary>
+    UsecodeValue KillNpc(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { IsActor: true } npc)
+        {
+            _vm.Combat?.Kill(npc);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_set_attack_mode(npc, mode)</c>. Not the player's choice, so
+    /// starting combat turns a flee set here back to nearest.
+    /// </summary>
+    UsecodeValue SetAttackMode(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { IsActor: true } npc)
+        {
+            npc.AttackMode = (int)p[1].IntValue;
+            npc.UserSetAttack = false;
+        }
+
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_set_oppressor(npc, opp)</c>. Exult keeps the oppressor's NPC
+    /// number, so a monster without one (-1) leaves none.
+    /// </summary>
+    UsecodeValue SetOppressor(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { IsActor: true } npc && _vm.GetItem(p[1]) is { IsActor: true } opp && npc != opp)
+        {
+            npc.Oppressor = opp.NpcNum >= 0 ? opp : null;
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_is_pc_inside</c>.</summary>
+    UsecodeValue IsPcInside() => UsecodeValue.FromInt(AvatarInside() ? 1 : 0);
+
+    /// <summary>Exult <c>is_main_actor_inside</c>: a roof over the avatar.</summary>
+    bool AvatarInside() =>
+        _vm.Avatar is { } av && _vm.Map.RoofHeight(av.Tx, av.Ty, av.Tz) < U7Constants.NoRoof;
+
+    /// <summary>Exult <c>sprites/map</c> in Black Gate (bggame.cc).</summary>
+    const int MapSprite = 22;
+    /// <summary>The sextant's shape.</summary>
+    const int SextantShape = 650;
+
+    /// <summary>
+    /// Exult <c>UI_display_map</c>: the map sprite until a click, marking where
+    /// the avatar is when the party has a sextant and the avatar is outdoors
+    /// (<c>Paint_map</c>'s Black Gate scale, rounded as <c>lround</c> does).
+    /// </summary>
+    UsecodeValue DisplayMap()
+    {
+        Godot.Vector2I? mark = null;
+        if (_vm.Avatar is { } av && !AvatarInside() &&
+            PartyObjects().Sum(m => Quantities.Count(m, SextantShape, U7Constants.AnyShape, U7Constants.AnyShape)) > 0)
+        {
+            mark = new Godot.Vector2I((int)Math.Round(av.Tx / 16.05 + 5, MidpointRounding.AwayFromZero),
+                (int)Math.Round(av.Ty / 15.95 + 4, MidpointRounding.AwayFromZero));
+        }
+
+        _vm.ShowPicture(new UsecodePicture(MapSprite, 0, mark));
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_start_speech(n)</c> and <c>UI_start_blocking_speech(n)</c>
+    /// when the speech doesn't play (there is no speech playback yet): the track
+    /// is kept for <c>get_speech_track</c>, the faces go, and 0 tells the
+    /// usecode to show the text instead.
+    /// </summary>
+    UsecodeValue StartSpeech(UsecodeValue[] p)
+    {
+        _speechTrack = (int)p[0].IntValue;
+        _vm.Conv.InitFaces();
+        _vm.NotifyFaces();
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_advance_time(ticks)</c>: <c>Game_clock::increment</c> by the
+    /// whole minutes (25 ticks each), then <c>set_time_palette</c>.
+    /// </summary>
+    UsecodeValue AdvanceTime(UsecodeValue[] p)
+    {
+        _vm.Clock?.Increment((int)p[0].IntValue / U7Constants.TicksPerMinute);
+        _vm.Lighting?.ResetPalette();
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_is_water(pos)</c>: whether the ground at the tile is water;
+    /// the lift is ignored, as in the original. Exult's own [obj, x, y, z]
+    /// form asks the object's shape.
+    /// </summary>
+    UsecodeValue IsWater(UsecodeValue[] p)
+    {
+        var size = p[0].IsArray ? p[0].ArraySize : 0;
+        if (size is < 2 or > 4)
+        {
+            return Zero();
+        }
+
+        if (size == 4 && _vm.GetItem(p[0].GetElem(0)) is { } obj)
+        {
+            return UsecodeValue.FromInt(_vm.Catalog[obj.Shape].Water ? 1 : 0);
+        }
+
+        var off = size == 4 ? 1 : 0;
+        var flat = _vm.Map.GetFlat((int)p[0].GetElem(off).IntValue, (int)p[0].GetElem(off + 1).IntValue);
+        return UsecodeValue.FromInt(_vm.Catalog[flat.Shape].Water ? 1 : 0);
+    }
+
+    /// <summary>
+    /// Exult <c>UI_is_readied(npc, where, shape, frame)</c>: <c>where</c> is a
+    /// Black Gate spot (<c>Ready_spot_from_BG</c>, 1 the weapon hand); frame
+    /// -359 is any. Spots past the usecode container (both hands, neck) never
+    /// match, as in Exult.
+    /// </summary>
+    UsecodeValue IsReadied(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is not { IsActor: true } npc)
+        {
+            return Zero();
+        }
+
+        var spot = ReadySpot.FromBg((int)p[1].IntValue);
+        var shape = (int)p[2].IntValue;
+        var frame = (int)p[3].IntValue;
+        var obj = spot <= ReadySpot.Ucont ? Equipment.GetReadied(npc, spot) : null;
+        return UsecodeValue.FromInt(obj is not null && obj.Shape == shape &&
+                                    (frame == U7Constants.AnyShape || obj.Frame == frame) ? 1 : 0);
+    }
 
     UsecodeValue ApplyDamage(UsecodeValue[] p)
     {

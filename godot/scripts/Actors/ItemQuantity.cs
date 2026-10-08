@@ -210,7 +210,7 @@ public sealed class ItemQuantity
     }
 
     /// <summary>Exult <c>Container_game_object::create_quantity</c>.</summary>
-    int Create(U7Object cont, int delta, int shape, int qual, int frame, bool temporary)
+    public int Create(U7Object cont, int delta, int shape, int qual, int frame, bool temporary)
     {
         if (!CanBeAdded(cont, shape) || _catalog[cont.Shape].ReadyType == ReadySpot.Ucont)
         {

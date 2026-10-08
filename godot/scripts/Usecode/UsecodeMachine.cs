@@ -22,8 +22,21 @@ public enum UsecodeWait
     /// <summary>Exult <c>show_pending_text</c> in book mode: a book or scroll page is shown; resume with <see cref="UsecodeMachine.TurnBookPage"/>.</summary>
     BookPage,
     /// <summary>Exult <c>Palette::fade</c>: the screen fades, the game stands still; <see cref="UsecodeMachine.UpdateFade"/> resumes.</summary>
-    Fade
+    Fade,
+    /// <summary>Exult <c>Get_click</c> over a picture (<c>display_map</c>, <c>display_area</c>); resume with <see cref="UsecodeMachine.ClosePicture"/>.</summary>
+    Picture,
+    /// <summary>Exult <c>Wizard_eye</c>: the game runs while the player looks about; <see cref="UsecodeMachine.EndWizardEye"/> resumes.</summary>
+    WizardEye
 }
+
+/// <summary>
+/// A picture usecode shows until a click: a SPRITES.VGA frame centred on the
+/// screen (Exult <c>Paint_centered</c>), with the map's location mark
+/// (<c>Paint_map</c>) at a pixel of the frame from its top left, or none;
+/// with an <paramref name="Area"/>, the world round that tile is seen through
+/// it (<c>display_area</c>).
+/// </summary>
+public sealed record UsecodePicture(int Sprite, int Frame, Godot.Vector2I? Mark, U7.Core.TileCoord? Area = null);
 
 /// <summary>
 /// Black Gate usecode interpreter. Opcode loop ports Exult
@@ -48,8 +61,8 @@ public sealed class UsecodeMachine
     public bool InUsecode => _callStack.Count > 0;
     public UsecodeWait Wait { get; private set; }
     public bool WaitingForChoice => Wait != UsecodeWait.None;
-    /// <summary>Waiting for the player (a click, an answer, a target), not for a fade.</summary>
-    public bool WaitingForPlayer => Wait is not (UsecodeWait.None or UsecodeWait.Fade);
+    /// <summary>Waiting for the player (a click, an answer, a target), not for a fade or a Wizard Eye's time.</summary>
+    public bool WaitingForPlayer => Wait is not (UsecodeWait.None or UsecodeWait.Fade or UsecodeWait.WizardEye);
     public string? UserChoice { get; private set; }
     public string StringReg { get; private set; } = "";
     public string LastIntrinsic { get; private set; } = "";
@@ -1524,6 +1537,92 @@ public sealed class UsecodeMachine
     {
         Wait = kind;
         AnswersChanged?.Invoke();
+    }
+
+    /// <summary>What <c>display_map</c> or <c>display_area</c> shows while the usecode waits for a click.</summary>
+    public UsecodePicture? Picture { get; private set; }
+
+    /// <summary>Exult <c>Get_click</c> with a picture painted: show it and wait.</summary>
+    public void ShowPicture(UsecodePicture picture)
+    {
+        Picture = picture;
+        RequestWait(UsecodeWait.Picture);
+    }
+
+    /// <summary>The picture was clicked away: carry on running (Exult <c>display_area</c> centres the view on the avatar again).</summary>
+    public void ClosePicture()
+    {
+        if (Wait != UsecodeWait.Picture)
+        {
+            return;
+        }
+
+        var area = Picture?.Area is not null;
+        Picture = null;
+        if (area)
+        {
+            ViewRecentred?.Invoke();
+        }
+
+        ResumeWait(UsecodeValue.FromInt(0));
+    }
+
+    /// <summary>Exult <c>center_view</c> on the avatar, after a view elsewhere.</summary>
+    public Action? ViewRecentred { get; set; }
+
+    /// <summary>Exult <c>UI_view_tile</c>: <c>center_view</c> on a tile.</summary>
+    public Action<TileCoord>? ViewTile { get; set; }
+
+    /// <summary>The milliseconds left of a Wizard Eye.</summary>
+    public double WizardEyeMs { get; private set; }
+
+    /// <summary>
+    /// Exult <c>Wizard_eye</c>: from the avatar's tile the view can be moved
+    /// about, seen through sprite 10, until the time is up or Esc.
+    /// </summary>
+    public void StartWizardEye(int ms, TileCoord from, int sprite)
+    {
+        WizardEyeMs = ms;
+        Picture = new UsecodePicture(sprite, 0, null, from);
+        RequestWait(UsecodeWait.WizardEye);
+    }
+
+    /// <summary>Exult <c>view_left</c> / <c>view_right</c> / <c>view_up</c> / <c>view_down</c> while the eye is open: a tile each.</summary>
+    public void MoveWizardEye(int dx, int dy)
+    {
+        if (Wait == UsecodeWait.WizardEye && Picture?.Area is { } at)
+        {
+            Picture = Picture with { Area = new TileCoord(U7Constants.WrapTile(at.Tx + dx), U7Constants.WrapTile(at.Ty + dy), at.Tz) };
+        }
+    }
+
+    /// <summary>Time passing for the eye; it closes when it is up.</summary>
+    public void UpdateWizardEye(double delta)
+    {
+        if (Wait != UsecodeWait.WizardEye)
+        {
+            return;
+        }
+
+        WizardEyeMs -= delta * 1000;
+        if (WizardEyeMs <= 0)
+        {
+            EndWizardEye();
+        }
+    }
+
+    /// <summary>The eye closes (its time is up, or Esc): the view goes back to the avatar and the usecode runs on.</summary>
+    public void EndWizardEye()
+    {
+        if (Wait != UsecodeWait.WizardEye)
+        {
+            return;
+        }
+
+        Picture = null;
+        WizardEyeMs = 0;
+        ViewRecentred?.Invoke();
+        ResumeWait(UsecodeValue.FromInt(0));
     }
 
     /// <summary>

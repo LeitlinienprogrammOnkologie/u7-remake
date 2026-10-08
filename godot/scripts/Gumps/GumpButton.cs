@@ -114,6 +114,7 @@ public sealed class GumpButton
                 {
                     var frames = npc.NpcNum == 0 ? AttackMode.AvatarFrames : AttackMode.NpcFrames;
                     npc.AttackMode = (npc.AttackMode + 1) % frames;
+                    npc.UserSetAttack = true;
                 }
 
                 break;

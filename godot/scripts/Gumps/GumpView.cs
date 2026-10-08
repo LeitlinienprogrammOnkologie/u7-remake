@@ -18,6 +18,10 @@ public partial class GumpView : Node2D
     public float Zoom = 4f;
     /// <summary>The book or scroll whose page the usecode waits on; Exult paints it over everything.</summary>
     public Func<TextGump?>? ShownBook;
+    /// <summary>The picture the usecode waits on (the map, a view elsewhere); Exult paints it over everything.</summary>
+    public Func<U7.Usecode.UsecodePicture?>? ShownPicture;
+    /// <summary>Exult <c>Paint_map</c>'s mark colour, a palette index.</summary>
+    const int MapMarkColour = 50;
 
     public override void _Ready()
     {
@@ -57,6 +61,46 @@ public partial class GumpView : Node2D
         {
             PaintBook(book);
         }
+
+        if (ShownPicture?.Invoke() is { } picture)
+        {
+            PaintPicture(picture);
+        }
+    }
+
+    /// <summary>
+    /// A picture is shown like a book, at the largest whole scale that fits the
+    /// window, centred (Exult <c>Paint_centered</c>); the map's mark is a cross
+    /// of two 5-pixel bars (<c>Paint_map</c>).
+    /// </summary>
+    void PaintPicture(U7.Usecode.UsecodePicture picture)
+    {
+        if (picture.Area is not null)
+        {
+            PaintRemoteView(picture);
+            return;
+        }
+
+        if (Shapes.GetSprite(picture.Sprite, picture.Frame) is not { } tex)
+        {
+            return;
+        }
+
+        var view = GetViewport().GetVisibleRect().Size;
+        var w = tex.GetWidth();
+        var h = tex.GetHeight();
+        var scale = Math.Max(1, (int)Math.Min(view.X * 0.95f / w, view.Y * 0.95f / h));
+        DrawSetTransform(Vector2.Zero, 0, new Vector2(scale, scale));
+        var x = ((int)(view.X / scale) - w) / 2;
+        var y = ((int)(view.Y / scale) - h) / 2;
+        DrawTexture(tex, new Vector2(x, y));
+        if (picture.Mark is { } mark)
+        {
+            var pal = Shapes.DayPalette;
+            var colour = Color.Color8(pal[MapMarkColour * 3], pal[MapMarkColour * 3 + 1], pal[MapMarkColour * 3 + 2]);
+            DrawRect(new Rect2(x + mark.X, y + mark.Y - 2, 1, 5), colour);
+            DrawRect(new Rect2(x + mark.X - 2, y + mark.Y, 5, 1), colour);
+        }
     }
 
     /// <summary>
@@ -76,6 +120,39 @@ public partial class GumpView : Node2D
         DrawSetTransform(Vector2.Zero, 0, new Vector2(scale, scale));
         book.SetPos((int)(view.X / scale), (int)(view.Y / scale), fi);
         book.Paint(this);
+    }
+
+    /// <summary>
+    /// The frame over a view of the world elsewhere (the world itself is drawn
+    /// round the area's tile): Exult's, sprite 10 painted translucent at the
+    /// world's zoom over the original 320x200 screen, black outside it. The
+    /// user's pick (2026-10-08) of Exult's frame, the frame redrawn smooth at
+    /// the window's size, and the view filling the window.
+    /// </summary>
+    void PaintRemoteView(U7.Usecode.UsecodePicture picture)
+    {
+        var view = GetViewport().GetVisibleRect().Size;
+        DrawSetTransform(Vector2.Zero, 0, Vector2.One);
+        var w = U7Constants.OriginalScreenW * Zoom;
+        var h = U7Constants.OriginalScreenH * Zoom;
+        var x0 = Mathf.Floor((view.X - w) / 2);
+        var y0 = Mathf.Floor((view.Y - h) / 2);
+        if (x0 > 0)
+        {
+            DrawRect(new Rect2(0, 0, x0, view.Y), Colors.Black);
+            DrawRect(new Rect2(x0 + w, 0, view.X - x0 - w, view.Y), Colors.Black);
+        }
+
+        if (y0 > 0)
+        {
+            DrawRect(new Rect2(0, 0, view.X, y0), Colors.Black);
+            DrawRect(new Rect2(0, y0 + h, view.X, view.Y - y0 - h), Colors.Black);
+        }
+
+        if (Shapes.GetSprite(picture.Sprite, picture.Frame, translucent: true) is { } tex)
+        {
+            DrawTextureRect(tex, new Rect2(x0, y0, w, h), false);
+        }
     }
 
     public void DrawGumpShape(int shape, int frame, int hx, int hy)

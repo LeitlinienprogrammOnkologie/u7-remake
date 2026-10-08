@@ -35,6 +35,9 @@ public static class U7Constants
     public const int AnyShape = -359;
     public const int NoRoof = 255;
     public const int ShapeClassBuilding = 14;
+    /// <summary>The original's screen in pixels, which Exult's full-screen sprites (the crystal ball's frame) fill.</summary>
+    public const int OriginalScreenW = 320;
+    public const int OriginalScreenH = 200;
 
     // GUMPS.VGA indices from Exult bggame.cc (Black Gate).
     public const int GumpBox = 0;

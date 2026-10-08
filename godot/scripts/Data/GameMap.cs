@@ -789,9 +789,11 @@ public sealed class GameMap
     /// or on the squares around it out to <paramref name="dist"/>, starting
     /// on the preferred side (<paramref name="dir"/>, 0 north clockwise;
     /// random if -1). It may end up to <paramref name="maxDrop"/> lifts higher
-    /// or lower. Null if there is none.
+    /// or lower. With <paramref name="inside"/> the squares' spots must be
+    /// under a roof (true) or not (false), Exult's <c>Find_spot_where</c>.
+    /// Null if there is none.
     /// </summary>
-    public TileCoord? FindSpot(TileCoord pos, int dist, int shape, int frame, int maxDrop = 0, int dir = -1)
+    public TileCoord? FindSpot(TileCoord pos, int dist, int shape, int frame, int maxDrop = 0, int dir = -1, bool? inside = null)
     {
         var info = Catalog[shape];
         var reflected = (frame & 32) != 0;
@@ -818,7 +820,8 @@ public sealed class GameMap
             for (var n = 0; n < count; n++, index++)
             {
                 var p = SquareTile(pos, d, index % count);
-                if (!Blocking.IsBlockedArea(zs, p.Tz, p.Tx - xs + 1, p.Ty - ys + 1, xs, ys, out lift, flags, maxDrop))
+                if (!Blocking.IsBlockedArea(zs, p.Tz, p.Tx - xs + 1, p.Ty - ys + 1, xs, ys, out lift, flags, maxDrop) &&
+                    (inside is not { } want || want == (RoofHeight(p.Tx, p.Ty, lift) < U7Constants.NoRoof)))
                 {
                     return p with { Tz = lift };
                 }
@@ -1489,6 +1492,20 @@ public sealed class GameMap
             }
         }
 
+        if (info.IsVirtueStoneClass)
+        {
+            // Exult Virtue_stone_object: where it was marked (tile in its superchunk, superchunk, lift) and the map; no contents.
+            if (obj is not null)
+            {
+                obj.VirtueTarget = new TileCoord(
+                    entry[6] % 12 * U7Constants.TilesPerSuperchunk + entry[4],
+                    entry[6] / 12 * U7Constants.TilesPerSuperchunk + entry[5], entry[7]);
+                obj.VirtueMap = entry[10];
+            }
+
+            return obj;
+        }
+
         if (info.IsBargeClass && obj is not null && parent is null)
         {
             // Exult Barge_object: size, facing in quality bits 1-2, barge mode in bit 3.
@@ -1772,6 +1789,22 @@ public sealed class GameMap
             w.Write((byte)0);
             w.Write((byte)0);
             w.Write((byte)1); // A 01 ends the (empty) list.
+            return;
+        }
+
+        if (info.IsVirtueStoneClass)
+        {
+            // Exult Virtue_stone_object::write_ireg: the target's tile in its superchunk, the superchunk and lift, the stone's lift, the map.
+            var t = obj.VirtueTarget;
+            WriteCommonIreg(w, obj, 12, contained);
+            w.Write((byte)(t.Tx % U7Constants.TilesPerSuperchunk));
+            w.Write((byte)(t.Ty % U7Constants.TilesPerSuperchunk));
+            w.Write((byte)(t.Ty / U7Constants.TilesPerSuperchunk * 12 + t.Tx / U7Constants.TilesPerSuperchunk));
+            w.Write((byte)t.Tz);
+            w.Write((byte)0);
+            w.Write((byte)NibbleSwap(obj.Tz));
+            w.Write((byte)obj.VirtueMap);
+            w.Write((byte)0);
             return;
         }
 
