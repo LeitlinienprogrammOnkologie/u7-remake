@@ -20,6 +20,8 @@ public sealed class AmmoRecord
     public bool Returns;
     public bool NoBlocking;
     public bool Explodes;
+    /// <summary>Exult <c>is_homing</c>: an exploding missile that becomes a <see cref="HomingMissile"/> (energy mist, death vortex).</summary>
+    public bool Homing;
     public int DropType;
 }
 
@@ -76,6 +78,7 @@ public sealed class AmmoTable
         var iNoBlock = Col("no_blocking");
         var iDrop = Col("drop_type");
         var iExplodes = Col("explodes");
+        var iHoming = Col("homing");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
         int Num(string[] c, int i, int fallback = 0) =>
@@ -104,7 +107,8 @@ public sealed class AmmoTable
                 Returns = Num(c, iReturns) != 0,
                 NoBlocking = Num(c, iNoBlock) != 0,
                 DropType = Num(c, iDrop),
-                Explodes = Num(c, iExplodes) != 0
+                Explodes = Num(c, iExplodes) != 0,
+                Homing = Num(c, iHoming) != 0
             };
         }
 

@@ -632,11 +632,26 @@ public sealed class BgIntrinsics
         return Zero();
     }
 
-    /// <summary>Exult <c>UI_fade_palette(cycles, 1, inout)</c>: 0 = to black, 1 = back.</summary>
+    /// <summary>
+    /// Exult <c>UI_fade_palette(cycles, 1, inout)</c>: 0 fades to black, 1
+    /// back from it, in cycles + 1 steps 20 ms apart (<c>Palette::fade</c>),
+    /// while the usecode waits. A fade-in first resets the palette to the
+    /// hour's (<c>reset_palette</c>). Exult's <c>show_pending_text</c> before a
+    /// fade-out finds nothing here (said text is clicked through as it is
+    /// said, and no fade of Black Gate's follows book text), and its
+    /// <c>toggle_ambient_light(false)</c> clears what only Exult's own
+    /// <c>ambient_light</c> intrinsic sets.
+    /// </summary>
     UsecodeValue FadePalette(UsecodeValue[] p)
     {
-        var inout = p.Length > 2 ? (int)p[2].IntValue : 1;
-        _vm.FadedOut = inout == 0;
+        var cycles = p.Length > 0 ? (int)p[0].IntValue : 0;
+        var fadeIn = p.Length <= 2 || p[2].IntValue != 0;
+        if (fadeIn)
+        {
+            _vm.Lighting?.ResetPalette();
+        }
+
+        _vm.StartFade(cycles, fadeIn);
         return Zero();
     }
 

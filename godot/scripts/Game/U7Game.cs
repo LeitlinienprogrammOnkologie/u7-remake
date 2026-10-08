@@ -42,8 +42,7 @@ public partial class U7Game : Node2D
     /// <summary>Exult <c>center_view</c> on an object: the view stays there (a moving barge takes it along) until the avatar walks.</summary>
     TileCoord? _cameraTile;
     SceneLighting _lighting = null!;
-    /// <summary>The world's brightness for usecode's fade to black, eased (1 shown, 0 black).</summary>
-    float _fade = 1f;
+    ScreenFx _screenFx = null!;
     MusicPlayer _music = null!;
     PartyManager _party = null!;
     CombatEngine _combat = null!;
@@ -164,6 +163,8 @@ public partial class U7Game : Node2D
                 Shapes = _shapes,
                 Avatar = avatar,
                 Effects = _effects,
+                Missiles = _combat.Missiles,
+                HomingMissiles = _combat.HomingMissiles,
                 TextureFilter = TextureFilterEnum.Nearest
             };
             AddChild(_world);
@@ -211,6 +212,13 @@ public partial class U7Game : Node2D
 
             var layer = new CanvasLayer { Name = "HUD", Layer = 20 };
             AddChild(layer);
+            layer.AddChild(new BarkOverlay { Name = "Barks", World = _world });
+            _conversation = new ConversationPanel { Name = "Conversation", Shapes = _shapes };
+            layer.AddChild(_conversation);
+            // Over the game's picture (world, gumps, barks, conversation); the debug lines stay on top.
+            _screenFx = new ScreenFx { Name = "ScreenFx" };
+            layer.AddChild(_screenFx);
+
             _hud = new Label
             {
                 Name = "Status",
@@ -219,10 +227,6 @@ public partial class U7Game : Node2D
             };
             _hud.AddThemeColorOverride("font_color", new Color(0.95f, 0.9f, 0.7f));
             layer.AddChild(_hud);
-
-            layer.AddChild(new BarkOverlay { Name = "Barks", World = _world });
-            _conversation = new ConversationPanel { Name = "Conversation", Shapes = _shapes };
-            layer.AddChild(_conversation);
 
             _debug = new Label
             {
@@ -553,6 +557,11 @@ public partial class U7Game : Node2D
 
         KeyboardWalk(canWalk);
         AgentUpdate(delta, ref click);
+        if (!IsInsideTree())
+        {
+            return; // the console loaded a game: this scene is being replaced
+        }
+
         if (click is { } c && _barges.Moving is null)
         {
             // (Exult start_actor_along_path: "For now, don't do barges.")
@@ -578,9 +587,7 @@ public partial class U7Game : Node2D
         }
 
         _clock.Update(delta);
-        _fade = Mathf.Lerp(_fade, _usecode is { FadedOut: true } ? 0f : 1f, (float)Math.Min(1, delta * 2.5));
-        _world.Modulate = new Color(_fade, _fade, _fade);
-        _world.RotateColors = _usecode is not { Wait: UsecodeWait.ClickOnItem };
+        _usecode?.UpdateFade(delta);
         _usecode?.TickScripts(delta);
         if (_usecode is { RestartRequested: true })
         {
@@ -615,15 +622,30 @@ public partial class U7Game : Node2D
             return;
         }
 
+        // Usecode's fades: while the screen goes or stays black, the world and the view hold still.
+        var fadedOut = _usecode is { FadedOut: true };
+        _screenFx.Fade = _usecode?.FadeLevel ?? 1f;
+        _world.Frozen = fadedOut;
+        _world.RotateColors = !fadedOut && _usecode is not { Wait: UsecodeWait.ClickOnItem };
+
         var av = _avatar.Avatar;
         var focus = _cameraTile ?? (_cameraActor is { Removed: false } ca
             ? new TileCoord(ca.Tx, ca.Ty, ca.Tz)
             : new TileCoord(av.Tx, av.Ty, av.Tz));
         WorldView.ShapeLocation(focus.Tx, focus.Ty, focus.Tz, out var camX, out var camY);
-        camera.GlobalPosition = new Vector2(camX, camY) + QuakeOffset(delta);
+        var quake = QuakeOffset(delta);
+        if (!fadedOut)
+        {
+            camera.GlobalPosition = new Vector2(camX, camY) + quake;
+        }
+
         // The lights for the view the world is about to draw.
         var viewSize = GetViewport().GetVisibleRect().Size / camera.Zoom;
         _lighting.View = new Rect2(camera.GlobalPosition - viewSize / 2, viewSize);
+        // Exult get_win_tile_rect, for missile eggs (used next frame).
+        var viewTopLeft = (camera.GlobalPosition - viewSize / 2) / U7Constants.TileSize;
+        _combat.ViewTiles = new Rect2I(Mathf.FloorToInt(viewTopLeft.X), Mathf.FloorToInt(viewTopLeft.Y),
+            Mathf.CeilToInt(viewSize.X / U7Constants.TileSize), Mathf.CeilToInt(viewSize.Y / U7Constants.TileSize));
         _lighting.Focus = (focus.Tx, focus.Ty);
         _lighting.Update(delta);
 
@@ -833,17 +855,7 @@ public partial class U7Game : Node2D
                     _statusExtra = _combat.LastMessage;
                     break;
                 case Key.F6:
-                    // Debug: lethal hit on the avatar through the normal damage path.
-                    // Usecode 0x60E restarts the game unless global flag 0x57 is set;
-                    // with it set you wake up in the Fellowship shelter in Paws
-                    // (Feridwyn and Brita). Set it unless Shift is held.
-                    if (!key.ShiftPressed && _usecode is { } uc && 0x57 < uc.GFlags.Length)
-                    {
-                        uc.GFlags[0x57] = 1;
-                    }
-
-                    _combat.ReduceHealth(_avatar.Avatar, 1000, null, 0);
-                    _statusExtra = _combat.LastMessage;
+                    DebugDie(restart: key.ShiftPressed);
                     break;
                 case Key.F5:
                     try
@@ -1169,6 +1181,23 @@ public partial class U7Game : Node2D
         _conversation.Refresh();
     }
 
+
+    /// <summary>
+    /// Debug (F6): a lethal hit on the avatar through the normal damage path.
+    /// Usecode 0x60E restarts the game unless global flag 0x57 is set; with it
+    /// set you wake up in the Fellowship shelter in Paws (Feridwyn and Brita).
+    /// It is set unless <paramref name="restart"/> (Shift).
+    /// </summary>
+    void DebugDie(bool restart)
+    {
+        if (!restart && _usecode is { } uc && 0x57 < uc.GFlags.Length)
+        {
+            uc.GFlags[0x57] = 1;
+        }
+
+        _combat.ReduceHealth(_avatar.Avatar, 1000, null, 0);
+        _statusExtra = _combat.LastMessage;
+    }
 
     /// <summary>Exult <c>Earthquake::handle_event</c>: a random ±4 pixel jolt every 100 ms while usecode asks for one.</summary>
     Vector2 QuakeOffset(double delta)

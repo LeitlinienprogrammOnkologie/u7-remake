@@ -22,7 +22,11 @@ public sealed class CombatEngine
     readonly WeaponTable _weapons;
     readonly ArmorTable _armor;
     readonly AmmoTable _ammo = AmmoTable.Load();
-    readonly List<Projectile> _projectiles = new();
+    readonly List<Missile> _missiles = new();
+    readonly List<HomingMissile> _homing = new();
+    readonly Dictionary<U7Object, MissileLauncher> _launchers = new();
+    /// <summary>Seconds the launchers have run, their time queue's clock.</summary>
+    double _launchClock;
     readonly List<U7Object> _spawned = new();
     readonly List<U7Object> _arena = new();
     /// <summary>Exult <c>Game_object::rotate</c>: frame band per direction 0-7 (N, NE, E, ...).</summary>
@@ -334,6 +338,12 @@ public sealed class CombatEngine
         GD.Print(LastMessage);
     }
 
+    /// <summary>Missiles in flight, for the world to paint (Exult's projectile effects).</summary>
+    public IReadOnlyList<Missile> Missiles => _missiles;
+
+    /// <summary>Death vortices and energy mists (Exult's homing projectiles), for the world to paint.</summary>
+    public IReadOnlyList<HomingMissile> HomingMissiles => _homing;
+
     /// <summary>Missiles in flight; the fighting itself is the actors' combat schedules.</summary>
     public void Update(double delta, bool frozen)
     {
@@ -344,6 +354,8 @@ public sealed class CombatEngine
 
         PurgeDead();
         TickProjectiles(delta);
+        TickHoming(delta);
+        TickLaunchers(delta);
     }
 
     /// <summary>
@@ -1030,7 +1042,7 @@ public sealed class CombatEngine
         GD.Print(LastMessage);
     }
 
-    bool HitWith(U7Object attacker, U7Object defender, WeaponRecord? wpn, int wpoints, AmmoRecord? ainf, int ammoShape,
+    bool HitWith(U7Object? attacker, U7Object defender, WeaponRecord? wpn, int wpoints, AmmoRecord? ainf, int ammoShape,
         bool explosion = false)
     {
         if (!explosion && (wpn is { Explodes: true } || ainf is { Explodes: true }))
@@ -1052,7 +1064,7 @@ public sealed class CombatEngine
             return false;
         }
 
-        if (attacker.IsActor && attacker.ScheduleType == ScheduleType.Duel)
+        if (attacker is { IsActor: true, ScheduleType: ScheduleType.Duel })
         {
             // Exult Actor::attacked: just play-fighting.
             if (attacker.NpcNum >= 0)
@@ -1073,7 +1085,7 @@ public sealed class CombatEngine
             }
         }
 
-        var hits = ApplyDamage(attacker, defender, attacker.GetProp(ActorProp.Strength), wpoints, type);
+        var hits = ApplyDamage(attacker, defender, attacker?.GetProp(ActorProp.Strength) ?? 0, wpoints, type);
         if (hits > 0 && !defender.IsDead)
         {
             defender.Bark($"{hits}");
@@ -1083,7 +1095,7 @@ public sealed class CombatEngine
         // Exult Actor::figure_hit_points: the weapon's usecode comes last of all.
         if (wpn is { Usecode: > 0 })
         {
-            if (attacker.NpcNum >= 0)
+            if (attacker is { NpcNum: >= 0 })
             {
                 defender.Oppressor = attacker;
             }
@@ -1274,33 +1286,29 @@ public sealed class CombatEngine
 
     // ------------------------------------------------------------------ projectiles
 
-    /// <summary>Exult <c>Projectile_effect</c>: a missile in flight, stepped every half tick.</summary>
-    sealed class Projectile
-    {
-        public required U7Object Attacker;
-        public required U7Object Target;
-        public WeaponRecord? Weapon;
-        public int WeaponShape;
-        public int AmmoShape;
-        public int SpriteShape;
-        public U7Object? Sprite;
-        public int AttVal;
-        public int Speed = 4;
-        public bool AutoHit;
-        public bool Returns;
-        public List<TileCoord> Path = new();
-        public int Step;
-        public TileCoord Pos;
-        public double Timer;
-    }
-
     /// <summary>Exult <c>Projectile_effect::init</c>: path from the attacker's missile tile to the target's centre.</summary>
     void LaunchProjectile(U7Object attacker, U7Object target, WeaponRecord? wpn, int weaponShape, int ammoShape, int spriteShape, int attval, bool returns)
     {
         var start = new TileCoord(attacker.Tx, attacker.Ty, attacker.Tz + attacker.DimZ * 3 / 4);
-        var dest = new TileCoord(target.Tx, target.Ty, target.Tz + target.DimZ / 2);
+        var pr = NewMissile(attacker, target, start, Centre(target), wpn, weaponShape, ammoShape, spriteShape, attval);
+        pr.Returns = returns;
+        LastMessage = $"{NameOf(attacker)} fires at {NameOf(target)}";
+        GD.Print($"{LastMessage} (weapon {weaponShape}, ammo {ammoShape}, sprite {spriteShape}, {pr.Path.Count} tiles)");
+    }
+
+    /// <summary>
+    /// Exult <c>Projectile_effect::init</c>: a missile from <paramref name="start"/>
+    /// to <paramref name="dest"/> at the weapon's speed, autohitting or
+    /// flying through things if its weapon or ammunition says so. A homing
+    /// missile (exploding, with homing ammunition) goes nowhere: it lands on
+    /// its first step and becomes its <see cref="HomingMissile"/> there.
+    /// </summary>
+    Missile NewMissile(U7Object? attacker, U7Object? target, TileCoord start, TileCoord dest, WeaponRecord? wpn,
+        int weaponShape, int ammoShape, int spriteShape, int attval)
+    {
         var ainf = ammoShape >= 0 ? _ammo[ammoShape] : null;
-        var pr = new Projectile
+        var explodes = wpn is { Explodes: true } || ainf is { Explodes: true };
+        var pr = new Missile
         {
             Attacker = attacker,
             Target = target,
@@ -1311,56 +1319,50 @@ public sealed class CombatEngine
             AttVal = attval,
             Speed = wpn is { MissileSpeed: > 0 } ? wpn.MissileSpeed : 4,
             AutoHit = wpn is { Autohit: true } || ainf is { Autohit: true },
-            Returns = returns,
-            Pos = start
+            NoBlocking = wpn is { NoBlocking: true } || ainf is { NoBlocking: true },
+            Returns = wpn is { Returns: true } || ainf is { Returns: true },
+            Pos = start,
+            Interval = _stepInterval / 2
         };
-        pr.Path = LinePath(start, dest);
-        if (spriteShape >= 0)
-        {
-            var rec = _catalog[spriteShape];
-            int frame;
-            if (rec.FrameCount >= 24)
-            {
-                frame = 8 + Dir16(start, dest);
-            }
-            else if (rec.FrameCount == 1)
-            {
-                frame = 0;
-            }
-            else
-            {
-                frame = -1; // Exult: skip rendering
-            }
+        pr.Path = explodes && ainf is { Homing: true } ? new List<TileCoord>() : LinePath(start, dest);
+        pr.Frame = MissileFrame(spriteShape, start, dest);
+        _missiles.Add(pr);
+        return pr;
+    }
 
-            if (frame >= 0)
-            {
-                pr.Sprite = CreateItem(spriteShape, frame, start.Tx, start.Ty, start.Tz, temporary: true);
-            }
+    /// <summary>
+    /// Exult <c>Projectile_effect::set_sprite_shape</c>: shapes with 24 frames
+    /// or more fly in frames 8-23 by direction (clockwise from north), a
+    /// one-frame explosive shape in its frame; others are not drawn (-1).
+    /// </summary>
+    int MissileFrame(int shape, TileCoord from, TileCoord to)
+    {
+        if (shape < 0)
+        {
+            return -1;
         }
 
-        _projectiles.Add(pr);
-        LastMessage = $"{NameOf(attacker)} fires at {NameOf(target)}";
-        GD.Print($"{LastMessage} (weapon {weaponShape}, ammo {ammoShape}, sprite {spriteShape}, {pr.Path.Count} tiles)");
+        var frames = _catalog[shape].FrameCount;
+        if (frames >= 24)
+        {
+            return 8 + Dir16(from, to);
+        }
+
+        return frames == 1 && IsVolatile(shape) ? 0 : -1;
     }
 
     void TickProjectiles(double delta)
     {
-        if (_projectiles.Count == 0)
+        for (var i = _missiles.Count - 1; i >= 0; i--)
         {
-            return;
-        }
-
-        var halfTick = _stepInterval / 2;
-        for (var i = _projectiles.Count - 1; i >= 0; i--)
-        {
-            var pr = _projectiles[i];
+            var pr = _missiles[i];
             pr.Timer += delta;
-            while (pr.Timer >= halfTick)
+            while (pr.Timer >= pr.Interval)
             {
-                pr.Timer -= halfTick;
+                pr.Timer -= pr.Interval;
                 if (AdvanceProjectile(pr))
                 {
-                    _projectiles.RemoveAt(i);
+                    _missiles.Remove(pr);
                     break;
                 }
             }
@@ -1368,82 +1370,131 @@ public sealed class CombatEngine
     }
 
     /// <summary>Exult <c>Projectile_effect::handle_event</c>. Returns true when the flight is over.</summary>
-    bool AdvanceProjectile(Projectile pr)
+    bool AdvanceProjectile(Missile pr)
     {
-        if (pr.Sprite is { } spr && pr.Weapon is { RotationSpeed: > 0 } w)
+        if (pr.Frame >= 0 && pr.Weapon is { RotationSpeed: > 0 } w)
         {
-            var nf = spr.Frame + w.RotationSpeed;
-            spr.Frame = nf > 23 ? ((nf - 8) % 16) + 8 : nf;
+            // The missile rotates (axes, boomerangs).
+            var nf = pr.Frame + w.RotationSpeed;
+            pr.Frame = nf > 23 ? ((nf - 8) % 16) + 8 : nf;
         }
 
-        var finished = false;
         for (var i = 0; i < pr.Speed; i++)
         {
             if (pr.Step >= pr.Path.Count)
             {
-                finished = true;
-                break;
+                ProjectileArrived(pr);
+                return true;
             }
 
             pr.Pos = pr.Path[pr.Step++];
+            // A missile egg's shot in a direction stops at what it runs into.
+            if (pr.Target is null && !pr.NoBlocking && FindTarget(pr.Pos) is { } struck)
+            {
+                pr.Target = struck;
+                ProjectileArrived(pr);
+                return true;
+            }
         }
 
-        if (pr.Sprite is { } s)
-        {
-            _map.MoveObject(s, pr.Pos.Tx, pr.Pos.Ty, pr.Pos.Tz);
-        }
-
-        if (!finished && pr.Step < pr.Path.Count)
-        {
-            return false;
-        }
-
-        ProjectileArrived(pr);
-        if (pr.Sprite is { } sp)
-        {
-            _map.RemoveObject(sp);
-        }
-
-        return true;
+        return false;
     }
 
-    void ProjectileArrived(Projectile pr)
+    /// <summary>
+    /// Exult <c>Find_target</c>: what a missile with no target runs into at
+    /// <paramref name="pos"/> (on a floor, a lift up): nothing if a flyer one
+    /// lift high could be there, else the object blocking the tile.
+    /// </summary>
+    U7Object? FindTarget(TileCoord pos)
     {
-        var ainf = pr.AmmoShape >= 0 ? _ammo[pr.AmmoShape] : null;
-        var target = pr.Target;
-        var hit = false;
-        var centre = new TileCoord(target.Tx, target.Ty, target.Tz + target.DimZ / 2);
-        if (pr.Weapon is { Explodes: true } || ainf is { Explodes: true })
+        if (pos.Tz % 5 == 0)
         {
-            // Exult Projectile_effect: an exploding missile blows up where it lands (homing ones are not ported).
-            Explode(new TileCoord(pr.Pos.Tx, pr.Pos.Ty, pr.Pos.Tz + (target.Removed ? 0 : target.DimZ / 2)),
-                null, pr.WeaponShape, pr.AmmoShape, pr.Attacker);
+            pos = pos with { Tz = pos.Tz + 1 };
+        }
+
+        if (!_map.Blocking.IsBlocked(1, pos.Tz, pos.Tx, pos.Ty, out var lift, MoveFlags.Fly, 0))
+        {
+            if (lift == pos.Tz)
+            {
+                return null;
+            }
+
+            pos = pos with { Tz = lift };
+        }
+
+        return _map.FindBlocking(pos);
+    }
+
+    void ProjectileArrived(Missile pr)
+    {
+        var target = pr.Target;
+        if (pr.ReturnPath)
+        {
+            // A returning weapon is back: into the thrower's hands, else on the ground where it fell.
+            var back = CreateItem(pr.SpriteShape, 0, pr.Pos.Tx, pr.Pos.Ty, pr.Pos.Tz, temporary: false, place: false);
+            if (target is not { Removed: false, IsDead: false } || !Equipment.AddToActor(target, back, _catalog, _map))
+            {
+                back.SetFlag(ObjFlag.OkayToTake);
+                back.SetFlag(ObjFlag.Temporary);
+                _map.PlaceInWorld(back, pr.Pos.Tx, pr.Pos.Ty, pr.Pos.Tz);
+            }
+
             return;
         }
 
-        if (!target.Removed && !target.IsDead && target != pr.Attacker && centre.Distance2d(pr.Pos) < 3)
+        var ainf = pr.AmmoShape >= 0 ? _ammo[pr.AmmoShape] : null;
+        var attacker = pr.Attacker;
+        var hit = false;
+        if (pr.Weapon is { Explodes: true } || ainf is { Explodes: true })
+        {
+            // Exult Projectile_effect: an exploding missile blows up where it lands, a homing one turns into its vortex.
+            var at = new TileCoord(pr.Pos.Tx, pr.Pos.Ty, pr.Pos.Tz + (target is { Removed: false } ? target.DimZ / 2 : 0));
+            if (ainf is { Homing: true })
+            {
+                StartHoming(pr.WeaponShape, attacker, target, pr.Pos, at);
+            }
+            else
+            {
+                Explode(at, null, pr.WeaponShape, pr.AmmoShape, attacker);
+            }
+
+            return;
+        }
+
+        if (target is { Removed: false, IsDead: false } && target != attacker && Centre(target).Distance2d(pr.Pos) < 3)
         {
             hit = pr.AutoHit || TryToHit(target, pr.AttVal);
             if (hit)
             {
-                HitWith(pr.Attacker, target, pr.Weapon, pr.Weapon?.Damage ?? 1, ainf, pr.AmmoShape);
+                HitWith(attacker, target, pr.Weapon, pr.Weapon?.Damage ?? 1, ainf, pr.AmmoShape);
             }
             else
             {
                 target.Bark("miss");
-                LastMessage = $"{NameOf(pr.Attacker)} misses {NameOf(target)}";
+                LastMessage = $"{NameOf(attacker)} misses {NameOf(target)}";
             }
         }
 
-        if (pr.Returns && !pr.Attacker.IsDead && !pr.Attacker.Removed)
+        if (pr.Returns && attacker is { Removed: false } && new TileCoord(attacker.Tx, attacker.Ty, attacker.Tz).Distance(pr.Pos) < 50)
         {
-            // Boomerang / magic axe: comes straight back into the thrower's hands.
-            var back = CreateItem(pr.SpriteShape, 0, pr.Attacker.Tx, pr.Attacker.Ty, pr.Attacker.Tz, temporary: false, place: false);
-            if (!Equipment.AddToActor(pr.Attacker, back, _catalog, _map))
+            // Boomerangs and magic axes fly back to the thrower (Exult's return_path effect).
+            var to = Centre(attacker);
+            var back = new Missile
             {
-                _map.PlaceInWorld(back, pr.Attacker.Tx, pr.Attacker.Ty, pr.Attacker.Tz);
-            }
-
+                Target = attacker,
+                Weapon = pr.Weapon,
+                WeaponShape = pr.WeaponShape,
+                AmmoShape = pr.AmmoShape,
+                SpriteShape = pr.SpriteShape,
+                AttVal = pr.AttVal,
+                Speed = pr.Speed,
+                ReturnPath = true,
+                Pos = pr.Pos,
+                Interval = pr.Interval,
+                Path = LinePath(pr.Pos, to)
+            };
+            back.Frame = MissileFrame(back.SpriteShape, back.Pos, to);
+            _missiles.Add(back);
             return;
         }
 
@@ -1466,13 +1517,289 @@ public sealed class CombatEngine
 
         if (drop && pr.SpriteShape >= 0 && _map.FindSpot(pr.Pos.Tx, pr.Pos.Ty, pr.Pos.Tz, 3) is { } spot)
         {
-            var temp = pr.Attacker.GetFlag(ObjFlag.Temporary);
+            var temp = attacker is null || attacker.GetFlag(ObjFlag.Temporary);
             var item = CreateItem(pr.SpriteShape, 0, spot.Tx, spot.Ty, spot.Tz, temp);
             item.SetFlag(ObjFlag.OkayToTake);
         }
     }
 
-    /// <summary>Create a world item (arrow on the ground, missile sprite, returned boomerang).</summary>
+    // ------------------------------------------------------------------ homing missiles
+
+    /// <summary>
+    /// Exult <c>Homing_projectile</c>: the weapon's explosion sprite, after
+    /// <paramref name="target"/> if it is an actor, else parked at
+    /// <paramref name="dest"/>, for 20 seconds; it starts at once.
+    /// </summary>
+    void StartHoming(int weapon, U7Object? attacker, U7Object? target, TileCoord start, TileCoord dest)
+    {
+        if (Effects is not { } effects)
+        {
+            return;
+        }
+
+        var sprite = ExplosionSprites.GetValueOrDefault(weapon, 5);
+        var h = new HomingMissile
+        {
+            Weapon = weapon,
+            Attacker = attacker,
+            Target = target is { IsActor: true } ? target : null,
+            Pos = start,
+            PrevPos = start,
+            Dest = dest,
+            Sprite = sprite,
+            Frames = Math.Max(1, effects.SpriteFrameCount(sprite)),
+            NextDamageMs = -1
+        };
+        h.Stationary = h.Target is null;
+        _homing.Add(h);
+        LastMessage = $"{(weapon == 639 ? "death vortex" : "energy mist")} from {NameOf(attacker)} at {start.Tx},{start.Ty},{start.Tz}";
+        GD.Print($"{LastMessage} (weapon {weapon}, sprite {sprite}, after {(h.Target is { } t ? NameOf(t) : "nothing")})");
+        if (StepHoming(h))
+        {
+            _homing.Remove(h);
+        }
+    }
+
+    void TickHoming(double delta)
+    {
+        for (var i = _homing.Count - 1; i >= 0; i--)
+        {
+            var h = _homing[i];
+            h.Timer += delta;
+            while (h.Timer >= HomingMissile.StepSeconds)
+            {
+                h.Timer -= HomingMissile.StepSeconds;
+                h.AgeMs += HomingMissile.StepMs;
+                if (StepHoming(h))
+                {
+                    _homing.Remove(h);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Homing_projectile::handle_event</c>, every 100 ms: a tile
+    /// along each axis towards the target (its tile, half its height up) or
+    /// its parking place; with its target dead, the nearest living actor
+    /// outside the party that is evil or chaotic within 30 tiles becomes the
+    /// next. Once a second everyone outside the party within half the
+    /// sprite's width is hit with the weapon, as by an explosion. Returns
+    /// true once its 20 seconds are up.
+    /// </summary>
+    bool StepHoming(HomingMissile h)
+    {
+        var width = Effects?.SpriteFrame(h.Sprite, h.Frame).Width ?? 0;
+        h.PrevPos = h.Pos;
+        if (h.Target is { IsDead: false, Removed: false } || h.Stationary)
+        {
+            var t = h.Stationary ? h.Dest : Centre(h.Target!);
+            var dx = U7Constants.TileDelta(h.Pos.Tx, t.Tx);
+            var dy = U7Constants.TileDelta(h.Pos.Ty, t.Ty);
+            var dz = t.Tz - h.Pos.Tz;
+            if (dx * dx + dy * dy + dz * dz > 1)
+            {
+                h.Pos = new TileCoord(U7Constants.WrapTile(h.Pos.Tx + Math.Sign(dx)),
+                    U7Constants.WrapTile(h.Pos.Ty + Math.Sign(dy)), h.Pos.Tz + Math.Sign(dz));
+            }
+        }
+        else
+        {
+            h.Target = null;
+            var best = 100000;
+            foreach (var npc in _map.FindNearby(h.Pos, U7Constants.AnyShape, 30, 8))
+            {
+                if (IsPartyOrAvatar(npc) || npc.IsDead || npc.Alignment < Alignment.Evil)
+                {
+                    continue;
+                }
+
+                var dx = U7Constants.TileDelta(h.Pos.Tx, npc.Tx);
+                var dy = U7Constants.TileDelta(h.Pos.Ty, npc.Ty);
+                var dz = npc.Tz - h.Pos.Tz;
+                if (dx * dx + dy * dy + dz * dz < best)
+                {
+                    best = dx * dx + dy * dy + dz * dz;
+                    h.Target = npc;
+                }
+            }
+        }
+
+        if (h.AgeMs > h.NextDamageMs)
+        {
+            h.NextDamageMs = h.AgeMs + 1000;
+            var wpn = _weapons[h.Weapon];
+            foreach (var npc in _map.FindNearby(h.Pos, U7Constants.AnyShape, width / (2 * U7Constants.TileSize), 8))
+            {
+                if (!IsPartyOrAvatar(npc) && !npc.IsDead)
+                {
+                    HitWith(h.Attacker, npc, wpn, wpn?.Damage ?? 1, _ammo[h.Weapon], h.Weapon, explosion: true);
+                }
+            }
+        }
+
+        h.Frame = (h.Frame + 1) % h.Frames;
+        return h.AgeMs >= HomingMissile.LifeMs;
+    }
+
+    bool IsPartyOrAvatar(U7Object npc) => npc == _avatar || Party?.IsInParty(npc) == true;
+
+    // ------------------------------------------------------------------ missile eggs
+
+    /// <summary>Exult <c>Missile_launcher</c>: the timer of a missile egg (type 6).</summary>
+    sealed class MissileLauncher
+    {
+        public required U7Object Egg;
+        public int Weapon;
+        /// <summary>The missile's shape.</summary>
+        public int Shape;
+        /// <summary>0-7 a direction (0 north, clockwise); 8 at a party member.</summary>
+        public int Dir;
+        public int DelayMs;
+        public int Range;
+        /// <summary>Party- and avatar-near eggs fire again and again while the avatar is in range.</summary>
+        public bool ChkRange;
+        /// <summary>In Exult's time queue, due at <see cref="Due"/>.</summary>
+        public bool Queued;
+        public double Due;
+    }
+
+    /// <summary>The tiles in view (Exult <c>get_win_tile_rect</c>), for missile eggs.</summary>
+    public Rect2I ViewTiles { get; set; }
+
+    /// <summary>
+    /// Exult <c>Missile_egg::hatch_now</c>: the egg's launcher (made the first
+    /// time: the weapon in data 1, its projectile or else the fireball 856,
+    /// direction and delay in std_delays from data 2, the weapon's range) is
+    /// queued to fire now.
+    /// </summary>
+    public void HatchMissileEgg(U7Object egg)
+    {
+        if (!_launchers.TryGetValue(egg, out var l))
+        {
+            var weapon = egg.EggData1;
+            var wpn = _weapons[weapon];
+            var proj = wpn is not null && wpn.Projectile != 0 ? wpn.Projectile == -3 ? weapon : wpn.Projectile : 856;
+            l = new MissileLauncher
+            {
+                Egg = egg,
+                Weapon = weapon,
+                Shape = proj,
+                Dir = egg.EggData2 & 0xff,
+                DelayMs = U7Constants.StandardDelayMs * (egg.EggData2 >> 8),
+                Range = wpn?.Range ?? 20,
+                ChkRange = egg.EggCriteria is EggCriteria.PartyNear or EggCriteria.AvatarNear
+            };
+            _launchers[egg] = l;
+        }
+
+        if (!l.Queued)
+        {
+            l.Queued = true;
+            l.Due = _launchClock;
+        }
+
+        LastMessage = $"missile egg at {egg.Tx},{egg.Ty},{egg.Tz}: weapon {l.Weapon}, missile {l.Shape}, " +
+                      (l.Dir < 8 ? $"direction {l.Dir}" : "at the party") + $", every {l.DelayMs} ms";
+        GD.Print(LastMessage);
+    }
+
+    /// <summary>
+    /// Exult's time queue for <c>Missile_launcher</c>: a launcher fires when due
+    /// unless its egg is more than 10 tiles off the screen or (party- and
+    /// avatar-near eggs) the avatar is out of the weapon's range, which both
+    /// stop it; those eggs then fire again after their delay. A stopped
+    /// launcher of such an egg is queued again while the egg's chunk is in
+    /// view, as Exult's <c>Missile_egg::paint</c> does.
+    /// </summary>
+    void TickLaunchers(double delta)
+    {
+        if (_launchers.Count == 0)
+        {
+            return;
+        }
+
+        _launchClock += delta;
+        foreach (var l in _launchers.Values.ToList())
+        {
+            var egg = l.Egg;
+            if (egg.Removed)
+            {
+                _launchers.Remove(egg);
+                continue;
+            }
+
+            if (!l.Queued && l.ChkRange && ChunkInView(egg))
+            {
+                l.Queued = true;
+                l.Due = _launchClock;
+            }
+
+            if (!l.Queued || _launchClock < l.Due)
+            {
+                continue;
+            }
+
+            l.Queued = false;
+            var view = ViewTiles.Grow(10);
+            if (!view.HasPoint(new Vector2I(egg.Tx, egg.Ty)) ||
+                (l.ChkRange && new TileCoord(_avatar.Tx, _avatar.Ty, _avatar.Tz).Distance(new TileCoord(egg.Tx, egg.Ty, egg.Tz)) > l.Range))
+            {
+                continue;
+            }
+
+            FireLauncher(l);
+            if (l.ChkRange)
+            {
+                l.Queued = true;
+                l.Due = _launchClock + Math.Max(1, l.DelayMs) / 1000.0;
+            }
+        }
+    }
+
+    bool ChunkInView(U7Object egg)
+    {
+        const int size = U7Constants.TilesPerChunk;
+        return ViewTiles.Intersects(new Rect2I(egg.Tx / size * size, egg.Ty / size * size, size, size));
+    }
+
+    /// <summary>
+    /// Exult <c>Missile_launcher::handle_event</c>'s shot: from the egg in its
+    /// direction as far as the weapon's range (at the egg's height, until it
+    /// runs into something), or at a party member it has a straight line to,
+    /// trying them from a random one on. Exult's default 60 attack points.
+    /// </summary>
+    void FireLauncher(MissileLauncher l)
+    {
+        const int attval = 60;
+        var egg = l.Egg;
+        var src = new TileCoord(egg.Tx, egg.Ty, egg.Tz);
+        var wpn = _weapons[l.Weapon];
+        if (l.Dir < 8)
+        {
+            var adj = src.Neighbor(l.Dir);
+            var start = new TileCoord(egg.Tx, egg.Ty, egg.Tz + egg.DimZ * 3 / 4);
+            var dest = new TileCoord(U7Constants.WrapTile(src.Tx + l.Range * U7Constants.TileDelta(src.Tx, adj.Tx)),
+                U7Constants.WrapTile(src.Ty + l.Range * U7Constants.TileDelta(src.Ty, adj.Ty)), start.Tz);
+            NewMissile(egg, null, start, dest, wpn, l.Weapon, l.Shape, l.Shape, attval);
+            return;
+        }
+
+        var party = PartyAndAvatar().ToList();
+        var n = _rng.Next(party.Count);
+        for (int cnt = party.Count, i = n; cnt > 0; cnt--, i = (i + 1) % party.Count)
+        {
+            var member = party[i];
+            if (Schedules?.IsStraightPath(src, new TileCoord(member.Tx, member.Ty, member.Tz)) == true)
+            {
+                NewMissile(null, member, src, Centre(member), wpn, l.Weapon, l.Shape, l.Shape, attval);
+                return;
+            }
+        }
+    }
+
+    /// <summary>Create a world item (arrow on the ground, returned boomerang).</summary>
     U7Object CreateItem(int shape, int frame, int tx, int ty, int tz, bool temporary, bool place = true)
     {
         var rec = _catalog[shape];
@@ -1744,7 +2071,8 @@ public sealed class CombatEngine
         return 1;
     }
 
-    static string NameOf(U7Object obj) =>
+    static string NameOf(U7Object? obj) =>
+        obj is null || obj.IsEgg ? "a trap" :
         obj.NpcNum == 0 ? "you" :
         !string.IsNullOrEmpty(obj.NpcName) ? obj.NpcName : $"shape {obj.Shape}";
 }

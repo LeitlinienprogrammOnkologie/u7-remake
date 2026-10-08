@@ -618,6 +618,28 @@ public sealed class ScheduleRunner
         return true;
     }
 
+    /// <summary>
+    /// Exult <c>Fast_pathfinder_client::is_straight_path</c> for two tiles:
+    /// no tile between them on the straight line is occupied.
+    /// </summary>
+    public bool IsStraightPath(TileCoord from, TileCoord to)
+    {
+        if (ZombieSteps.Line(from, to) is not { } line)
+        {
+            return false;
+        }
+
+        while (line.NextStep(out var t, out _))
+        {
+            if (t != from && t != to && Map.Blocking.Test(t.Tx, t.Ty, t.Tz))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>Exult <c>Game_object::get_block</c>: the object's footprint and height.</summary>
     Block Volume(U7Object obj)
     {

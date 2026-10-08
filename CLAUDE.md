@@ -65,8 +65,10 @@ godot/scripts/
   Actors/     NpcDat, ScheduleRunner (schedule ticking, slots, proximity),
               Schedules/ (one class per Exult schedule), ActorActions (Exult
               Actor_action kinds), PathWalk (Path_walking_actor_action),
-              CombatEngine, PartyManager, Equipment, Inventory, ItemQuantity,
-              ActorWalker (steps, Actor::is_blocked), tables
+              CombatEngine (also missile eggs), Missile (Exult
+              Projectile_effect, painted after the map), HomingMissile
+              (Homing_projectile), PartyManager, Equipment, Inventory,
+              ItemQuantity, ActorWalker (steps, Actor::is_blocked), tables
   World/      GameClock, EggHatcher, Pathfinder (Exult Find_path + clients),
               LightSources (Exult light rules: brightness, strength, carried
               light, light level),
@@ -77,7 +79,9 @@ godot/scripts/
               lights), WorldPalette (palette texture, colour cycling, Exult's
               special pixels), PaletteSet (PALETTES.FLX by Exult's names,
               blends), SceneLighting (final palette, lights), GlowTable (how
-              each light source looks), ShapeCache (frames by
+              each light source looks), ScreenFx (whole-screen effects:
+              usecode's fades, over the gumps and the conversation too),
+              ShapeCache (frames by
               index; RGBA shape textures for the gumps; gump, font and face
               frames)
   UI/         ConversationPanel, BarkOverlay, UiTheme
@@ -101,7 +105,10 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
    game inherits the pipe and the shell waits until it exits.
 
    - Game time is frozen between commands.
-   - Conversation text (`SAY`) and barks (`BARK`) are logged.
+   - Conversation text (`SAY`), barks (`BARK`) and fades (`FADE`) are logged.
+     Fades hold the usecode for their 20 ms steps (`UsecodeWait.Fade`,
+     as Exult's fade loop holds the game); a command ends once its fade
+     is over. `die` is F6 (the death flow, waking in Paws).
    - Object ids (`#231108`) are only usable after `look` or `find` has listed them.
    - `save <slot>` / `load <slot>` keep progress across restarts; `timer`
      lists or sets usecode timers.

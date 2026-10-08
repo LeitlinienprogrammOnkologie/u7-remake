@@ -20,7 +20,9 @@ public enum UsecodeWait
     /// <summary>Exult <c>click_to_continue</c>: text is shown; resume with <see cref="UsecodeMachine.ContinueText"/>.</summary>
     ClickToContinue,
     /// <summary>Exult <c>show_pending_text</c> in book mode: a book or scroll page is shown; resume with <see cref="UsecodeMachine.TurnBookPage"/>.</summary>
-    BookPage
+    BookPage,
+    /// <summary>Exult <c>Palette::fade</c>: the screen fades, the game stands still; <see cref="UsecodeMachine.UpdateFade"/> resumes.</summary>
+    Fade
 }
 
 /// <summary>
@@ -46,6 +48,8 @@ public sealed class UsecodeMachine
     public bool InUsecode => _callStack.Count > 0;
     public UsecodeWait Wait { get; private set; }
     public bool WaitingForChoice => Wait != UsecodeWait.None;
+    /// <summary>Waiting for the player (a click, an answer, a target), not for a fade.</summary>
+    public bool WaitingForPlayer => Wait is not (UsecodeWait.None or UsecodeWait.Fade);
     public string? UserChoice { get; private set; }
     public string StringReg { get; private set; } = "";
     public string LastIntrinsic { get; private set; } = "";
@@ -81,8 +85,16 @@ public sealed class UsecodeMachine
     public Action<U7Object>? AvatarMovedByScript { get; set; }
     /// <summary>Exult <c>set_camera</c>: the view follows this actor, or centres on this object.</summary>
     public Action<U7Object>? SetCamera { get; set; }
-    /// <summary>Exult <c>fade_palette</c>: true while the screen is faded to black.</summary>
-    public bool FadedOut { get; set; }
+    /// <summary>Exult <c>Palette::fade_in</c>/<c>fade_out</c>: milliseconds between two steps of a fade.</summary>
+    public const int FadeStepMs = 20;
+    /// <summary>Exult <c>Palette::faded_out</c>: the screen is fading or faded to black.</summary>
+    public bool FadedOut { get; private set; }
+    /// <summary>The last fade's <c>cycles</c>: it shows cycles + 1 steps, 0 = at once.</summary>
+    public int FadeCycles { get; private set; }
+    /// <summary>Milliseconds since the last fade began.</summary>
+    public double FadeMs { get; private set; }
+    /// <summary>A fade began: its cycles and whether it fades in. For the agent console.</summary>
+    public event Action<int, bool>? FadeStarted;
     /// <summary>Set by the restart_game intrinsic; the game reloads from the initial data.</summary>
     public bool RestartRequested { get; set; }
     /// <summary>Exult <c>last_created</c>: objects made or lifted by usecode, newest last.</summary>
@@ -1512,6 +1524,53 @@ public sealed class UsecodeMachine
     {
         Wait = kind;
         AnswersChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Exult <c>Palette::fade</c>: to black or back from it in
+    /// <paramref name="cycles"/> + 1 steps <see cref="FadeStepMs"/> apart.
+    /// Exult's fade loop holds up the whole game, so the usecode waits for
+    /// it (<see cref="UsecodeWait.Fade"/>), and scripts, schedules and
+    /// walking wait with it.
+    /// </summary>
+    public void StartFade(int cycles, bool fadeIn)
+    {
+        FadedOut = !fadeIn;
+        FadeCycles = Math.Max(0, cycles);
+        FadeMs = 0;
+        FadeStarted?.Invoke(FadeCycles, fadeIn);
+        if (FadeCycles > 0 && InUsecode)
+        {
+            RequestWait(UsecodeWait.Fade);
+        }
+    }
+
+    /// <summary>Advance the fade by real time; once its last step has had its 20 ms, the usecode carries on.</summary>
+    public void UpdateFade(double delta)
+    {
+        FadeMs += delta * 1000;
+        if (Wait == UsecodeWait.Fade && FadeMs >= (FadeCycles + 1) * FadeStepMs)
+        {
+            ResumeWait(UsecodeValue.FromInt(0));
+        }
+    }
+
+    /// <summary>
+    /// How bright the screen is under the fade, 0 black to 1 full colour:
+    /// Exult's step <c>i / cycles</c>, the palette scaled by it.
+    /// </summary>
+    public float FadeLevel
+    {
+        get
+        {
+            if (FadeCycles == 0)
+            {
+                return FadedOut ? 0f : 1f;
+            }
+
+            var step = Math.Min(FadeCycles, (int)(FadeMs / FadeStepMs));
+            return (float)(FadedOut ? FadeCycles - step : step) / FadeCycles;
+        }
     }
 
     public void NotifyFaces() => FacesChanged?.Invoke();

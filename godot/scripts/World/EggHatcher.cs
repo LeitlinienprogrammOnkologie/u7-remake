@@ -10,8 +10,8 @@ namespace U7.World;
 /// <summary>
 /// Activates IREG eggs when the avatar (or a dropped item) moves.
 /// Ports Exult <c>Egg_object::is_active</c> / <c>hatch</c> / <c>unhatch</c>
-/// for BG v1: teleport, usecode, jukebox, button, monster. Missile/weather
-/// are stubs. Eggs are found through the per-tile bits kept by
+/// for BG v1: teleport, usecode, jukebox, button, monster, missile. Weather
+/// is a stub. Eggs are found through the per-tile bits kept by
 /// <see cref="GameMap.EggsAt"/>, like Exult's chunk cache.
 /// </summary>
 public sealed class EggHatcher
@@ -459,6 +459,14 @@ public sealed class EggHatcher
                 HatchButton(egg, obj);
                 break;
             case EggType.Path:
+                break;
+            case EggType.Missile:
+                Combat?.HatchMissileEgg(egg);
+                if (Combat is { LastMessage.Length: > 0 })
+                {
+                    LastMessage = Combat.LastMessage;
+                }
+
                 break;
             case EggType.Monster:
                 Combat?.HatchMonsterEgg(egg);

@@ -21,8 +21,8 @@ public partial class U7Game
     const string AgentHelp =
         "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
-        "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | quit | " +
-        "save <slot> | load <slot> | tile <x> <y> [z] | arena | combat [off] | close";
+        "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | quit | die [restart] | " +
+        "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | arena | combat [off] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
     static bool _agentStarted;
@@ -64,6 +64,9 @@ public partial class U7Game
         _agentFlags0 = (byte[])_usecode.GFlags.Clone();
         _usecode.Say += text => AgentLog("SAY " + text.Replace('\n', ' '));
         _usecode.ItemSay += (obj, text) => AgentLog($"BARK {AgentName(obj)}: {text}");
+        _usecode.FadeStarted += (cycles, fadeIn) =>
+            AgentLog($"FADE {(fadeIn ? "in" : "out")}" +
+                     (cycles == 0 ? " at once" : $", {cycles + 1} steps ({(cycles + 1) * UsecodeMachine.FadeStepMs} ms)"));
         _usecode.BookPageShown += book =>
             AgentLog($"BOOK {(book is U7.Gumps.ScrollGump ? "scroll" : "book")}: " +
                      string.Join(" / ", book.Lines.Select(l => l.Text.Trim())));
@@ -98,6 +101,12 @@ public partial class U7Game
         {
             _agentElapsed += delta;
             if (_agentBusy() && _agentElapsed < _agentLimit)
+            {
+                return;
+            }
+
+            // Exult's fades hold up the game: a command is over once its fade is.
+            if (_usecode is { Wait: UsecodeWait.Fade } && _agentElapsed < _agentLimit + 10)
             {
                 return;
             }
@@ -150,6 +159,14 @@ public partial class U7Game
         {
             AgentLog($"ERROR {ex.GetType().Name}: {ex.Message}");
             _agentBusy = null;
+        }
+
+        if (_agentBusy is null && _usecode is { Wait: UsecodeWait.Fade })
+        {
+            Engine.TimeScale = 8;
+            _agentElapsed = 0;
+            _agentLimit = 0;
+            _agentBusy = () => false;
         }
 
         if (_agentBusy is null)
@@ -353,7 +370,7 @@ public partial class U7Game
                 Engine.TimeScale = 8;
                 _agentElapsed = 0;
                 _agentLimit = double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture);
-                _agentBusy = () => _usecode is not { WaitingForChoice: true };
+                _agentBusy = () => _usecode is not { WaitingForPlayer: true };
                 break;
             }
             case "timer":
@@ -436,6 +453,14 @@ public partial class U7Game
                 AgentLog($"saved {file}");
                 break;
             }
+            case "eggs":
+                AgentEggs(parts.Length > 1 ? AgentEggType(parts[1]) : -1, parts.Length > 2 ? int.Parse(parts[2]) : 40);
+                break;
+            case "die":
+                // F6 (with "restart": Shift+F6).
+                DebugDie(restart: arg == "restart");
+                AgentLog(_statusExtra);
+                break;
             case "quit":
                 // Windowed runs end this way: only headless games may be stopped from outside.
                 GetTree().Quit();
@@ -509,7 +534,7 @@ public partial class U7Game
         Engine.TimeScale = 6;
         _agentElapsed = 0;
         _agentLimit = 120;
-        _agentBusy = () => barge.IsMoving && _usecode is not { WaitingForChoice: true };
+        _agentBusy = () => barge.IsMoving && _usecode is not { WaitingForPlayer: true };
     }
 
     void AgentWalk(int tx, int ty)
@@ -525,7 +550,7 @@ public partial class U7Game
         var lastMove = 0.0;
         _agentBusy = () =>
         {
-            if (_usecode is { WaitingForChoice: true })
+            if (_usecode is { WaitingForPlayer: true })
             {
                 return false; // a conversation started on the way
             }
@@ -750,7 +775,8 @@ public partial class U7Game
         var scripts = vm.Scripts.Count(sc => sc.Obj == av && !sc.Done);
         AgentLog($"@ {av.Tx},{av.Ty},{av.Tz} {_clock.HudText()} hp {av.GetProp(ActorProp.Health)} gold {gold} party [{party}]" +
                  (ObjFlag.DontMoveMode(av) ? " (avatar flag 16/22)" : "") +
-                 (vm.InUsecodeControl(av) ? $" (avatar under usecode control, {scripts} scripts)" : ""));
+                 (vm.InUsecodeControl(av) ? $" (avatar under usecode control, {scripts} scripts)" : "") +
+                 (vm.FadedOut ? " (screen faded out)" : ""));
         if (_barges.Moving is { } moving)
         {
             AgentLog($"barge mode: barge at {moving.Obj.Tx},{moving.Obj.Ty},{moving.Obj.Tz} centre {moving.Center.Tx},{moving.Center.Ty} " +
@@ -772,12 +798,55 @@ public partial class U7Game
                 $"{e.Sprite} frame {e.Frame}/{e.Frames} at {e.Pos.Tx},{e.Pos.Ty},{e.Pos.Tz}")));
         }
 
+        if (_combat.Missiles.Count > 0)
+        {
+            AgentLog("missiles " + string.Join(", ", _combat.Missiles.Select(m =>
+                $"{m.SpriteShape} frame {m.Frame} at {m.Pos.Tx},{m.Pos.Ty},{m.Pos.Tz}" +
+                $" -> {(m.Target is { } t ? AgentName(t) : "ahead")}{(m.ReturnPath ? " (coming back)" : "")}")));
+        }
+
+        if (_combat.HomingMissiles.Count > 0)
+        {
+            AgentLog("homing " + string.Join(", ", _combat.HomingMissiles.Select(h =>
+                $"sprite {h.Sprite} frame {h.Frame} at {h.Pos.Tx},{h.Pos.Ty},{h.Pos.Tz} {h.AgeMs / 1000.0:0.0}s" +
+                $" -> {(h.Target is { } t ? AgentName(t) : h.Stationary ? "parked" : "looking")}")));
+        }
+
         if (vm.WaitingForChoice)
         {
             AgentLog($"WAIT {vm.Wait}" + (vm.Wait == UsecodeWait.ClickToContinue ? $": {vm.Conv.NpcText.Replace('\n', ' ')}" : "") +
                      (vm.Wait is UsecodeWait.Converse or UsecodeWait.SelectMenu or UsecodeWait.SelectMenuIndex
                          ? $"  answers: {string.Join(" | ", vm.Conv.Answers)}"
                          : ""));
+        }
+    }
+
+    static readonly string[] AgentCriteria =
+        ["cached in", "party near", "avatar near", "avatar far", "avatar footpad", "party footpad", "something on", "external"];
+
+    /// <summary>An egg type by number or by name (missile, usecode, ...).</summary>
+    static int AgentEggType(string arg) =>
+        int.TryParse(arg, out var n) ? n : Array.IndexOf(U7.World.EggType.Names, arg.ToLowerInvariant());
+
+    /// <summary>The eggs within <paramref name="radius"/> tiles of the avatar (of one type, or all): criteria, chance, data, state.</summary>
+    void AgentEggs(int type, int radius)
+    {
+        var av = _avatar.Avatar;
+        var here = new TileCoord(av.Tx, av.Ty, av.Tz);
+        var eggs = _map.EggsNear(av.Tx, av.Ty, radius)
+            .Where(e => !e.Removed && (type < 0 || e.EggType == type) &&
+                        here.Distance2d(new TileCoord(e.Tx, e.Ty, e.Tz)) <= radius)
+            .OrderBy(AgentDist)
+            .ToList();
+        AgentLog($"{eggs.Count} eggs within {radius}" + (type >= 0 ? $" of type {U7.World.EggType.Name(type)}" : "") + ":");
+        foreach (var e in eggs.Take(40))
+        {
+            _agentIds[e.Id] = e;
+            var crit = (uint)e.EggCriteria < (uint)AgentCriteria.Length ? AgentCriteria[e.EggCriteria] : $"{e.EggCriteria}";
+            AgentLog($"  #{e.Id} {U7.World.EggType.Name(e.EggType)} egg (shape {e.Shape}:{e.Frame}) at {e.Tx},{e.Ty},{e.Tz} d={AgentDist(e)}" +
+                     $" {crit} dist {e.EggDistance} prob {e.EggProbability} d1 0x{e.EggData1:X4} d2 0x{e.EggData2:X4}" +
+                     ((e.EggFlags & U7.World.EggFlag.Hatched) != 0 ? " hatched" : "") +
+                     ((e.EggFlags & U7.World.EggFlag.Once) != 0 ? " once" : ""));
         }
     }
 

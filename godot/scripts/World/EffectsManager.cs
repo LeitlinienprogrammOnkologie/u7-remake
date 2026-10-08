@@ -85,6 +85,8 @@ public sealed class EffectsManager
     /// <summary>The size of a SPRITES.VGA frame.</summary>
     public FrameInfo SpriteFrame(int sprite, int frame) => _spritesVga.Get(sprite, frame);
 
+    public int SpriteFrameCount(int sprite) => _spritesVga.FrameCount(sprite);
+
     /// <summary>Exult <c>Sprites_effect(num, tile, dx, dy, delay, frm, rps)</c>.</summary>
     public SpriteEffect AddSprite(int num, TileCoord pos, int dx = 0, int dy = 0, int delayMs = 0, int frame = 0, int reps = -1) =>
         Add(new SpriteEffect

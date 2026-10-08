@@ -113,6 +113,10 @@ public partial class WorldView : Node2D
     public ShapeCache Shapes = null!;
     public U7Object Avatar = null!;
     public U7.World.EffectsManager? Effects;
+    /// <summary>Missiles in flight (Exult's projectile effects), painted after the map.</summary>
+    public IReadOnlyList<U7.Actors.Missile>? Missiles;
+    /// <summary>Death vortices and energy mists (Exult's homing projectiles), painted after the map.</summary>
+    public IReadOnlyList<U7.Actors.HomingMissile>? HomingMissiles;
     /// <summary>The palettes and lights to show the frame with.</summary>
     public SceneLighting? Lighting;
     public int SkipAboveLift = U7Constants.NoRoof;
@@ -124,6 +128,12 @@ public partial class WorldView : Node2D
     /// <c>rotate_colors</c>), such as picking a target.
     /// </summary>
     public bool RotateColors = true;
+    /// <summary>
+    /// Keep showing the last frame. While Exult fades out, its game stands
+    /// still, and once the screen is black what it paints is black; so a
+    /// teleport after a fade-out is not seen before the fade-in.
+    /// </summary>
+    public bool Frozen;
 
     readonly IndexBuffer8 _buffer = new();
     readonly Dictionary<int, LinkedListNode<(int Terrain, byte[] Pixels)>> _flats = new();
@@ -153,13 +163,22 @@ public partial class WorldView : Node2D
 
     public override void _Process(double delta)
     {
-        QueueRedraw();
+        if (!Frozen)
+        {
+            QueueRedraw();
+        }
     }
 
     public override void _Draw()
     {
         if (Map is null || Avatar is null)
         {
+            return;
+        }
+
+        if (Frozen && _texture is not null)
+        {
+            DrawTexture(_texture, new Vector2(_originX, _originY));
             return;
         }
 
@@ -241,6 +260,8 @@ public partial class WorldView : Node2D
             PaintDungeonBlackness(c0x, c0y, c1x, c1y);
         }
 
+        PaintMissiles();
+        PaintHoming();
         PaintSprites();
 
         // Exult paints text effects after the map; the bark overlay draws these on screen.
@@ -605,6 +626,76 @@ public partial class WorldView : Node2D
         }
 
         return actor.GetFlag(U7.Actors.ObjFlag.Poisoned) ? _palette.Poison : null;
+    }
+
+    /// <summary>
+    /// Exult <c>Projectile_effect::paint</c>, after the map: the frame's
+    /// hotspot at the tile's corner, raised by half the lift in pixels
+    /// (<c>tx*8 - 4tz</c>), translucent if its shape is. Where Exult's missile
+    /// jumps to its next tile every 100 ms, this one glides there in between
+    /// (only the picture: the flight's rules see whole tiles).
+    /// </summary>
+    void PaintMissiles()
+    {
+        if (Missiles is null)
+        {
+            return;
+        }
+
+        const int tile = U7Constants.TileSize;
+        foreach (var m in Missiles)
+        {
+            if (m.Frame < 0 || Shapes.GetFrame8(m.SpriteShape, m.Frame) is not { } frame)
+            {
+                continue;
+            }
+
+            var from = m.Pos;
+            var to = m.Next;
+            var f = m.Fraction;
+            var lift = 4 * (to.Tz - from.Tz);
+            var x = from.Tx * tile - 4 * from.Tz + (int)Math.Round((U7Constants.TileDelta(from.Tx, to.Tx) * tile - lift) * f);
+            var y = from.Ty * tile - 4 * from.Tz + (int)Math.Round((U7Constants.TileDelta(from.Ty, to.Ty) * tile - lift) * f);
+            if (Catalog[m.SpriteShape].Translucent)
+            {
+                _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms);
+            }
+            else
+            {
+                _buffer.PaintRle(frame, x - _originX, y - _originY);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Homing_projectile::paint</c>: its SPRITES.VGA frame where a
+    /// missile's would be (<c>tx*8 - 4tz</c>), translucent like every sprite.
+    /// Where Exult's moves a tile every 100 ms, this one glides from its last
+    /// tile to the new one in between (only the picture).
+    /// </summary>
+    void PaintHoming()
+    {
+        if (HomingMissiles is null)
+        {
+            return;
+        }
+
+        const int tile = U7Constants.TileSize;
+        foreach (var h in HomingMissiles)
+        {
+            if (Shapes.GetSprite8(h.Sprite, h.Frame) is not { } frame)
+            {
+                continue;
+            }
+
+            var from = h.PrevPos;
+            var to = h.Pos;
+            var f = h.Fraction;
+            var lift = 4 * (to.Tz - from.Tz);
+            var x = from.Tx * tile - 4 * from.Tz + (int)Math.Round((U7Constants.TileDelta(from.Tx, to.Tx) * tile - lift) * f);
+            var y = from.Ty * tile - 4 * from.Tz + (int)Math.Round((U7Constants.TileDelta(from.Ty, to.Ty) * tile - lift) * f);
+            _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms);
+        }
     }
 
     /// <summary>
