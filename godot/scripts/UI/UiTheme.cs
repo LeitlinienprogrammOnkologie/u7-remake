@@ -6,6 +6,12 @@ namespace U7.UI;
 public static class UiTheme
 {
     public const string FontPath = "res://fonts/MedievalSharp.ttf";
+    /// <summary>
+    /// The .ttf as Godot imports it (the settings in its .import file), saved
+    /// as a plain resource: game runs need no editor import, so every machine
+    /// shows the same font. Re-save it after changing the import settings.
+    /// </summary>
+    public const string BakedFontPath = "res://fonts/MedievalSharp.res";
 
     public static readonly Color Gold = new(0.86f, 0.70f, 0.38f);
     public static readonly Color GoldBright = new(1f, 0.87f, 0.55f);
@@ -18,14 +24,14 @@ public static class UiTheme
 
     static Font? _font;
 
-    /// <summary>MedievalSharp (SIL OFL, see fonts/OFL.txt); read from the file when it is not imported yet.</summary>
+    /// <summary>MedievalSharp (SIL OFL, see fonts/OFL.txt): the baked resource, else read from the .ttf as it is.</summary>
     public static Font Font => _font ??= LoadFont();
 
     static Font LoadFont()
     {
-        if (ResourceLoader.Exists(FontPath) && ResourceLoader.Load<FontFile>(FontPath) is { } imported)
+        if (ResourceLoader.Exists(BakedFontPath) && ResourceLoader.Load<FontFile>(BakedFontPath) is { } baked)
         {
-            return imported;
+            return baked;
         }
 
         var font = new FontFile();
