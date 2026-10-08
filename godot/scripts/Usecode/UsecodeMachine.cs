@@ -23,7 +23,7 @@ public enum UsecodeWait
     BookPage,
     /// <summary>Exult <c>Palette::fade</c>: the screen fades, the game stands still; <see cref="UsecodeMachine.UpdateFade"/> resumes.</summary>
     Fade,
-    /// <summary>Exult <c>Get_click</c> over a picture (<c>display_map</c>, <c>display_area</c>); resume with <see cref="UsecodeMachine.ClosePicture"/>.</summary>
+    /// <summary>Exult <c>Get_click</c> over a picture (<c>display_map</c>, <c>display_area</c>, <c>display_runes</c>); resume with <see cref="UsecodeMachine.ClosePicture"/>.</summary>
     Picture,
     /// <summary>Exult <c>Wizard_eye</c>: the game runs while the player looks about; <see cref="UsecodeMachine.EndWizardEye"/> resumes.</summary>
     WizardEye
@@ -1542,10 +1542,22 @@ public sealed class UsecodeMachine
     /// <summary>What <c>display_map</c> or <c>display_area</c> shows while the usecode waits for a click.</summary>
     public UsecodePicture? Picture { get; private set; }
 
+    /// <summary>The sign <c>display_runes</c> shows while the usecode waits for a click.</summary>
+    public SignGump? Sign { get; private set; }
+
     /// <summary>Exult <c>Get_click</c> with a picture painted: show it and wait.</summary>
     public void ShowPicture(UsecodePicture picture)
     {
         Picture = picture;
+        Sign = null;
+        RequestWait(UsecodeWait.Picture);
+    }
+
+    /// <summary>Exult <c>display_runes</c>' <c>Get_click</c> with the sign painted.</summary>
+    public void ShowSign(SignGump sign)
+    {
+        Picture = null;
+        Sign = sign;
         RequestWait(UsecodeWait.Picture);
     }
 
@@ -1559,6 +1571,7 @@ public sealed class UsecodeMachine
 
         var area = Picture?.Area is not null;
         Picture = null;
+        Sign = null;
         if (area)
         {
             ViewRecentred?.Invoke();

@@ -132,10 +132,108 @@ public class ActorPathClient(GameMap map, U7Object npc, int dist = 0, bool ignor
     }
 
     // Exult only wraps the negative side.
-    static int Unwrap(int d) => d < -U7Constants.NumTiles / 2 ? d + U7Constants.NumTiles : Math.Abs(d);
+    protected static int Unwrap(int d) => d < -U7Constants.NumTiles / 2 ? d + U7Constants.NumTiles : Math.Abs(d);
 
     public override bool AtGoal(TileCoord tile, TileCoord goal) =>
         (goal.Tz == -1 ? tile.Distance2d(goal) : tile.Distance(goal)) <= dist;
+}
+
+/// <summary>
+/// Exult <c>Onecoord_pathfinder_client</c>: an actor walking to a line, the
+/// goal's x or its y (the other -1), estimated at 2 a tile.
+/// </summary>
+public sealed class OnecoordPathClient(GameMap map, U7Object npc, bool ignoreNpcs = false)
+    : ActorPathClient(map, npc, 0, ignoreNpcs)
+{
+    public override int EstimateCost(TileCoord from, TileCoord to) =>
+        to.Tx == -1 ? 2 * Unwrap(to.Ty - from.Ty)
+        : to.Ty == -1 ? 2 * Unwrap(to.Tx - from.Tx)
+        : base.EstimateCost(from, to);
+
+    public override bool AtGoal(TileCoord tile, TileCoord goal) =>
+        (goal.Tx == -1 || tile.Tx == goal.Tx) && (goal.Ty == -1 || tile.Ty == goal.Ty) &&
+        (goal.Tz == -1 || tile.Tz == goal.Tz);
+}
+
+/// <summary>
+/// Exult <c>Offscreen_pathfinder_client</c>: an actor's way off the screen
+/// (the window in tiles enlarged by 3), towards the best point if one is
+/// given and not too far off: penalised for steps away from it.
+/// </summary>
+public sealed class OffscreenPathClient : ActorPathClient
+{
+    readonly Rect2I _screen;
+    readonly TileCoord? _best;
+
+    public OffscreenPathClient(GameMap map, U7Object npc, Rect2I window, TileCoord? best = null, bool ignoreNpcs = false)
+        : base(map, npc, 0, ignoreNpcs)
+    {
+        _screen = window.Grow(3);
+        if (best is not { } b)
+        {
+            return;
+        }
+
+        // Scale (roughly) to the edge of the screen; give up beyond 4 screens or if it doesn't look right.
+        var cx = window.Position.X + window.Size.X / 2;
+        var cy = window.Position.Y + window.Size.Y / 2;
+        var centre = new TileCoord(cx, cy, 0);
+        if (b.Distance2d(centre) > 4 * window.Size.X)
+        {
+            return;
+        }
+
+        var tx = b.Tx > cx + window.Size.X ? window.End.X + 1 : b.Tx < cx - window.Size.X ? window.Position.X - 1 : b.Tx;
+        var ty = b.Ty > cy + window.Size.Y ? window.End.Y + 1 : b.Ty < cy - window.Size.Y ? window.Position.Y - 1 : b.Ty;
+        var scaled = new TileCoord(tx, ty, b.Tz);
+        if (scaled.Distance2d(centre) <= window.Size.X)
+        {
+            _best = scaled;
+        }
+    }
+
+    public override int GetStepCost(TileCoord from, ref TileCoord to)
+    {
+        var cost = base.GetStepCost(from, ref to);
+        if (cost == -1 || _best is not { } best)
+        {
+            return cost;
+        }
+
+        if ((to.Tx - from.Tx) * (best.Tx - from.Tx) < 0)
+        {
+            cost++;
+        }
+
+        if ((to.Ty - from.Ty) * (best.Ty - from.Ty) < 0)
+        {
+            cost++;
+        }
+
+        return cost;
+    }
+
+    public override int EstimateCost(TileCoord from, TileCoord to)
+    {
+        if (_best is { } best)
+        {
+            return base.EstimateCost(from, best);
+        }
+
+        var dx = Math.Min(from.Tx - _screen.Position.X, _screen.End.X - from.Tx);
+        var dy = Math.Min(from.Ty - _screen.Position.Y, _screen.End.Y - from.Ty);
+        var cost = Math.Max(0, Math.Min(dx, dy));
+        if (to.Tz != -1 && from.Tz != to.Tz)
+        {
+            cost++;
+        }
+
+        return 2 * cost;
+    }
+
+    /// <summary>Off the screen (the lift shifts a tile half a tile up-left a lift, as it is drawn).</summary>
+    public override bool AtGoal(TileCoord tile, TileCoord goal) =>
+        !Pathfinder.HasTile(_screen, tile.Tx - tile.Tz / 2, tile.Ty - tile.Tz / 2);
 }
 
 /// <summary>
@@ -395,6 +493,11 @@ public sealed class MonsterPathClient : FastPathClient
 /// </summary>
 public static class Pathfinder
 {
+    /// <summary>Exult <c>TileRect::has_world_point</c>: the tile is in the rectangle, across the world's wrap.</summary>
+    public static bool HasTile(Rect2I rect, int tx, int ty) =>
+        U7Constants.TileDelta(rect.Position.X, tx) is var dx && dx >= 0 && dx < rect.Size.X &&
+        U7Constants.TileDelta(rect.Position.Y, ty) is var dy && dy >= 0 && dy < rect.Size.Y;
+
     /// <summary>Exult <c>gwin->get_width() / c_tilesize</c>: the game window's width in tiles.</summary>
     public static int ScreenTilesWide { get; set; } = 40;
 

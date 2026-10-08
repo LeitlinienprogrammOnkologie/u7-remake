@@ -272,8 +272,24 @@ public partial class U7Game
             case "talk":
             case "use":
             {
+                // As the mouse (ActivateUnderMouse): nothing new starts while usecode runs or waits.
+                if (_usecode!.InUsecode || _usecode.WaitingForChoice)
+                {
+                    AgentLog("usecode is running (finish it first)");
+                    break;
+                }
+
                 var target = AgentTarget(arg) ?? throw new ArgumentException("no such object/npc");
                 AgentUse(target);
+                break;
+            }
+            case "drop":
+            {
+                // A drag out of a gump onto a tile (the whole stack): it lands there and sets off eggs under it.
+                var item = AgentTarget(parts[1]) ?? throw new ArgumentException("no such object");
+                _map.PlaceInWorld(item, int.Parse(parts[2]), int.Parse(parts[3]), parts.Length > 4 ? int.Parse(parts[4]) : 0);
+                _gumps.DroppedInWorld?.Invoke(item);
+                AgentLog($"dropped {AgentDescribe(item)}");
                 break;
             }
             case "eye":
@@ -431,8 +447,15 @@ public partial class U7Game
             }
             case "steer":
             {
-                // Hold a walking direction (n, ne, e, ...) for a while, like a held key or button.
-                var dir = Array.IndexOf(["n", "ne", "e", "se", "s", "sw", "w", "nw"], parts[1]);
+                // Hold a walking direction (n, ne, e, ... or 0-7) for a while, like a held key or button.
+                var dir = int.TryParse(parts[1], out var dirNum)
+                    ? dirNum & 7
+                    : Array.IndexOf(["n", "ne", "e", "se", "s", "sw", "w", "nw"], parts[1]);
+                if (dir < 0)
+                {
+                    throw new ArgumentException($"no direction '{parts[1]}' (n, ne, e, se, s, sw, w, nw or 0-7)");
+                }
+
                 var secs = double.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture);
                 var speed = parts.Length > 3 ? int.Parse(parts[3]) : WalkSpeed.Keyboard(false, false, false);
                 var step = new TileCoord(0, 0, 0).Neighbor(dir);
@@ -587,6 +610,12 @@ public partial class U7Game
                 _gumps.CloseAll();
                 break;
             case "save":
+                if (_usecode!.InUsecode || _usecode.WaitingForChoice)
+                {
+                    AgentLog("usecode is running (finish it first)");
+                    break;
+                }
+
                 SaveGame.Write(arg, _map, _npcs, _usecode, _clock, _combat.InCombat, _music, _combat.Spawned, _combat.Armageddon);
                 AgentLog($"saved to {SaveGame.SlotDir(arg)}");
                 break;
@@ -661,8 +690,8 @@ public partial class U7Game
 
     void AgentUse(U7Object obj)
     {
-        // The console attacks enemies straight away (a player turns combat on first).
-        if (obj.IsActor && CombatEngine.IsEnemy(_avatar.Avatar.Alignment, obj.Alignment))
+        // Exult Game_window::double_clicked: in combat mode an enemy is attacked; otherwise its usecode runs.
+        if (_combat.InCombat && obj.IsActor && CombatEngine.IsEnemy(_avatar.Avatar.Alignment, obj.Alignment))
         {
             _combat.AttackClicked(obj);
             AgentLog(_combat.LastMessage);
@@ -919,6 +948,9 @@ public partial class U7Game
                          ? $": sprite {pic.Sprite}:{pic.Frame}" + (pic.Mark is { } mark ? $", mark at {mark.X},{mark.Y}" : "") +
                            (pic.Area is { } at ? $", view at {at.Tx},{at.Ty}" : "") +
                            (vm.Wait == UsecodeWait.WizardEye ? $", {vm.WizardEyeMs / 1000:0.0} s left" : "")
+                         : "") +
+                     (vm is { Wait: UsecodeWait.Picture, Sign: { } sign }
+                         ? $": sign {sign.GumpShape}: {string.Join(" / ", sign.Lines)} ({string.Join(" / ", sign.Lines.Select(Gumps.SignGump.Readable))})"
                          : "") +
                      (vm.Wait is UsecodeWait.Converse or UsecodeWait.SelectMenu or UsecodeWait.SelectMenuIndex
                          ? $"  answers: {string.Join(" | ", vm.Conv.Answers)}"

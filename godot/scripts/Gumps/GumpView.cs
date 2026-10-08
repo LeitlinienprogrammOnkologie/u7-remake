@@ -18,6 +18,8 @@ public partial class GumpView : Node2D
     public float Zoom = 4f;
     /// <summary>The book or scroll whose page the usecode waits on; Exult paints it over everything.</summary>
     public Func<TextGump?>? ShownBook;
+    /// <summary>The sign the usecode waits on (<c>display_runes</c>); Exult paints it over everything.</summary>
+    public Func<SignGump?>? ShownSign;
     /// <summary>The picture the usecode waits on (the map, a view elsewhere); Exult paints it over everything.</summary>
     public Func<U7.Usecode.UsecodePicture?>? ShownPicture;
     /// <summary>Exult <c>Paint_map</c>'s mark colour, a palette index.</summary>
@@ -66,6 +68,52 @@ public partial class GumpView : Node2D
         {
             PaintPicture(picture);
         }
+
+        if (ShownSign?.Invoke() is { } sign)
+        {
+            PaintSign(sign);
+        }
+    }
+
+    /// <summary>
+    /// A sign is read like a book, at the largest whole scale that fits the
+    /// window, centred (Exult <c>Gump::set_pos</c>). Runes are translated
+    /// beneath it in the UI font, gold on dark wood: the user's pick
+    /// (2026-10-08) of runes alone, Exult's letters on the sign, and this.
+    /// The sign then keeps 72% of the height and moves up by 8% of it.
+    /// </summary>
+    void PaintSign(SignGump sign)
+    {
+        var view = GetViewport().GetVisibleRect().Size;
+        var fi = Shapes.GetGumpFrame(sign.GumpShape, 0);
+        if (fi.Width <= 0 || fi.Height <= 0)
+        {
+            return;
+        }
+
+        var translation = sign.Translation;
+        var scale = Math.Max(1, (int)Math.Min(view.X * 0.95f / fi.Width, view.Y * (translation is null ? 0.95f : 0.72f) / fi.Height));
+        DrawSetTransform(Vector2.Zero, 0, new Vector2(scale, scale));
+        var x = ((int)(view.X / scale) - fi.Width) / 2 + fi.XLeft;
+        var y = ((int)(view.Y / scale) - fi.Height) / 2 + fi.YAbove - (translation is null ? 0 : (int)(view.Y * 0.08f / scale));
+        sign.Paint(this, x, y, fi);
+        if (translation is not null)
+        {
+            DrawSetTransform(Vector2.Zero, 0, Vector2.One);
+            PaintTranslation(translation, (y - fi.YAbove + fi.Height) * scale + view.Y * 0.03f, view);
+        }
+    }
+
+    /// <summary>A sign's text in letters, in a dark wood box 60% of the window wide, below <paramref name="top"/>.</summary>
+    void PaintTranslation(string text, float top, Vector2 view)
+    {
+        var size = Math.Max(18, (int)(view.Y * 0.035f));
+        var font = U7.UI.UiTheme.Font;
+        var width = view.X * 0.6f;
+        var lines = Math.Max(1, (int)Math.Ceiling(font.GetStringSize(text, HorizontalAlignment.Left, -1, size).X / width));
+        DrawRect(new Rect2(view.X * 0.2f, top, width, lines * size * 1.25f + size * 0.6f), U7.UI.UiTheme.Wood);
+        DrawMultilineString(font, new Vector2(view.X * 0.2f, top + size * 1.05f), text, HorizontalAlignment.Center, width, size,
+            -1, U7.UI.UiTheme.Gold);
     }
 
     /// <summary>

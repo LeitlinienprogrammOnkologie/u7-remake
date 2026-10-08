@@ -425,6 +425,7 @@ public partial class U7Game : Node2D
             _conversation.Machine = _usecode;
             _gumpView.ShownBook = () => _usecode is { Wait: UsecodeWait.BookPage } vm ? vm.Book : null;
             _gumpView.ShownPicture = () => _usecode is { Wait: UsecodeWait.Picture or UsecodeWait.WizardEye } vm ? vm.Picture : null;
+            _gumpView.ShownSign = () => _usecode is { Wait: UsecodeWait.Picture } vm ? vm.Sign : null;
             _usecode.ViewTile = tile =>
             {
                 _viewTile = tile;
@@ -1233,6 +1234,19 @@ public partial class U7Game : Node2D
             return;
         }
 
+        // Exult Game_window::double_clicked: a thing (not an actor) out of the
+        // avatar's reach is refused, and an avatar that cannot act uses nothing.
+        if (!obj.IsActor && !FastPathClient.IsGrabable(_map, _avatar.Avatar, obj))
+        {
+            _statusExtra = "blocked";
+            return;
+        }
+
+        if (!CombatSchedule.CanAct(_avatar.Avatar))
+        {
+            return;
+        }
+
         if (_combat.InCombat && CombatClick(obj))
         {
             return;
@@ -1283,10 +1297,18 @@ public partial class U7Game : Node2D
             return;
         }
 
-        // Exult Actor::activate: under a Time Stop only the party answers.
-        if (obj.IsActor && obj != _avatar.Avatar && !_party.IsInParty(obj) && _clock.TimeStopped)
+        // Exult Actor::activate: an NPC asleep, fighting outside the party, or
+        // under a Time Stop outside the party, doesn't answer.
+        if (obj.IsActor && obj != _avatar.Avatar)
         {
-            return;
+            var inParty = _party.IsInParty(obj);
+            if ((obj.ScheduleType == ScheduleType.Sleep && (obj.Frame & 0xf) == ActorWalker.SleepFrame) ||
+                obj.GetFlag(ObjFlag.Asleep) ||
+                (obj.ScheduleType == ScheduleType.Combat && !inParty) ||
+                (!inParty && _clock.TimeStopped))
+            {
+                return;
+            }
         }
 
         var fun = obj.NpcNum >= 0 ? obj.GetUsecode() : UsecodeMachine.GetItemFun(obj);

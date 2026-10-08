@@ -63,7 +63,8 @@ public static class NpcDat
         var spawned = 0;
         for (var i = 0; i < count; i++)
         {
-            var dest = i == 0 ? avatar : new U7Object();
+            // An actor before its inventory is read: what it carries is readied (Exult Actor::add).
+            var dest = i == 0 ? avatar : new U7Object { IsActor = true, Kind = ObjectKind.Actor };
             if (i == 0)
             {
                 // Its place, shape and size change: out of the world meanwhile.
@@ -397,7 +398,7 @@ public static class NpcDat
         var count = r.U2();
         for (var i = 0; i < count && r.I < r.D.Length; i++)
         {
-            var m = new U7Object { NpcNum = -1, IsMonster = true };
+            var m = new U7Object { NpcNum = -1, IsMonster = true, IsActor = true, Kind = ObjectKind.Actor };
             ReadActor(r, m, MonsterNum, map, fixFirst: false);
             m.NpcNum = -1;
             m.IsActor = true;

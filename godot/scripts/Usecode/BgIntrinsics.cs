@@ -1026,7 +1026,7 @@ public sealed class BgIntrinsics
     {
         var pos = new TileCoord((int)p[0].GetElem(0).IntValue, (int)p[0].GetElem(1).IntValue, (int)p[0].GetElem(2).IntValue);
         var state = (int)p[1].IntValue;
-        var brit = _vm.Map.FindNearby(pos, PlanetBritannia, 24, 0xb0)
+        var brit = _vm.Map.FindNearbyExult(pos, PlanetBritannia, 24, 0xb0)
             .OrderBy(o => Math.Max(Math.Abs(o.Tx - pos.Tx), Math.Abs(o.Ty - pos.Ty)))
             .FirstOrDefault();
         if (brit is null || state is < 0 or > 9)
@@ -1034,7 +1034,7 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
-        foreach (var planet in _vm.Map.FindNearby(new TileCoord(brit.Tx, brit.Ty, brit.Tz), Planets, 24))
+        foreach (var planet in _vm.Map.FindNearbyExult(new TileCoord(brit.Tx, brit.Ty, brit.Tz), Planets, 24, 0))
         {
             if (planet.Frame <= 7)
             {
@@ -1150,7 +1150,7 @@ public sealed class BgIntrinsics
 
         if (_vm.Avatar is { } av)
         {
-            foreach (var act in _vm.Map.FindNearby(new TileCoord(av.Tx, av.Ty, av.Tz), U7Constants.AnyShape, 40, 0x28))
+            foreach (var act in _vm.Map.FindNearbyExult(new TileCoord(av.Tx, av.Ty, av.Tz), U7Constants.AnyShape, 40, 0x28))
             {
                 if (act is { IsActor: true, IsMonster: true })
                 {
@@ -1380,26 +1380,24 @@ public sealed class BgIntrinsics
         return Zero();
     }
 
+    /// <summary>
+    /// Exult <c>UI_display_runes(gump, lines)</c>: a sign, tombstone or plaque
+    /// (<see cref="Gumps.SignGump"/>) until a click; an avatar who can read
+    /// runes (the read flag) sees the lines in letters.
+    /// </summary>
     UsecodeValue DisplayRunes(UsecodeValue[] p)
     {
-        var sb = new System.Text.StringBuilder();
         var text = p[1];
-        var cnt = text.IsArray ? text.ArraySize : 1;
+        var cnt = text.IsArray ? Math.Max(1, text.ArraySize) : 1;
+        var canRead = _vm.Avatar?.GetFlag(ObjFlag.Read) == true;
+        var lines = new string[cnt];
         for (var i = 0; i < cnt; i++)
         {
-            var line = (text.IsArray ? text.GetElem(i) : text).StrValue ?? "";
-            if (i > 0)
-            {
-                sb.Append('\n');
-            }
-
-            sb.Append(line);
+            var line = (text.IsArray && text.ArraySize > 0 ? text.GetElem(i) : text).StrValue ?? "";
+            lines[i] = canRead ? Gumps.SignGump.Readable(line) : line;
         }
 
-        var shown = sb.ToString();
-        _vm.ShowText(shown);
-        _vm.Conv.TextFace = -1;
-        _vm.RequestWait(UsecodeWait.ClickToContinue);
+        _vm.ShowSign(new Gumps.SignGump((int)p[0].IntValue, lines));
         return Zero();
     }
 
@@ -1427,33 +1425,59 @@ public sealed class BgIntrinsics
         return Zero();
     }
 
+    /// <summary>Exult <c>UI_npc_nearby(item)</c>: on the screen (the view in tiles) and, an actor, able to act.</summary>
     UsecodeValue NpcNearby(UsecodeValue[] p)
     {
-        var obj = _vm.GetItem(p[0]);
-        if (obj is null)
+        if (_vm.GetItem(p[0]) is not { } obj)
         {
             return Zero();
         }
 
-        var dist = new TileCoord(obj.Tx, obj.Ty, obj.Tz)
-            .Distance2d(new TileCoord(_vm.Avatar.Tx, _vm.Avatar.Ty, _vm.Avatar.Tz));
-        return UsecodeValue.FromInt(dist <= U7Constants.NpcActivityDist ? 1 : 0);
+        var near = U7.World.Pathfinder.HasTile(_vm.Combat?.ViewTiles ?? default, obj.Tx, obj.Ty) &&
+                   (!obj.IsActor || CombatSchedule.CanAct(obj));
+        return UsecodeValue.FromInt(near ? 1 : 0);
     }
 
-    UsecodeValue FindNearbyAvatar(UsecodeValue[] p)
-    {
-        var shape = (int)(p[0].IsArray ? p[0].GetElem0().IntValue : p[0].IntValue);
-        var origin = new TileCoord(_vm.Avatar.Tx, _vm.Avatar.Ty, _vm.Avatar.Tz);
-        return NearbyArray(_vm.Map.FindNearby(origin, shape, 192, 0));
-    }
+    /// <summary>Exult <c>UI_find_nearby_avatar(shape)</c>: <c>find_nearby</c> round the avatar, 192 tiles (for the Test of Love's tree), mask 0.</summary>
+    UsecodeValue FindNearbyAvatar(UsecodeValue[] p) =>
+        NearbyArray(FindNearbyFor(UsecodeValue.FromObject(_vm.Avatar), p[0], 192, 0));
 
-    UsecodeValue FindNearby(UsecodeValue[] p)
+    /// <summary>Exult <c>UI_find_nearby(where, shape, dist, mask)</c>.</summary>
+    UsecodeValue FindNearby(UsecodeValue[] p) =>
+        NearbyArray(FindNearbyFor(p[0], p[1], (int)p[2].IntValue, p.Length > 3 ? (int)p[3].IntValue : 0));
+
+    /// <summary>
+    /// Exult <c>Usecode_internal::find_nearby</c>: round a click's result
+    /// (object, x, y, z), a position (x, y, z, with quality and frame as a
+    /// 4th and 5th), or an object (its outermost container), with Exult's
+    /// mask (<see cref="GameMap.FindNearbyExult"/>).
+    /// </summary>
+    List<U7Object> FindNearbyFor(UsecodeValue where, UsecodeValue shapeval, int dist, int mask)
     {
-        var shape = (int)(p[1].IsArray ? p[1].GetElem0().IntValue : p[1].IntValue);
-        var dist = (int)p[2].IntValue;
-        var mask = p.Length > 3 ? (int)p[3].IntValue : 0;
-        var origin = PositionOf(p[0]);
-        return NearbyArray(_vm.Map.FindNearby(origin, shape, dist, mask));
+        var shape = (int)(shapeval.IsArray ? shapeval.GetElem0().IntValue : shapeval.IntValue);
+        var size = where.IsArray ? where.ArraySize : 0;
+        if (size == 4)
+        {
+            return _vm.Map.FindNearbyExult(new TileCoord((int)where.GetElem(1).IntValue, (int)where.GetElem(2).IntValue,
+                (int)where.GetElem(3).IntValue), shape, dist, mask);
+        }
+
+        if (size is 3 or 5)
+        {
+            return _vm.Map.FindNearbyExult(
+                new TileCoord((int)where.GetElem(0).IntValue, (int)where.GetElem(1).IntValue, (int)where.GetElem(2).IntValue),
+                shape, dist, mask,
+                size == 5 ? (int)where.GetElem(3).IntValue : U7Constants.AnyShape,
+                size == 5 ? (int)where.GetElem(4).IntValue : U7Constants.AnyShape);
+        }
+
+        if (_vm.GetItem(where) is not { } obj)
+        {
+            return [];
+        }
+
+        var outer = Inventory.Outermost(obj);
+        return _vm.Map.FindNearbyExult(new TileCoord(outer.Tx, outer.Ty, outer.Tz), shape, dist, mask);
     }
 
     static UsecodeValue NearbyArray(List<U7Object> found)
@@ -1472,6 +1496,11 @@ public sealed class BgIntrinsics
         return arr;
     }
 
+    /// <summary>
+    /// Exult <c>Usecode_internal::find_nearest</c>: of the shape round the
+    /// object's outermost container (Exult's mask 0, NPCs included), the
+    /// closest by straight distance; the Test of Courage looks 16 tiles for its mage.
+    /// </summary>
     UsecodeValue FindNearest(UsecodeValue[] p)
     {
         var obj = _vm.GetItem(p[0]);
@@ -1480,9 +1509,15 @@ public sealed class BgIntrinsics
             return UsecodeValue.FromObject(null);
         }
 
+        obj = Inventory.Outermost(obj);
         var shape = (int)p[1].IntValue;
         var dist = (int)p[2].IntValue;
-        var found = _vm.Map.FindNearby(new TileCoord(obj.Tx, obj.Ty, obj.Tz), shape, dist);
+        if (_vm.CurrentFrame?.Function.Id == 0x70a && shape == 0x9a && dist == 0)
+        {
+            dist = 16; // Exult: the mage may have wandered.
+        }
+
+        var found = _vm.Map.FindNearbyExult(new TileCoord(obj.Tx, obj.Ty, obj.Tz), shape, dist, 0);
         U7Object? closest = null;
         var best = int.MaxValue;
         foreach (var each in found)

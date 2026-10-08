@@ -613,7 +613,7 @@ public sealed class CombatEngine
         }
 
         _map.TakeFromWorld(bobj);
-        Equipment.AddToActor(npc, bobj, _catalog, _map); // Should go into the weapon hand.
+        Equipment.AddToActor(npc, bobj, _catalog, _map, dontCheck: true); // Should go into the weapon hand.
         if (oldweap is not null)
         {
             Equipment.AddReadied(npc, oldweap, index, _catalog, _map, forcePos: true); // The old where the new was.
@@ -822,14 +822,15 @@ public sealed class CombatEngine
             return; // Friendly fire doesn't cause a fight.
         }
 
+        // Exult: the party fights back only in combat mode, or when the avatar cannot act.
         var inParty = victim == _avatar || Party?.IsInParty(victim) == true;
-        if (inParty && !InCombat)
+        if (inParty && (InCombat || !CombatSchedule.CanAct(_avatar)))
         {
-            SetInCombat(true);
-        }
+            if (!InCombat)
+            {
+                SetInCombat(true);
+            }
 
-        if (inParty)
-        {
             foreach (var member in PartyAndAvatar())
             {
                 if (member.ScheduleType is not (ScheduleType.Combat or ScheduleType.Wait or ScheduleType.Loiter))

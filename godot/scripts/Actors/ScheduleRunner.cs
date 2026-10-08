@@ -240,13 +240,13 @@ public sealed class ScheduleRunner
             if (npc.ScheduleType == ScheduleType.WalkToSchedule && npc.PendingSchedule >= 0)
             {
                 // Exult set_schedule_and_loc: walk there, or be put there when far off.
-                if (nearby)
+                if (!FarOff(npc, dest))
                 {
                     BeginWalkTo(b, npc.PendingSchedule, dest);
                 }
                 else
                 {
-                    Teleport(b, dest);
+                    TeleportFarOff(b, dest);
                     BeginType(b, npc.PendingSchedule, dest, alreadyThere: true);
                 }
             }
@@ -557,6 +557,33 @@ public sealed class ScheduleRunner
         return dx >= 0 && dx < w + w / 2 && dy >= 0 && dy < h + w / 2;
     }
 
+    /// <summary>Exult <c>get_win_tile_rect</c>: the game window in tiles, centred on the avatar.</summary>
+    public Rect2I WindowTiles
+    {
+        get
+        {
+            var (w, h) = ScreenTiles;
+            return new Rect2I(Avatar.Tx - w / 2, Avatar.Ty - h / 2, w, h);
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>teleport_offscreen_to_schedule</c>: neither the NPC nor its
+    /// spot is in the chunks Exult has read (here: within the activity
+    /// distance of the avatar), so it does not walk there.
+    /// </summary>
+    bool FarOff(U7Object npc, TileCoord dest) =>
+        Dist(npc) > ActivityDist && dest.Distance2d(new TileCoord(Avatar.Tx, Avatar.Ty, Avatar.Tz)) > ActivityDist;
+
+    /// <summary>Exult <c>teleport_offscreen_to_schedule</c>'s jump: only from more than 12 tiles off.</summary>
+    void TeleportFarOff(NpcBrain b, TileCoord dest)
+    {
+        if (new TileCoord(b.Npc.Tx, b.Npc.Ty, b.Npc.Tz).Distance(dest) > 12)
+        {
+            Teleport(b, dest);
+        }
+    }
+
     /// <summary>Exult <c>add_dirty</c>'s answer: on the screen (the game window, centred on the avatar).</summary>
     public bool OnScreen(U7Object obj)
     {
@@ -698,6 +725,12 @@ public sealed class ScheduleRunner
         var slot = _clock.Slot;
         foreach (var b in _brains.Values)
         {
+            // Exult Npc_actor::find_schedule_change: no schedule changes for the dead or the party.
+            if (b.Npc.IsDead || Party?.IsInParty(b.Npc) == true)
+            {
+                continue;
+            }
+
             // Exult Game_window::schedule_npcs skips wait / follow_avatar so
             // companions (Iolo) stay with the avatar instead of Britain.
             if (b.Npc.ScheduleType is ScheduleType.Wait or ScheduleType.FollowAvatar or ScheduleType.Combat)
@@ -728,9 +761,14 @@ public sealed class ScheduleRunner
             b.Npc.ScheduleDestTx = dest.Tx;
             b.Npc.ScheduleDestTy = dest.Ty;
             b.Npc.ScheduleDestTz = dest.Tz;
-            if (!nearby || !pathIfNearby)
+            if (!pathIfNearby)
             {
                 Teleport(b, dest);
+                BeginType(b, type, dest, alreadyThere: true);
+            }
+            else if (FarOff(b.Npc, dest))
+            {
+                TeleportFarOff(b, dest);
                 BeginType(b, type, dest, alreadyThere: true);
             }
             else
@@ -773,17 +811,29 @@ public sealed class ScheduleRunner
             return;
         }
 
-        // Followers and fighters never fall back to a stale slot destination.
+        // Followers and fighters never fall back to a stale slot destination; a walk
+        // to a spot in range comes on from off the screen (Exult Walk_to_schedule).
         var nearby = b.Npc.ScheduleType is ScheduleType.FollowAvatar or ScheduleType.Combat ||
-                     Dist(b.Npc) <= ActivityDist;
+                     Dist(b.Npc) <= ActivityDist ||
+                     (b.Npc.ScheduleType == ScheduleType.WalkToSchedule && !FarOff(b.Npc, b.Dest));
         if (!nearby)
         {
             if (b.WasNearby)
             {
-                Teleport(b, b.Dest);
-                if (b.Npc.PendingSchedule >= 0)
+                // Out of range an NPC goes dormant where it is, its action dropped
+                // (Exult Npc_actor::step); one walking to a schedule's spot is put
+                // there (Walk_to_schedule::im_dormant).
+                if (b.Npc.ScheduleType == ScheduleType.WalkToSchedule)
                 {
-                    BeginType(b, b.Npc.PendingSchedule, b.Dest, alreadyThere: true);
+                    Teleport(b, b.Dest);
+                    if (b.Npc.PendingSchedule >= 0)
+                    {
+                        BeginType(b, b.Npc.PendingSchedule, b.Dest, alreadyThere: true);
+                    }
+                }
+                else
+                {
+                    b.StopAction();
                 }
             }
 
@@ -793,11 +843,9 @@ public sealed class ScheduleRunner
 
         if (!b.WasNearby)
         {
+            // Exult Npc_actor::paint: back in view, a dormant NPC carries on with its schedule half a second later.
             b.WasNearby = true;
-            if (new TileCoord(b.Npc.Tx, b.Npc.Ty, b.Npc.Tz).Distance2d(b.Dest) > 3)
-            {
-                BeginWalkTo(b, b.Npc.PendingSchedule >= 0 ? b.Npc.PendingSchedule : b.Npc.ScheduleType, b.Dest);
-            }
+            b.StepTimer = Math.Max(b.StepTimer, 0.5);
         }
 
         RunBrain(b, delta);
@@ -934,15 +982,15 @@ public sealed class ScheduleRunner
     /// </summary>
     public void UpdateSchedule(NpcBrain b, TileCoord? pos)
     {
-        if (_table.ForSlot(b.Npc.NpcNum, _clock.Slot) is not { } entry)
+        if (b.Npc.IsDead || Party?.IsInParty(b.Npc) == true || _table.ForSlot(b.Npc.NpcNum, _clock.Slot) is not { } entry)
         {
             return;
         }
 
         var dest = pos ?? new TileCoord(entry.Tx, entry.Ty, entry.Tz);
-        if (Dist(b.Npc) > ActivityDist)
+        if (FarOff(b.Npc, dest))
         {
-            Teleport(b, dest);
+            TeleportFarOff(b, dest);
             BeginType(b, entry.Type, dest, alreadyThere: true);
         }
         else

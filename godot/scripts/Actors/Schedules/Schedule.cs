@@ -214,7 +214,7 @@ public abstract class Schedule(NpcBrain brain)
         if (found is null)
         {
             found = Map.CreateIregObject(shape, frame);
-            Equipment.AddToActor(Npc, found, Map.Catalog, Map);
+            Equipment.AddToActor(Npc, found, Map.Catalog, Map, dontCheck: true);
         }
 
         return found;

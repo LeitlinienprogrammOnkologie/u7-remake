@@ -206,7 +206,8 @@ public static class Equipment
 
         if (preferred == ReadySpot.Invalid)
         {
-            preferred = ReadySpot.Lhand;
+            // Exult (shapevga.cc): what READY.DAT leaves out is 'backpack' in Black Gate.
+            preferred = ReadySpot.Back;
         }
 
         if (preferred == ReadySpot.Lhand)
@@ -388,7 +389,7 @@ public static class Equipment
             if (!AddReadied(actor, obj, ReadySpot.Belt, catalog, map, forcePos: true) &&
                 !AddReadied(actor, obj, ReadySpot.Back, catalog, map, forcePos: true))
             {
-                AddToActor(actor, obj, catalog, map);
+                AddToActor(actor, obj, catalog, map, dontCheck: true);
             }
         }
     }
@@ -444,23 +445,25 @@ public static class Equipment
         return true;
     }
 
-    /// <summary>Exult <c>Actor::add</c>: preferred ready spot, then bags, then unpack.</summary>
-    public static bool AddToActor(U7Object actor, U7Object obj, ShapeCatalog catalog, GameMap map)
+    /// <summary>
+    /// Exult <c>Actor::add</c>: the preferred ready spot, else a readied bag
+    /// with room; false if neither, unless <paramref name="dontCheck"/>
+    /// (Exult's <c>dont_check</c>), which then ignores the bags' limits and at
+    /// last puts it loose in the actor.
+    /// </summary>
+    public static bool AddToActor(U7Object actor, U7Object obj, ShapeCatalog catalog, GameMap map, bool dontCheck = false)
     {
         var index = FindBestSpot(actor, obj, catalog);
         if (index < 0)
         {
-            foreach (var slot in new[] { ReadySpot.Back, ReadySpot.Belt, ReadySpot.Lhand, ReadySpot.Rhand })
+            // A bag with room (backpack, belt, hands); Exult's dont_check (reading
+            // a save, its own swaps) then tries the bags regardless, then the actor.
+            if (PutInBag(actor, obj, catalog, map, true) || (dontCheck && PutInBag(actor, obj, catalog, map, false)))
             {
-                if (GetReadied(actor, slot) is { } bag &&
-                    Inventory.IsContainer(bag, catalog) &&
-                    TryPlace(map, obj, bag, 8, 8, catalog))
-                {
-                    return true;
-                }
+                return true;
             }
 
-            return TryPlace(map, obj, actor, 0, 0, catalog);
+            return dontCheck && TryPlace(map, obj, actor, 0, 0, catalog, checkLimits: false);
         }
 
         if (index == ReadySpot.BothHands)
@@ -487,6 +490,21 @@ public static class Equipment
 
         obj.ReadySlot = index;
         return true;
+    }
+
+    /// <summary>Into the first readied bag (backpack, belt, hands) that takes it.</summary>
+    static bool PutInBag(U7Object actor, U7Object obj, ShapeCatalog catalog, GameMap map, bool checkLimits)
+    {
+        foreach (var slot in (int[])[ReadySpot.Back, ReadySpot.Belt, ReadySpot.Lhand, ReadySpot.Rhand])
+        {
+            if (GetReadied(actor, slot) is { } bag && Inventory.IsContainer(bag, catalog) &&
+                TryPlace(map, obj, bag, 8, 8, catalog, checkLimits))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static bool TryPlace(

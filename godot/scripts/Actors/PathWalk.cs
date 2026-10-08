@@ -38,6 +38,22 @@ public sealed class AstarSteps : PathSteps
     public static AstarSteps? Find(PathClient client, TileCoord src, TileCoord dest) =>
         Pathfinder.FindPath(client, src, dest) is { } path ? new AstarSteps(src, dest, path) : null;
 
+    /// <summary>
+    /// Exult <c>Astar::NewPath</c> then <c>set_backwards</c>: found from
+    /// <paramref name="dest"/> to wherever the client's goal is, walked the
+    /// other way, from its far end to the tile beside <paramref name="dest"/>.
+    /// </summary>
+    public static AstarSteps? FindBackwards(PathClient client, TileCoord dest, TileCoord goal)
+    {
+        if (Pathfinder.FindPath(client, dest, goal) is not { Count: > 0 } path)
+        {
+            return null;
+        }
+
+        path.Reverse();
+        return new AstarSteps(path[0], dest, path);
+    }
+
     public override bool NextStep(out TileCoord tile, out bool done)
     {
         if (_next >= _path.Count)
@@ -164,6 +180,8 @@ public sealed class PathWalk : IActorAction
     U7Object? _door;
     bool _handlingDoor;
     bool _doorSequenceComplete;
+    /// <summary>Exult <c>from_offscreen</c>: the walker is put on the first tile instead of stepping there.</summary>
+    bool _fromOffscreen;
 
     /// <summary>Exult <c>reached_end</c>: the last step was taken.</summary>
     public bool ReachedEnd { get; private set; }
@@ -201,6 +219,41 @@ public sealed class PathWalk : IActorAction
         AstarSteps.Find(new ActorPathClient(map, actor, dist, persistent), Here(actor), dest) is { } path
             ? new PathWalk(map, path, maxBlocked, persistent ? 30 : 0)
             : null;
+
+    /// <summary>
+    /// Exult <c>walk_path_to_tile</c> with <c>Path_walking_actor_action::walk_to_tile</c>'s
+    /// don't-care coordinates: a -1 in <paramref name="dest"/> walks to any
+    /// tile on that line (<see cref="OnecoordPathClient"/>); a source of
+    /// -1, -1 comes from off the screen: the path is found backwards from the
+    /// destination to the nearest tile off <paramref name="window"/>
+    /// (<see cref="OffscreenPathClient"/>, aiming from where the walker is),
+    /// and the walker is put on its first tile. Null if there is no path.
+    /// </summary>
+    public static PathWalk? ToTile(GameMap map, U7Object actor, TileCoord src, TileCoord dest, Godot.Rect2I window,
+        int maxBlocked = 3)
+    {
+        if (dest.Tx == -1 || dest.Ty == -1)
+        {
+            PathClient client = dest.Tx == dest.Ty
+                ? new OffscreenPathClient(map, actor, window)
+                : new OnecoordPathClient(map, actor);
+            return AstarSteps.Find(client, src, dest) is { } path ? new PathWalk(map, path, maxBlocked) : null;
+        }
+
+        if (src.Tx == -1 || src.Ty == -1)
+        {
+            PathClient client = src.Tx == src.Ty
+                ? new OffscreenPathClient(map, actor, window, Here(actor))
+                : new OnecoordPathClient(map, actor);
+            return AstarSteps.FindBackwards(client, dest, src) is { } back
+                ? new PathWalk(map, back, maxBlocked) { _fromOffscreen = true }
+                : null;
+        }
+
+        return AstarSteps.Find(new ActorPathClient(map, actor), src, dest) is { } direct
+            ? new PathWalk(map, direct, maxBlocked)
+            : null;
+    }
 
     /// <summary>
     /// Exult <c>Path_walking_actor_action::create_path</c> with an
@@ -329,6 +382,14 @@ public sealed class PathWalk : IActorAction
         }
 
         var curSpeed = _speed;
+        if (_fromOffscreen)
+        {
+            // Exult: teleport to the first spot.
+            _fromOffscreen = false;
+            _map.MoveObject(actor, tile.Tx, tile.Ty, tile.Tz);
+            return curSpeed;
+        }
+
         if (Step(actor, tile))
         {
             return done ? 0 : curSpeed;

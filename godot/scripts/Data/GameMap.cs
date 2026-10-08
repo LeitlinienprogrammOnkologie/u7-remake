@@ -692,6 +692,88 @@ public sealed class GameMap
     }
 
     /// <summary>
+    /// Exult <c>Game_object::find_nearby</c> with Exult's mask (objs/find_nearby.h),
+    /// for usecode: NPCs count unless the mask narrows to NPC shapes (4) or
+    /// live ones (8); eggs and barges only with 0x10, invisible objects only
+    /// with 0x20 (or 0x40 for the party's), transparent shapes only with 0x80.
+    /// A shape of -1 or -359 is any, and a shape given ignores mask 4. Objects
+    /// whose tile is within <paramref name="delta"/> tiles each way (24 if
+    /// negative), sorted right to left, near to far (Exult <c>Object_reverse_sorter</c>).
+    /// </summary>
+    public List<U7Object> FindNearbyExult(TileCoord pos, int shape, int delta, int mask,
+        int qual = U7Constants.AnyShape, int frame = U7Constants.AnyShape)
+    {
+        if (delta < 0)
+        {
+            delta = 24;
+        }
+
+        if (shape > 0 && mask == 4)
+        {
+            mask = 0;
+        }
+
+        var result = new List<U7Object>();
+        var chunks = delta / U7Constants.TilesPerChunk + 1;
+        var ocx = pos.Tx / U7Constants.TilesPerChunk;
+        var ocy = pos.Ty / U7Constants.TilesPerChunk;
+        var span = Math.Min(2 * chunks + 1, U7Constants.NumChunks);
+        for (var cy = ocy - chunks; cy < ocy - chunks + span; cy++)
+        {
+            for (var cx = ocx - chunks; cx < ocx - chunks + span; cx++)
+            {
+                foreach (var obj in ObjectsInChunk(cx, cy))
+                {
+                    if (obj.Removed || (shape >= 0 && obj.Shape != shape) ||
+                        (qual != U7Constants.AnyShape && obj.Quality != qual) ||
+                        (frame != U7Constants.AnyShape && obj.Frame != frame) ||
+                        !FindMaskAllows(obj, mask))
+                    {
+                        continue;
+                    }
+
+                    if (Math.Abs(U7Constants.TileDelta(pos.Tx, obj.Tx)) <= delta &&
+                        Math.Abs(U7Constants.TileDelta(pos.Ty, obj.Ty)) <= delta)
+                    {
+                        result.Add(obj);
+                    }
+                }
+            }
+        }
+
+        result.Sort((a, b) => b.RenderOrder.CompareTo(a.RenderOrder));
+        return result;
+    }
+
+    /// <summary>Exult <c>find_nearby</c>'s <c>Check_mask</c>.</summary>
+    bool FindMaskAllows(U7Object obj, int mask)
+    {
+        var info = Catalog[obj.Shape];
+        if ((mask & 4) != 0 && !info.IsNpcClass)
+        {
+            return false;
+        }
+
+        if ((mask & 8) != 0 && (!info.IsNpcClass || obj.IsDead))
+        {
+            return false;
+        }
+
+        if ((mask & 0x10) == 0 && info.ShapeClass is 7 or 9)
+        {
+            return false; // Eggs and barges.
+        }
+
+        if ((mask & 0x80) == 0 && info.Transparent)
+        {
+            return false;
+        }
+
+        return !obj.GetFlag(U7.Actors.ObjFlag.Invisible) || (mask & 0x20) != 0 ||
+               ((mask & 0x40) != 0 && obj.GetFlag(U7.Actors.ObjFlag.InParty));
+    }
+
+    /// <summary>
     /// Whether a solid object occupies the tile at this lift (Exult
     /// <c>is_tile_occupied</c>), or it is water at ground level.
     /// </summary>
@@ -1417,9 +1499,7 @@ public sealed class GameMap
                 nested.Flags = flags;
                 nested.SpellCircles = circles;
                 nested.SpellBookmark = bookmark;
-                nested.Container = container;
-                nested.ReadySlot = ActorReadySlot(container, readyIndex);
-                container.Contents.Add(nested);
+                AddContained(container, nested, readyIndex);
                 last = nested;
             }
             else
@@ -1443,8 +1523,36 @@ public sealed class GameMap
         }
     }
 
-    static int ActorReadySlot(U7Object? container, int readyIndex) =>
-        container is { IsActor: true } && readyIndex is >= 0 and < 12 ? readyIndex : -1;
+    /// <summary>
+    /// Exult <c>read_ireg_objects</c>' add into a container: into an actor at
+    /// the index record's spot (<c>add_readied</c>) when that is free, else
+    /// with <c>Actor::add(obj, true)</c>: its best spot, a bag, or loose. The
+    /// originals' inventories have no index records, so what they carry is
+    /// worn; Exult's saves record each item's spot, 255 for none.
+    /// </summary>
+    void AddContained(U7Object container, U7Object obj, int readyIndex)
+    {
+        if (!container.IsActor)
+        {
+            obj.Container = container;
+            container.Contents.Add(obj);
+            return;
+        }
+
+        if (readyIndex is >= 0 and <= U7.Actors.ReadySpot.Ucont && U7.Actors.Equipment.GetReadied(container, readyIndex) is null)
+        {
+            obj.Container = container;
+            obj.ReadySlot = readyIndex;
+            container.Contents.Add(obj);
+            return;
+        }
+
+        if (!U7.Actors.Equipment.AddToActor(container, obj, Catalog, this, dontCheck: true))
+        {
+            obj.Container = container;
+            container.Contents.Add(obj);
+        }
+    }
 
     U7Object? ReadIregContainer(
         byte[] data, ref int i, ReadOnlySpan<byte> entry, int testlen,
@@ -1472,9 +1580,7 @@ public sealed class GameMap
                 obj = MakeObject(tilex, tiley, lift, shape, frame, quality, ObjectKind.Ireg);
                 obj.Flags = flags;
                 obj.LiveNpcNum = liveNpc;
-                obj.Container = parent;
-                obj.ReadySlot = ActorReadySlot(parent, readyIndex);
-                parent.Contents.Add(obj);
+                AddContained(parent, obj, readyIndex);
             }
             else
             {

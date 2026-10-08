@@ -340,7 +340,7 @@ public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
         }
 
         var dough = Map.CreateIregObject(DoughShape, 0);
-        Equipment.AddToActor(Npc, dough, Map.Catalog, Map);
+        Equipment.AddToActor(Npc, dough, Map.Catalog, Map, dontCheck: true);
         dough.Quality = DoughQuality;
         _dough = dough;
         SetAction(new SequenceAction(100, walk, new PickupAction(Map, dough, tablepos, 250, temporary: false)));

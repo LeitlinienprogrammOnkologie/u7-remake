@@ -71,7 +71,7 @@ public class CombatSchedule : Schedule
     bool IsInParty(U7Object actor) => actor == Runner.Avatar || (Runner.Party?.IsInParty(actor) ?? false);
 
     /// <summary>Exult <c>Actor::can_act</c>.</summary>
-    static bool CanAct(U7Object actor) =>
+    public static bool CanAct(U7Object actor) =>
         !(actor.GetFlag(ObjFlag.Paralyzed) || actor.GetFlag(ObjFlag.Asleep) || actor.IsDead ||
           actor.GetProp(ActorProp.Health) <= 0);
 
@@ -880,10 +880,10 @@ public sealed class DuelSchedule : CombatSchedule
                 Map.TakeFromWorld(weap);
             }
 
-            Equipment.AddToActor(Npc, newweap, Map.Catalog, Map); // Should go in the right spot.
+            Equipment.AddToActor(Npc, newweap, Map.Catalog, Map, dontCheck: true); // Should go in the right spot.
             if (weap is not null)
             {
-                Equipment.AddToActor(Npc, weap, Map.Catalog, Map);
+                Equipment.AddToActor(Npc, weap, Map.Catalog, Map, dontCheck: true);
             }
         }
 
@@ -899,7 +899,7 @@ public sealed class DuelSchedule : CombatSchedule
 
         var arrows = Map.CreateIregObject(ashape, 0);
         arrows.Quality = 1 + Rng.Next(3);
-        Equipment.AddToActor(Npc, arrows, Map.Catalog, Map);
+        Equipment.AddToActor(Npc, arrows, Map.Catalog, Map, dontCheck: true);
     }
 
     /// <summary>Exult <c>Duel_schedule::find_opponents</c>.</summary>

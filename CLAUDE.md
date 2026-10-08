@@ -41,6 +41,9 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
   - **UI:** MedievalSharp and the "dark wood & gold" conversation panel;
     books and scrolls (for now) in the original GUMPS.VGA art and FONTS.VGA
     font 4, scaled to fit the window.
+  - **Signs:** signs, tombstones and plaques in the original GUMPS.VGA art
+    and rune fonts, scaled to fit like the books, the runes translated
+    beneath in MedievalSharp, gold on dark wood (`GumpView.PaintSign`).
   - **Colour cycling:** every 100 ms (of Exult's 100 and 200).
   - **Darkness:** night (and dungeons) is the day palette under the old blue
     tint, not Exult's teal NIGHT palette (`SceneLighting.NightTint`); the
@@ -88,7 +91,8 @@ godot/scripts/
               VgaFont (FONTS.VGA metrics, Exult paint_text_box), ChunkBlocking
               (Exult Chunk_cache blocked flags + is_blocked)
   Gumps/      GumpManager, GumpView (paints gumps and the open book), container,
-              actor and stats gumps, TextGump (Exult Book/Scroll_gump page layout)
+              actor and stats gumps, TextGump (Exult Book/Scroll_gump page layout),
+              SignGump (Exult Sign_gump: signs, tombstones, plaques)
   Usecode/    UsecodeMachine (VM, waits, scripts), BgIntrinsics (intrinsic table),
               UsecodeScript (execute_usecode_array), Conversation (faces, answers, text)
   Actors/     NpcDat, ScheduleRunner (schedule ticking, slots, proximity),
@@ -139,6 +143,12 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
 
    Don't pipe `restart.ps1`'s output (`| Out-Null`, `| Select-Object`): the
    game inherits the pipe and the shell waits until it exits.
+
+   Several games can run side by side (e.g. one per town for parallel
+   play-testing): `restart.ps1 -Io agent_io/<name> [-Load <slot>]` starts
+   one on its own folder and restarts only that one (its `pid.txt`), and
+   `U7_AGENT=agent_io/<name> python scripts/agent/agent.py ...` talks to
+   it. Plain `restart.ps1` stops every headless game, theirs included.
 
    - Game time is frozen between commands.
    - Conversation text (`SAY`), barks (`BARK`) and fades (`FADE`) are logged.
@@ -256,7 +266,8 @@ Done and play-tested: the whole Trinsic murder chapter.
 Also played: Britain's first visit (Lord British's leads, Clint, Patterson,
 Batlin's examination and package, the storeroom key, the Orb of the Moons),
 Cove (Rudyom's notebook and wand, the blackrock explosion) and Elynor taking
-the package in Minoc.
+the package in Minoc. Paws, Moonglow, Yew and Buccaneer's Den were explored
+from `quick` (all NPCs, their quests; PROGRESS.md "Story exploration").
 
 Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
@@ -285,14 +296,15 @@ Next, in priority order:
 1. **Remaining intrinsics:** 4 stubbed. `flash_mouse` needs Exult's
    cursors (POINTERS.SHP; their look is the user's to pick); `call_guards`
    and `attack_avatar` are arrest, `run_endgame` the endgame.
-2. **Signs:** `display_runes` still uses the conversation panel; port
-   Exult's `Sign_gump` (runic signs, plaques, gravestones).
-3. **Walking follow-ups:** `Walk_to_schedule`'s off-screen legs, dormant
-   NPCs, speed cursors.
-4. **Story:** the Minoc leads point to Paws (the Crown Jewel), Moonglow's
-   observatory, the Wisps of Yew and Hook in Buccaneer's Den; the Golden
-   Ankh (Lord British's deed) and the flying carpet travel. From `minoc1`,
-   or `den1` for Buccaneer's Den.
+2. **Walking follow-ups:** the speed cursors and right-button walking
+   (with `flash_mouse`'s cursors, a look for the user to pick); Exult's
+   dormancy and `Actor::follow` if the 32-tile activity range or the
+   follow schedule ever show their seams.
+3. **Story:** the main thread past Minoc in order (Paws, Moonglow, the Wisps
+   via Alagner's notebook, Hook and the Isle of the Avatar), the towns not
+   yet explored (Vesper, Jhelom, Skara Brae, New Magincia, Serpent's Hold,
+   Terfin), and a name for the avatar at a new game (usecode's "Avatar"
+   answers collide with the default name).
 
 Known small gaps:
 - Exult shows the avatar's portrait next to the answers.
