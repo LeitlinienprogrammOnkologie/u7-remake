@@ -10,8 +10,8 @@ namespace U7.World;
 /// <summary>
 /// Activates IREG eggs when the avatar (or a dropped item) moves.
 /// Ports Exult <c>Egg_object::is_active</c> / <c>hatch</c> / <c>unhatch</c>
-/// for BG v1: teleport, usecode, jukebox, button, monster, missile. Weather
-/// is a stub. Eggs are found through the per-tile bits kept by
+/// for BG v1: teleport, usecode, jukebox, button, monster, missile, weather.
+/// Eggs are found through the per-tile bits kept by
 /// <see cref="GameMap.EggsAt"/>, like Exult's chunk cache.
 /// </summary>
 public sealed class EggHatcher
@@ -30,6 +30,7 @@ public sealed class EggHatcher
     public CombatEngine? Combat { get; set; }
     public MusicPlayer? Music { get; set; }
     public PartyManager? Party { get; set; }
+    public EffectsManager? Effects { get; set; }
     public string LastMessage { get; private set; } = "";
     public int JukeboxTrack => Music is { } m ? m.CurrentTrack : _jukeboxTrack;
 
@@ -476,6 +477,16 @@ public sealed class EggHatcher
                 }
 
                 break;
+            case EggType.Weather:
+            {
+                // Exult Weather_egg: data 1's low byte is the weather, its high byte the minutes.
+                var weather = egg.EggData1 & 0xff;
+                var minutes = egg.EggData1 >> 8;
+                LastMessage = $"egg weather {weather} for {minutes} minutes at {egg.Tx},{egg.Ty}";
+                GD.Print(LastMessage);
+                Effects?.SetWeather(weather, minutes, new TileCoord(egg.Tx, egg.Ty, egg.Tz));
+                break;
+            }
             default:
                 if (_loggedStub.Add(egg.EggType))
                 {

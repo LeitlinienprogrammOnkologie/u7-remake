@@ -15,6 +15,7 @@ public sealed class GameMap
     public const int TerrainCount = 3072;
 
     public ShapeCatalog Catalog { get; }
+    readonly Dictionary<(int, int, int), int> _covers = new();
     public ushort[,] TerrainMap { get; } = new ushort[U7Constants.NumChunks, U7Constants.NumChunks];
     public TerrainCell[][] Terrains { get; } = new TerrainCell[TerrainCount][];
     public List<U7Object>[][] ChunkObjects { get; }
@@ -252,6 +253,11 @@ public sealed class GameMap
         var cy = U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk);
         ChunkObjects[cx][cy].Add(obj);
         Blocking.Update(obj, add: true);
+        if (Catalog[obj.Shape].IsBuilding)
+        {
+            _covers.Clear();
+        }
+
         if (_chunkOrdered[cx][cy] && !obj.IsFlat)
         {
             AddDependencies(obj, cx, cy, onlyEarlierInOwnChunk: false);
@@ -266,6 +272,10 @@ public sealed class GameMap
         if (ChunkObjects[cx][cy].Remove(obj))
         {
             Blocking.Update(obj, add: false);
+            if (Catalog[obj.Shape].IsBuilding)
+            {
+                _covers.Clear();
+            }
         }
 
         ClearDependencies(obj);
@@ -753,6 +763,10 @@ public sealed class GameMap
         if (inWorld)
         {
             Blocking.Update(obj, add: false);
+            if (Catalog[obj.Shape].IsBuilding || Catalog[shape].IsBuilding)
+            {
+                _covers.Clear();
+            }
         }
 
         obj.Shape = shape;
@@ -890,6 +904,64 @@ public sealed class GameMap
         return height < 0 ? U7Constants.NoRoof : height;
     }
 
+    /// <summary>
+    /// The lift of the lowest roof or upper floor over the tile that starts
+    /// above <paramref name="lift"/>: a solid object of Exult's building class
+    /// ("roof, window, mountain"), so not the wall a light hangs on, the table
+    /// it stands on or a dish lying in a campfire. <see cref="U7Constants.NoRoof"/> if none.
+    /// </summary>
+    public int CoverAbove(int tx, int ty, int lift)
+    {
+        // Cached per tile until a building-class object comes, goes or changes;
+        // walkers carrying lights keep adding tiles, so the cache is bounded.
+        if (_covers.Count > 4096)
+        {
+            _covers.Clear();
+        }
+
+        if (!_covers.TryGetValue((tx, ty, lift), out var cover))
+        {
+            var height = LowestBlocked(tx, ty, lift + 1, buildingsAbove: true);
+            cover = height < 0 ? U7Constants.NoRoof : height;
+            _covers[(tx, ty, lift)] = cover;
+        }
+
+        return cover;
+    }
+
+    /// <summary>
+    /// Whether something solid other than an actor fills the tile at the
+    /// lift: the chunk cache's answer without the walkers (walls, closed
+    /// doors, furniture).
+    /// </summary>
+    public bool StaticBlocked(int tx, int ty, int lift)
+    {
+        tx = U7Constants.WrapTile(tx);
+        ty = U7Constants.WrapTile(ty);
+        if (!Blocking.Test(tx, ty, lift))
+        {
+            return false;
+        }
+
+        var ocx = tx / U7Constants.TilesPerChunk;
+        var ocy = ty / U7Constants.TilesPerChunk;
+        for (var dcy = 0; dcy <= 1; dcy++)
+        {
+            for (var dcx = 0; dcx <= 1; dcx++)
+            {
+                foreach (var obj in ObjectsInChunk(ocx + dcx, ocy + dcy))
+                {
+                    if (!obj.Removed && !obj.IsActor && obj.BlocksAt(tx, ty, lift))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
     public int DungeonHeight(int tx, int ty)
     {
         tx = U7Constants.WrapTile(tx);
@@ -919,7 +991,7 @@ public sealed class GameMap
         return arr[ly * U7Constants.TilesPerChunk + lx];
     }
 
-    int LowestBlocked(int tx, int ty, int fromLift)
+    int LowestBlocked(int tx, int ty, int fromLift, bool buildingsAbove = false)
     {
         tx = U7Constants.WrapTile(tx);
         ty = U7Constants.WrapTile(ty);
@@ -943,7 +1015,7 @@ public sealed class GameMap
                     }
 
                     var top = obj.Tz + obj.DimZ - 1;
-                    if (top < fromLift)
+                    if (top < fromLift || (buildingsAbove && (obj.Tz < fromLift || !Catalog[obj.Shape].IsBuilding)))
                     {
                         continue;
                     }

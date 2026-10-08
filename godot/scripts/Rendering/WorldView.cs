@@ -21,6 +21,8 @@ public partial class WorldView : Node2D
 
         const int MAX_LIGHTS = 64;
         const int KIND_SPELL = 1;
+        // A window facing south; east, north and west follow (WindowLights).
+        const int KIND_WINDOW = 2;
 
         // Row 0 the ambient palette, row 1 the lit one (SceneLighting).
         uniform sampler2D palette_tex : filter_nearest;
@@ -29,6 +31,23 @@ public partial class WorldView : Node2D
         // Per light: rgb colour times intensity, a phase.
         uniform vec4 light_b[MAX_LIGHTS];
         uniform int light_count = 0;
+        // How much brighter than its colour a glowing pixel is (GlowTable.Magic.Day).
+        uniform float glow_boost = 0.0;
+        // Window light (WindowLights.Look): how much wider its fan gets per pixel out.
+        uniform float window_spread = 0.6;
+        // Cloud shadows (SceneLighting): drift in world pixels, how much ground
+        // they cover, how dark, their colour as a multiplier, size, edge softness.
+        uniform vec2 cloud_offset = vec2(0.0);
+        uniform float cloud_cover = 0.0;
+        uniform float cloud_shadow = 0.0;
+        uniform vec3 cloud_tint = vec3(0.68, 0.64, 0.6);
+        uniform float cloud_scale = 240.0;
+        uniform float cloud_soft = 0.12;
+        // The fog's mist: thickness, drift in world pixels, colour, size.
+        uniform float mist = 0.0;
+        uniform vec2 mist_offset = vec2(0.0);
+        uniform vec3 mist_colour = vec3(0.75);
+        uniform float mist_scale = 220.0;
 
         varying vec4 tint;
         varying vec2 world_pos;
@@ -60,12 +79,66 @@ public partial class WorldView : Node2D
             return w;
         }
 
+        // A roofed room's light through a window: d from the middle of its outer
+        // face, dir the way it faces, reach how far the fan goes; packed holds
+        // the drop to the ground outside (x 256) and half the window's length.
+        // A pane of it glows; elsewhere a fan widens out from the wall's foot.
+        float window_light(vec2 d, int dir, float reach, float packed, bool pane) {
+            float drop = floor(packed / 256.0);
+            float half_len = packed - drop * 256.0;
+            bool along_x = dir == 0 || dir == 2;
+            if (pane) {
+                // On a south or north face a lift moves x and y alike, so x - y runs along it.
+                float along = along_x ? d.x - d.y : d.y - d.x;
+                float up = along_x ? d.y : d.x;
+                return abs(up) > 14.0 ? 0.0 : 1.0 - smoothstep(half_len - 1.0, half_len + 2.0, abs(along));
+            }
+
+            vec2 n = dir == 0 ? vec2(0.0, 1.0) : dir == 1 ? vec2(1.0, 0.0) : dir == 2 ? vec2(0.0, -1.0) : vec2(-1.0, 0.0);
+            vec2 f = d - vec2(drop);
+            float u = dot(f, n);
+            float v = along_x ? f.x : f.y;
+            float width = half_len + max(u, 0.0) * window_spread;
+            return smoothstep(-2.0, 4.0, u) * (1.0 - smoothstep(0.0, reach, u))
+                * (1.0 - smoothstep(width * 0.7, width * 1.15, abs(v)));
+        }
+
+        float hash(vec2 p) {
+            vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+            p3 += dot(p3, p3.yzx + 33.33);
+            return fract((p3.x + p3.y) * p3.z);
+        }
+
+        float value_noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            vec2 u = f * f * (3.0 - 2.0 * f);
+            return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+                mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+        }
+
+        // Five octaves, about 0 to 1 round 0.5.
+        float fbm(vec2 p) {
+            float v = 0.0;
+            float a = 0.5;
+            for (int i = 0; i < 5; i++) {
+                v += a * value_noise(p);
+                p = p * 2.03 + vec2(17.1, 9.2);
+                a *= 0.5;
+            }
+            return v / 0.97;
+        }
+
         void fragment() {
             ivec2 size = textureSize(TEXTURE, 0);
             ivec2 at = min(ivec2(UV * vec2(size)), size - 1);
             vec2 texel = texelFetch(TEXTURE, at, 0).rg;
             int index = int(texel.r * 255.0 + 0.5);
-            float glow = texel.g;
+            // The glow plane: six bits of glow, a roof mark and a pane mark (IndexBuffer8).
+            int g = int(texel.g * 255.0 + 0.5);
+            float glow = float(g >> 2) / 63.0;
+            bool roof = (g & 1) != 0;
+            bool pane = (g & 2) != 0;
             vec3 ambient = texelFetch(palette_tex, ivec2(index, 0), 0).rgb;
             vec3 lit = texelFetch(palette_tex, ivec2(index, 1), 0).rgb;
 
@@ -82,8 +155,18 @@ public partial class WorldView : Node2D
 
                 vec3 colour = b.rgb / intensity;
                 float w;
-                if (int(a.w) == KIND_SPELL) {
+                int kind = int(a.w + 0.5);
+                if (kind == KIND_SPELL) {
                     w = spell(world_pos - a.xy, a.z, TIME + b.a, colour);
+                } else if (kind >= KIND_WINDOW) {
+                    if (roof) {
+                        continue;
+                    }
+
+                    w = window_light(world_pos - a.xy, kind - KIND_WINDOW, a.z, b.a, pane);
+                    if (w <= 0.0) {
+                        continue;
+                    }
                 } else {
                     float x = length(world_pos - a.xy) / a.z;
                     if (x >= 1.0) {
@@ -98,9 +181,25 @@ public partial class WorldView : Node2D
                 tint_sum += w * colour;
             }
 
+            // Clouds shade the daylight, not the lights.
+            if (cloud_shadow > 0.0) {
+                // Exult's cloud shapes are about twice as wide as high.
+                vec2 p = (world_pos - cloud_offset) / cloud_scale * vec2(0.5, 1.0);
+                float threshold = mix(0.72, 0.28, cloud_cover);
+                float shade = smoothstep(threshold - cloud_soft, threshold + cloud_soft, fbm(p));
+                ambient *= mix(vec3(1.0), cloud_tint, shade * cloud_shadow);
+            }
+
             float total = L + glow;
             vec3 light_tint = total > 0.0 ? (tint_sum + vec3(glow)) / total : vec3(1.0);
             vec3 rgb = mix(ambient, lit * light_tint, clamp(total, 0.0, 1.0));
+            rgb *= 1.0 + glow * glow_boost;
+            // The fog's mist veils everything: two layers drifting apart.
+            if (mist > 0.0) {
+                vec2 p = (world_pos - mist_offset) / mist_scale;
+                float m = 0.6 * fbm(p * vec2(0.6, 1.0)) + 0.4 * fbm(p * 1.7 + mist_offset / mist_scale * 0.6);
+                rgb = mix(rgb, mist_colour, mist * smoothstep(0.3, 0.75, m));
+            }
             COLOR = vec4(rgb, 1.0) * tint;
         }
         """;
@@ -136,6 +235,8 @@ public partial class WorldView : Node2D
     public bool Frozen;
 
     readonly IndexBuffer8 _buffer = new();
+    /// <summary>Scratch for <see cref="PaintThroughWindows"/>: the windows (by number) an effect shows through.</summary>
+    readonly bool[] _paneWindows = new bool[256];
     readonly Dictionary<int, LinkedListNode<(int Terrain, byte[] Pixels)>> _flats = new();
     readonly LinkedList<(int Terrain, byte[] Pixels)> _flatOrder = new();
     WorldPalette _palette = null!;
@@ -196,6 +297,7 @@ public partial class WorldView : Node2D
         _originY = Mathf.FloorToInt(center.Y - half.Y);
         _buffer.Resize(Mathf.CeilToInt(view.X / zoom.X) + 2, Mathf.CeilToInt(view.Y / zoom.Y) + 2);
         _buffer.Fill8(0);
+        _buffer.ClearGlow();
 
         // Objects from chunks around the view can reach into it.
         var margin = 160f;
@@ -285,6 +387,21 @@ public partial class WorldView : Node2D
             _material.SetShaderParameter("light_a", Lighting.LightA);
             _material.SetShaderParameter("light_b", Lighting.LightB);
             _material.SetShaderParameter("light_count", Lighting.LightCount);
+            _material.SetShaderParameter("glow_boost", GlowTable.Magic.Day);
+            _material.SetShaderParameter("window_spread", WindowLights.Look.Spread);
+            var clouds = WeatherLook.Clouds;
+            _material.SetShaderParameter("cloud_offset", Lighting.CloudOffset);
+            _material.SetShaderParameter("cloud_cover", Lighting.CloudCover);
+            _material.SetShaderParameter("cloud_shadow", Lighting.CloudShadow);
+            _material.SetShaderParameter("cloud_tint", WeatherLook.CloudTint);
+            _material.SetShaderParameter("cloud_scale", clouds.Scale);
+            _material.SetShaderParameter("cloud_soft", clouds.Softness);
+            var fog = WeatherLook.Fog;
+            _material.SetShaderParameter("mist", Lighting.Mist);
+            _material.SetShaderParameter("mist_offset", Lighting.MistOffset);
+            // A little lighter than what the fog has made of the day.
+            _material.SetShaderParameter("mist_colour", (Lighting.AmbientMean * 1.2f).Clamp(Vector3.Zero, Vector3.One));
+            _material.SetShaderParameter("mist_scale", fog.Scale);
         }
 
         if (RotateColors)
@@ -296,7 +413,7 @@ public partial class WorldView : Node2D
         DrawTexture(_texture, new Vector2(_originX, _originY));
     }
 
-    /// <summary>The index and glow planes as one RG8 texture: red the index, green the glow.</summary>
+    /// <summary>The index and glow planes as one RG8 texture: red the index, green the glow byte with its marks.</summary>
     void Upload()
     {
         var w = _buffer.Width;
@@ -554,14 +671,23 @@ public partial class WorldView : Node2D
                 return;
             }
         }
-        else if (info.Translucent)
-        {
-            // Exult Shape_manager::paint_shape: TFA-translucent shapes through the tables.
-            _buffer.PaintRleTranslucent(shape, hx, hy, Shapes.Xforms);
-        }
         else
         {
-            _buffer.PaintRle(shape, hx, hy);
+            // Roofs, upper floors and what stands on them (Exult's building class from lift 3) take no window light.
+            var marks = info.IsBuilding && obj.Tz >= 3 && !WindowLights.IsWindow(obj.Shape) ? IndexBuffer8.RoofMark : (byte)0;
+            var glow = (byte)((GlowTable.IsEmitter(obj.Shape) ? GlowTable.GlowByte : 0) | marks);
+            if (info.Translucent)
+            {
+                // Exult Shape_manager::paint_shape: TFA-translucent shapes through the tables.
+                var glass = WindowLights.IsGlass(obj.Shape);
+                var haze = (byte)(Haze(glow) | marks | (glass ? IndexBuffer8.PaneMark : 0));
+                var window = glass ? Lighting?.Windows.SlotOf(obj) ?? 0 : (byte)0;
+                _buffer.PaintRleTranslucent(shape, hx, hy, Shapes.Xforms, glow, haze, window);
+            }
+            else
+            {
+                _buffer.PaintRle(shape, hx, hy, glow);
+            }
         }
 
         obj.PaintStamp = ((long)_frameNo << 32) | (uint)(++_paintCounter);
@@ -586,7 +712,8 @@ public partial class WorldView : Node2D
         }
         else
         {
-            _buffer.PaintRleTranslucent(shape, x, y, Shapes.Xforms);
+            var glow = GlowTable.IsEmitter(actor.Shape) ? GlowTable.GlowByte : (byte)0;
+            _buffer.PaintRleTranslucent(shape, x, y, Shapes.Xforms, glow, Haze(glow));
         }
 
         if (StatusOutline(actor, ticks) is { } color)
@@ -629,11 +756,9 @@ public partial class WorldView : Node2D
     }
 
     /// <summary>
-    /// Exult <c>Projectile_effect::paint</c>, after the map: the frame's
-    /// hotspot at the tile's corner, raised by half the lift in pixels
-    /// (<c>tx*8 - 4tz</c>), translucent if its shape is. Where Exult's missile
-    /// jumps to its next tile every 100 ms, this one glides there in between
-    /// (only the picture: the flight's rules see whole tiles).
+    /// Exult <c>Projectile_effect::paint</c>, after the map, at
+    /// <see cref="MissileHotspot"/>, translucent if its shape is; magic
+    /// missiles glow.
     /// </summary>
     void PaintMissiles()
     {
@@ -642,7 +767,6 @@ public partial class WorldView : Node2D
             return;
         }
 
-        const int tile = U7Constants.TileSize;
         foreach (var m in Missiles)
         {
             if (m.Frame < 0 || Shapes.GetFrame8(m.SpriteShape, m.Frame) is not { } frame)
@@ -650,29 +774,24 @@ public partial class WorldView : Node2D
                 continue;
             }
 
-            var from = m.Pos;
-            var to = m.Next;
-            var f = m.Fraction;
-            var lift = 4 * (to.Tz - from.Tz);
-            var x = from.Tx * tile - 4 * from.Tz + (int)Math.Round((U7Constants.TileDelta(from.Tx, to.Tx) * tile - lift) * f);
-            var y = from.Ty * tile - 4 * from.Tz + (int)Math.Round((U7Constants.TileDelta(from.Ty, to.Ty) * tile - lift) * f);
-            if (Catalog[m.SpriteShape].Translucent)
+            var (x, y) = MissileHotspot(m);
+            var glow = GlowTable.IsGlowingMissile(m.SpriteShape) ? GlowTable.GlowByte : (byte)0;
+            if (Roofed(m.Pos))
             {
-                _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms);
+                PaintThroughWindows(frame, m.Pos, x, y, glow, Catalog[m.SpriteShape].Translucent);
+            }
+            else if (Catalog[m.SpriteShape].Translucent)
+            {
+                _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms, glow, Haze(glow));
             }
             else
             {
-                _buffer.PaintRle(frame, x - _originX, y - _originY);
+                _buffer.PaintRle(frame, x - _originX, y - _originY, glow);
             }
         }
     }
 
-    /// <summary>
-    /// Exult <c>Homing_projectile::paint</c>: its SPRITES.VGA frame where a
-    /// missile's would be (<c>tx*8 - 4tz</c>), translucent like every sprite.
-    /// Where Exult's moves a tile every 100 ms, this one glides from its last
-    /// tile to the new one in between (only the picture).
-    /// </summary>
+    /// <summary>Exult <c>Homing_projectile::paint</c> at <see cref="HomingHotspot"/>, translucent like every sprite; it glows.</summary>
     void PaintHoming()
     {
         if (HomingMissiles is null)
@@ -680,7 +799,6 @@ public partial class WorldView : Node2D
             return;
         }
 
-        const int tile = U7Constants.TileSize;
         foreach (var h in HomingMissiles)
         {
             if (Shapes.GetSprite8(h.Sprite, h.Frame) is not { } frame)
@@ -688,20 +806,35 @@ public partial class WorldView : Node2D
                 continue;
             }
 
-            var from = h.PrevPos;
-            var to = h.Pos;
-            var f = h.Fraction;
-            var lift = 4 * (to.Tz - from.Tz);
-            var x = from.Tx * tile - 4 * from.Tz + (int)Math.Round((U7Constants.TileDelta(from.Tx, to.Tx) * tile - lift) * f);
-            var y = from.Ty * tile - 4 * from.Tz + (int)Math.Round((U7Constants.TileDelta(from.Ty, to.Ty) * tile - lift) * f);
-            _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms);
+            var (x, y) = HomingHotspot(h);
+            var glow = GlowTable.IsGlowingSprite(h.Sprite) ? GlowTable.GlowByte : (byte)0;
+            if (Roofed(h.Pos))
+            {
+                PaintThroughWindows(frame, h.Pos, x, y, glow, true);
+                continue;
+            }
+
+            _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms, glow, Haze(glow));
         }
     }
 
     /// <summary>
-    /// Exult <c>Sprites_effect::paint</c>, after the map: the frame's hotspot
-    /// at the tile's corner, raised by half the lift in whole tiles.
+    /// Exult paints its effects after the map, over everything; here a roof
+    /// (or upper floor) painted over an effect's tile hides it, as it hides
+    /// the effect's light (the user's rule, <see cref="GameMap.CoverAbove"/>).
     /// </summary>
+    bool Roofed(TileCoord at) => Map.CoverAbove(at.Tx, at.Ty, at.Tz) < SkipAboveLift;
+
+    /// <summary>A hidden effect at its hotspot (world pixels), seen only through the panes of its room's windows.</summary>
+    void PaintThroughWindows(ShapeFrame frame, TileCoord at, int x, int y, byte glow, bool translucent)
+    {
+        if (Lighting?.Windows.PanesFor(at, _paneWindows) == true)
+        {
+            _buffer.PaintRleThroughPanes(frame, x - _originX, y - _originY, Shapes.Xforms, _paneWindows, glow, translucent);
+        }
+    }
+
+    /// <summary>Exult <c>Sprites_effect::paint</c>, after the map, at <see cref="SpriteHotspot"/>; magic and blasts glow.</summary>
     void PaintSprites()
     {
         if (Effects is null)
@@ -716,12 +849,51 @@ public partial class WorldView : Node2D
                 continue;
             }
 
-            var lp = e.Pos.Tz / 2;
-            var x = e.XOff + (e.Pos.Tx - lp) * U7Constants.TileSize;
-            var y = e.YOff + (e.Pos.Ty - lp) * U7Constants.TileSize;
+            var (x, y) = SpriteHotspot(e);
+            var glow = GlowTable.IsGlowingSprite(e.Sprite) ? GlowTable.GlowByte : (byte)0;
+            if (Roofed(e.Pos))
+            {
+                PaintThroughWindows(frame, e.Pos, x, y, glow, true);
+                continue;
+            }
+
             // Exult paints every SPRITES.VGA shape translucent (Shape_manager::paint_shape).
-            _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms);
+            _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms, glow, Haze(glow));
         }
+    }
+
+    /// <summary>
+    /// Exult <c>Projectile_effect::paint</c>'s place for the frame's hotspot,
+    /// in world pixels: the tile's corner, raised by half the lift in pixels
+    /// (<c>tx*8 - 4tz</c>). Where Exult's missile jumps to its next tile every
+    /// 100 ms, this one glides there in between (only the picture: the
+    /// flight's rules see whole tiles).
+    /// </summary>
+    public static (int X, int Y) MissileHotspot(U7.Actors.Missile m) => Glide(m.Pos, m.Next, m.Fraction);
+
+    /// <summary>
+    /// Exult <c>Homing_projectile::paint</c>'s place, as a missile's; where
+    /// Exult's moves a tile every 100 ms, this one glides from its last tile
+    /// to the new one in between.
+    /// </summary>
+    public static (int X, int Y) HomingHotspot(U7.Actors.HomingMissile h) => Glide(h.PrevPos, h.Pos, h.Fraction);
+
+    /// <summary>Exult <c>Sprites_effect::paint</c>'s place: the tile's corner, raised by half the lift in whole tiles, plus the effect's offset.</summary>
+    public static (int X, int Y) SpriteHotspot(U7.World.SpriteEffect e)
+    {
+        var lp = e.Pos.Tz / 2;
+        return (e.XOff + (e.Pos.Tx - lp) * U7Constants.TileSize, e.YOff + (e.Pos.Ty - lp) * U7Constants.TileSize);
+    }
+
+    /// <summary>A glowing shape's see-through pixels glow less (<see cref="GlowTable.MagicLook.Haze"/>).</summary>
+    static byte Haze(byte glow) => (glow & IndexBuffer8.GlowBits) == 0 ? (byte)0 : GlowTable.HazeByte;
+
+    static (int X, int Y) Glide(TileCoord from, TileCoord to, double f)
+    {
+        const int tile = U7Constants.TileSize;
+        var lift = 4 * (to.Tz - from.Tz);
+        return (from.Tx * tile - 4 * from.Tz + (int)Math.Round((U7Constants.TileDelta(from.Tx, to.Tx) * tile - lift) * f),
+            from.Ty * tile - 4 * from.Tz + (int)Math.Round((U7Constants.TileDelta(from.Ty, to.Ty) * tile - lift) * f));
     }
 
     /// <summary>

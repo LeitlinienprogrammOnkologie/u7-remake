@@ -18,6 +18,13 @@ public sealed class GameClock
     public int TotalMinutes => TotalHours * 60 + Minute;
     /// <summary>Exult <c>Game_window::special_light</c>: the game minute a light spell ends, 0 for none.</summary>
     public int SpecialLight { get; set; }
+    /// <summary>Exult <c>Game_clock::overcast</c>: the clouds that make the day overcast; overcast while above 0.</summary>
+    public int Overcast { get; private set; }
+    /// <summary>Exult <c>Game_clock::fog</c>: the fogs going on.</summary>
+    public int Fog { get; private set; }
+    public bool Cloudy => Overcast > 0;
+    /// <summary>A fog is going on, and it is between 6:00 and 20:59 (Exult's "Disable fog at night???").</summary>
+    public bool Foggy => Fog > 0 && Hour is >= 6 and <= 20;
 
     public event Action<int>? HourChanged;
     public event Action<int>? SlotChanged;
@@ -132,6 +139,19 @@ public sealed class GameClock
 
         SpecialLight += units / 20;
     }
+
+    /// <summary>Exult <c>Game_clock::set_overcast</c>: cloud cover starts or ends.</summary>
+    public void SetOvercast(bool on) => Overcast += on ? 1 : -1;
+
+    /// <summary>
+    /// Exult <c>Game_clock::set_fog</c>: a fog starts or ends. Exult sets the
+    /// count to 0 when this happens before 6:00 or after 20:59, so a fog
+    /// started at night and ended by day leaves -1 and cancels the next one;
+    /// here the count stays true and <see cref="Foggy"/> applies the hours
+    /// (the user's pick). Exult shows fog only on the dawn and day palettes
+    /// anyway; the one change is that a night fog still going at 6:00 shows.
+    /// </summary>
+    public void SetFog(bool on) => Fog += on ? 1 : -1;
 
     /// <summary>Restore the time of day from a saved game.</summary>
     public void Set(int day, int hour, int minute)

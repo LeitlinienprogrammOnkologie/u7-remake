@@ -60,22 +60,64 @@ public sealed class PaletteSet
 
     public static string Name(int pal) => (uint)pal < Count ? Names[pal] : pal.ToString();
 
+    /// <summary>Exult <c>is_day_palette</c>: dawn (which is also dusk) and day, where overcast and fog show.</summary>
+    public static bool IsDayPalette(int pal) => pal is Day or Dawn;
+
     /// <summary>
     /// Exult <c>Palette::create_intermediate</c> into 8-bit RGB: per channel
     /// <c>from + (to - from) * t</c> on the 6-bit values, then <c>Get_color8</c>
     /// (Exult steps <paramref name="t"/> in whole sixtieths; any t works here).
     /// </summary>
-    public void Blend(int from, int to, float t, Span<byte> rgb)
+    public void Blend(int from, int to, float t, Span<byte> rgb) => Blend(from, to, t, default, rgb);
+
+    /// <summary>
+    /// <see cref="Blend(int, int, float, Span{byte})"/> between the palettes
+    /// Exult's <c>get_final_palette</c> shows for each end in this weather:
+    /// on the day palettes, OVERCAST, or FOG over it, each eased in by its
+    /// weight; then the overcast's extra grey.
+    /// </summary>
+    public void Blend(int from, int to, float t, Weather weather, Span<byte> rgb)
     {
         var a = _pals[from];
         var b = _pals[to];
+        var overcast = _pals[Overcast];
+        var fog = _pals[Fog];
+        var (oa, fa) = IsDayPalette(from) ? (weather.Overcast, weather.Fog) : (0f, 0f);
+        var (ob, fb) = IsDayPalette(to) ? (weather.Overcast, weather.Fog) : (0f, 0f);
         t = Math.Clamp(t, 0f, 1f);
-        for (var i = 0; i < 768; i++)
+        var grey = weather.Grey * float.Lerp(oa, ob, t);
+        Span<float> c = stackalloc float[3];
+        for (var i = 0; i < 768; i += 3)
         {
-            var v = a[i] + (b[i] - a[i]) * t;
-            rgb[i] = (byte)Math.Min(255f, v * 255f / 63f);
+            for (var k = 0; k < 3; k++)
+            {
+                var j = i + k;
+                var va = float.Lerp(float.Lerp(a[j], overcast[j], oa), fog[j], fa);
+                var vb = float.Lerp(float.Lerp(b[j], overcast[j], ob), fog[j], fb);
+                c[k] = float.Lerp(va, vb, t);
+            }
+
+            if (grey > 0)
+            {
+                var lum = 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2];
+                for (var k = 0; k < 3; k++)
+                {
+                    c[k] = float.Lerp(c[k], lum, grey);
+                }
+            }
+
+            for (var k = 0; k < 3; k++)
+            {
+                rgb[i + k] = (byte)Math.Clamp(c[k] * 255f / 63f, 0f, 255f);
+            }
         }
     }
+
+    /// <summary>
+    /// How far the day palettes go towards OVERCAST and FOG (0 to 1, eased
+    /// in and out), and how much greyer the overcast makes them.
+    /// </summary>
+    public readonly record struct Weather(float Overcast, float Fog, float Grey);
 
     /// <summary>A palette as the window shows it, 8-bit RGB.</summary>
     public void Get(int pal, Span<byte> rgb) => Blend(pal, pal, 0f, rgb);

@@ -55,6 +55,10 @@ public sealed class CombatEngine
     readonly double _stepInterval = U7Constants.StandardDelayMs / 1000.0;
     /// <summary>Exult <c>Main_actor::die</c>: combat off, gumps closed, death usecode.</summary>
     public Action? AvatarDied { get; set; }
+    /// <summary>Exult <c>Palette::flash_red</c>: the avatar was badly hurt (drawn as a red pulse at the screen's edge).</summary>
+    public Action? AvatarFlashRed { get; set; }
+    /// <summary>Exult <c>Weapon_data::lightning_damage</c>.</summary>
+    const int LightningDamage = 3;
     public U7Object Avatar => _avatar;
     public U7.Audio.MusicPlayer? Music { get; set; }
     // Exult Combat_schedule::battle_time / battle_end_time (ms).
@@ -643,14 +647,27 @@ public sealed class CombatEngine
             return 0;
         }
 
-        var hp = victim.GetProp(ActorProp.Health) - delta;
+        var oldhp = victim.GetProp(ActorProp.Health);
+        var maxhp = victim.GetProp(ActorProp.Strength);
+        var hp = oldhp - delta;
         if (hp < -50)
         {
             hp = -50;
+            delta = oldhp + 50;
         }
 
         victim.SetProp(ActorProp.Health, hp);
-        FlashHit(victim);
+        // Exult Actor::reduce_health (exact thresholds): a badly hurt avatar,
+        // or one hit by lightning, flashes the screen red; anyone else shows
+        // the red outline.
+        if (victim == _avatar && (delta >= maxhp / 3 || oldhp < maxhp / 4 || type == LightningDamage))
+        {
+            AvatarFlashRed?.Invoke();
+        }
+        else
+        {
+            FlashHit(victim);
+        }
         if (hp <= 0)
         {
             Die(victim, attacker);

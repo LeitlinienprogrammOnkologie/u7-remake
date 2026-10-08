@@ -61,6 +61,7 @@ public partial class U7Game : Node2D
     /// <summary>A walking key is held.</summary>
     bool _keyWalking;
     int _lastSchunk = -1;
+    (int Cx, int Cy) _lastChunk = (-1, -1);
     string _statusExtra = "";
 
     public override void _Ready()
@@ -152,7 +153,8 @@ public partial class U7Game : Node2D
                 }
             }
 
-            _effects = new EffectsManager(_shapes.SpritesVga);
+            _effects = new EffectsManager(_shapes.SpritesVga, _clock) { InDungeon = () => _lighting.InDungeon };
+            _eggs.Effects = _effects;
             _combat.Effects = _effects;
             _schedules.Effects = _effects;
             _world = new WorldView
@@ -168,8 +170,14 @@ public partial class U7Game : Node2D
                 TextureFilter = TextureFilterEnum.Nearest
             };
             AddChild(_world);
-            _lighting = new SceneLighting(_clock, _map, _catalog, avatar, _effects, _party);
+            _lighting = new SceneLighting(_clock, _map, _catalog, avatar, _effects, _party, new GlowColours(_shapes, _catalog))
+            {
+                Missiles = _combat.Missiles,
+                HomingMissiles = _combat.HomingMissiles
+            };
             _world.Lighting = _lighting;
+            // Rain, snow and sparkles over the world, under the gumps and the screen effects.
+            AddChild(new WeatherView { Name = "WeatherView", Effects = _effects, Lighting = _lighting });
 
             _gumps = new GumpManager(_map, avatar);
             _gumps.ActivateUsecode = obj => RunUsecode(obj);
@@ -284,6 +292,7 @@ public partial class U7Game : Node2D
                 _eggs.Activate(actor, actor.Tx, actor.Ty);
                 _party.AvatarStepped(actor.Tx, actor.Ty);
             };
+            _combat.AvatarFlashRed = _screenFx.PulseRed;
             _combat.AvatarDied = () =>
             {
                 _gumps.CloseAll(true);
@@ -510,6 +519,18 @@ public partial class U7Game : Node2D
             {
                 GD.Print($"cache out: {gone} temporary objects");
             }
+        }
+
+        // Exult Main_actor::switched_chunks → emulate_cache: weather from eggs 120 tiles away ends.
+        var chunk = (avPos.Tx / U7Constants.TilesPerChunk, avPos.Ty / U7Constants.TilesPerChunk);
+        if (chunk != _lastChunk)
+        {
+            if (_lastChunk.Cx >= 0)
+            {
+                _effects.RemoveWeather(new TileCoord(avPos.Tx, avPos.Ty, avPos.Tz), 120);
+            }
+
+            _lastChunk = chunk;
         }
 
         Vector2I? click = null;

@@ -34,35 +34,10 @@ public sealed class SpriteEffect
 }
 
 /// <summary>
-/// Exult <c>Weather_effect</c>'s bookkeeping: which weather (1 snow, 2 storm,
-/// 3 magic sparkles, 4 fog, 5 overcast, 6 clouds) until when. The rain,
-/// snow, fog and clouds themselves are not drawn.
-/// </summary>
-public class WeatherEffect
-{
-    /// <summary>The weather's number, or -1 (lightning).</summary>
-    public int Num;
-    public double StopMs;
-    /// <summary>Where the egg that started it is, if one did.</summary>
-    public TileCoord? EggLoc;
-}
-
-/// <summary>
-/// Exult <c>Lightning_effect</c>: the screen flashes (PALETTE_LIGHTNING) for
-/// 25-50 ms, then again every 4-7 s (now and then sooner) until it ends.
-/// </summary>
-public sealed class LightningEffect : WeatherEffect
-{
-    public bool FromUsecode;
-    public bool Flashing;
-    public double NextMs;
-}
-
-/// <summary>
 /// Exult <c>Effects_manager</c> for the SPRITES.VGA animations, explosions,
-/// lightning and the weather (missiles are the combat engine's, texts the
-/// bark overlay's). Ticked like Exult's time queue, so it stands still in a
-/// conversation's wait and in gump mode.
+/// lightning and the weather (<see cref="WeatherEffect"/>; missiles are the
+/// combat engine's, texts the bark overlay's). Ticked like Exult's time
+/// queue, so it stands still in a conversation's wait and in gump mode.
 /// </summary>
 public sealed class EffectsManager
 {
@@ -71,13 +46,33 @@ public sealed class EffectsManager
     readonly VgaShapeFile _spritesVga;
     /// <summary>Milliseconds of effect time (Exult's ticks while the time queue runs).</summary>
     double _nowMs;
-    /// <summary>Exult <c>Lightning_effect::active</c>: one flash at a time.</summary>
-    bool _lightningActive;
 
-    public EffectsManager(VgaShapeFile spritesVga) => _spritesVga = spritesVga;
+    public EffectsManager(VgaShapeFile spritesVga, GameClock clock)
+    {
+        _spritesVga = spritesVga;
+        Clock = clock;
+    }
+
+    /// <summary>Its overcast and fog counters are the weather's.</summary>
+    public GameClock Clock { get; }
+
+    /// <summary>Exult <c>Game_window::is_in_dungeon</c>: a storm's lightning doesn't flash there.</summary>
+    public Func<bool> InDungeon { get; set; } = () => false;
+
+    /// <summary>Effect time in milliseconds.</summary>
+    public double NowMs => _nowMs;
+
+    /// <summary>Exult <c>Lightning_effect::active</c>: one flash at a time.</summary>
+    internal bool LightningActive { get; set; }
+
+    /// <summary>Lightning flashes so far (for the console).</summary>
+    public int Flashes { get; internal set; }
 
     /// <summary>Newest first, the order Exult paints them in (<c>add_effect</c> puts it at the front).</summary>
     public IReadOnlyList<SpriteEffect> Sprites => _sprites;
+
+    /// <summary>The weather effects, newest first.</summary>
+    public IReadOnlyList<WeatherEffect> Weather => _weather;
 
     /// <summary>A lightning flash is showing (Exult's PALETTE_LIGHTNING).</summary>
     public bool LightningFlash => _weather.Exists(w => w is LightningEffect { Flashing: true });
@@ -124,17 +119,48 @@ public sealed class EffectsManager
         return e;
     }
 
+    /// <summary>Exult <c>Effects_manager::add_effect</c>: at the front.</summary>
+    public void Add(WeatherEffect effect) => _weather.Insert(0, effect);
+
+    /// <summary>Exult <c>remove_effect</c>, and the effect's destructor.</summary>
+    public void Remove(WeatherEffect effect)
+    {
+        if (_weather.Remove(effect))
+        {
+            effect.OnRemoved();
+        }
+    }
+
     /// <summary>Exult <c>Effects_manager::get_weather</c>: the newest numbered weather, 0 for none.</summary>
     public int GetWeather() => _weather.Find(w => w.Num >= 0)?.Num ?? 0;
 
-    /// <summary>Exult <c>remove_weather_effects(dist)</c>: all, or those from eggs at least that far away.</summary>
-    public void RemoveWeather(TileCoord? avatar = null, int dist = 0) =>
-        _weather.RemoveAll(w => dist == 0 || avatar is null || (w.EggLoc is { } loc && loc.Distance(avatar.Value) >= dist));
+    /// <summary>Exult <c>remove_weather_effects()</c>: all of them.</summary>
+    public void RemoveWeather()
+    {
+        foreach (var w in _weather.ToList())
+        {
+            Remove(w);
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>remove_weather_effects(dist)</c>, on every chunk the avatar
+    /// enters (<c>Game_window::emulate_cache</c>, 120 tiles): those from eggs
+    /// at least that far away.
+    /// </summary>
+    public void RemoveWeather(TileCoord avatar, int dist)
+    {
+        foreach (var w in _weather.Where(w => w.OutOfRange(avatar, dist)).ToList())
+        {
+            Remove(w);
+        }
+    }
 
     /// <summary>
     /// Exult <c>Egg_object::set_weather</c>: weather <paramref name="weather"/>
     /// (0 clears it) for <paramref name="minutes"/> game minutes (0: a long
-    /// 6000), replacing other weather unless it is fog or the same kind.
+    /// 6000). Unless it is fog, it replaces all weather when it is sparkles or
+    /// differs from the current weather; the same again is added alongside.
     /// </summary>
     public void SetWeather(int weather, int minutes = 15, TileCoord? egg = null)
     {
@@ -144,19 +170,35 @@ public sealed class EffectsManager
         }
 
         var cur = GetWeather();
+        GD.Print($"weather is {cur}; setting {weather} for {minutes} minutes");
         if (weather != 4 && (weather == 3 || cur != weather))
         {
-            _weather.Clear();
+            RemoveWeather();
         }
 
-        if (weather is < 1 or > 6)
+        switch (weather)
         {
-            _weather.Clear();
-            return;
+            case 0:
+                RemoveWeather();
+                break;
+            case 1:
+                Add(new SnowstormEffect(this, minutes, 0, egg));
+                break;
+            case 2:
+                Add(new StormEffect(this, minutes, 0, egg));
+                break;
+            case 3:
+                RemoveWeather();
+                Add(new SparkleEffect(this, minutes, 0, egg));
+                break;
+            case 4:
+                Add(new FogEffect(this, minutes, 0, egg));
+                break;
+            case 5:
+            case 6:
+                Add(new CloudsEffect(this, minutes, 0, egg, weather));
+                break;
         }
-
-        _weather.Insert(0, new WeatherEffect { Num = weather, StopMs = StopTime(minutes), EggLoc = egg });
-        GD.Print($"weather {weather} for {minutes} minutes");
     }
 
     /// <summary>
@@ -166,30 +208,23 @@ public sealed class EffectsManager
     /// </summary>
     public void AddUsecodeLightning()
     {
-        _weather.RemoveAll(w => w is LightningEffect { FromUsecode: true });
-        _weather.Insert(0, new LightningEffect { Num = -1, StopMs = StopTime(1000), FromUsecode = true, NextMs = _nowMs });
-    }
+        foreach (var w in _weather.Where(w => w is LightningEffect { FromUsecode: true }).ToList())
+        {
+            Remove(w);
+        }
 
-    /// <summary>Exult <c>Weather_effect</c>: a game minute is 25 standard delays.</summary>
-    double StopTime(int minutes) => _nowMs + (double)minutes * U7Constants.StandardDelayMs * U7Constants.TicksPerMinute;
+        Add(new LightningEffect(this, 1000, 0, fromUsecode: true));
+    }
 
     public void Update(double delta)
     {
         var ms = delta * 1000;
         _nowMs += ms;
-        for (var i = _weather.Count - 1; i >= 0; i--)
+        // Exult's time queue: the weather's events in time order, each at the
+        // time it was due, so a long frame catches up step by step.
+        while (NextDue() is { } due)
         {
-            if (_weather[i] is LightningEffect lightning)
-            {
-                if (!StepLightning(lightning))
-                {
-                    _weather.RemoveAt(i);
-                }
-            }
-            else if (_nowMs >= _weather[i].StopMs)
-            {
-                _weather.RemoveAt(i);
-            }
+            due.HandleEvent(due.DueMs);
         }
 
         for (var i = _sprites.Count - 1; i >= 0; i--)
@@ -209,36 +244,18 @@ public sealed class EffectsManager
         }
     }
 
-    /// <summary>Exult <c>Lightning_effect::handle_event</c>, as its time comes. False once it has ended.</summary>
-    bool StepLightning(LightningEffect l)
+    WeatherEffect? NextDue()
     {
-        while (_nowMs >= l.NextMs)
+        WeatherEffect? next = null;
+        foreach (var w in _weather)
         {
-            var r = Random.Shared.Next();
-            double delay = 100;
-            if (l.Flashing)
+            if (w.DueMs <= _nowMs && (next is null || w.DueMs < next.DueMs))
             {
-                l.Flashing = false;
-                _lightningActive = false;
-                if (_nowMs >= l.StopMs)
-                {
-                    return false;
-                }
-
-                delay = r % 50 == 0 ? (1 + r % 7) * 40 : 4000 + r % 3000;
+                next = w;
             }
-            else if (!_lightningActive)
-            {
-                // (Exult also plays thunder, and flashes from storms only outside dungeons.)
-                _lightningActive = true;
-                l.Flashing = true;
-                delay = (1 + r % 2) * 25;
-            }
-
-            l.NextMs += delay;
         }
 
-        return true;
+        return next;
     }
 
     /// <summary>Exult <c>Sprites_effect::handle_event</c>. Returns true when the animation is over.</summary>

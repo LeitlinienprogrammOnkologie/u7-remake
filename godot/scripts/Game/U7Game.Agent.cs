@@ -22,7 +22,7 @@ public partial class U7Game
         "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | quit | die [restart] | " +
-        "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | arena | combat [off] | close";
+        "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] | damage <n> [type] | arena | combat [off] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
     static bool _agentStarted;
@@ -453,8 +453,53 @@ public partial class U7Game
                 AgentLog($"saved {file}");
                 break;
             }
+            case "damage":
+            {
+                // Damage to the avatar through the normal path (no attacker): the red pulse or the outline.
+                var hp = av.GetProp(ActorProp.Health);
+                var pulses = _screenFx.Pulses;
+                var type = parts.Length > 2 ? int.Parse(parts[2]) : 0;
+                var taken = _combat.ReduceHealth(av, int.Parse(parts[1]), null, type);
+                AgentLog($"damage {parts[1]} type {type}: took {taken}, hp {hp} -> {av.GetProp(ActorProp.Health)} of {av.GetProp(ActorProp.Strength)}, " +
+                         (_screenFx.Pulses > pulses ? "red pulse" : av.HitUntilMsec > Time.GetTicksMsec() ? "red outline" : "nothing"));
+                break;
+            }
+            case "sprite":
+            {
+                // A SPRITES.VGA animation played once over the avatar.
+                var sprite = int.Parse(parts[1]);
+                var frame = parts.Length > 2 ? int.Parse(parts[2]) : 0;
+                var e = _effects.AddSprite(sprite, new TileCoord(av.Tx, av.Ty, av.Tz), frame: frame);
+                AgentLog($"sprite {sprite} ({e.Frames} frames) from frame {frame} at {av.Tx},{av.Ty},{av.Tz}");
+                break;
+            }
             case "eggs":
                 AgentEggs(parts.Length > 1 ? AgentEggType(parts[1]) : -1, parts.Length > 2 ? int.Parse(parts[2]) : 40);
+                break;
+            case "weather":
+                if (parts.Length > 1 && parts[1] == "eggs")
+                {
+                    AgentEggs(U7.World.EggType.Weather, parts.Length > 2 ? int.Parse(parts[2]) : 64);
+                    break;
+                }
+
+                if (parts.Length > 1 && parts[1] == "lightning")
+                {
+                    // Usecode's lightning (UI_lightning), which flashes in dungeons too.
+                    _effects.AddUsecodeLightning();
+                }
+                else if (parts.Length > 1)
+                {
+                    // Usecode's set_weather (15 minutes), or as long as asked.
+                    _effects.SetWeather(int.Parse(parts[1]), parts.Length > 2 ? int.Parse(parts[2]) : 15);
+                }
+
+                if (parts.Length > 1)
+                {
+                    _effects.Update(0); // what is due now starts (fog sets the clock, lightning flashes)
+                }
+
+                AgentWeather();
                 break;
             case "die":
                 // F6 (with "restart": Shift+F6).
@@ -583,7 +628,8 @@ public partial class U7Game
             return;
         }
 
-        if (obj.NpcNum < 0 && _gumps.ShowGump(obj))
+        // As ActivateUnderMouse: the avatar opens its paperdoll, other NPCs run their usecode.
+        if (obj.NpcNum <= 0 && _gumps.ShowGump(obj))
         {
             AgentLog($"opened {AgentDescribe(obj)}:");
             AgentInventory(obj, 1);
@@ -798,6 +844,12 @@ public partial class U7Game
                 $"{e.Sprite} frame {e.Frame}/{e.Frames} at {e.Pos.Tx},{e.Pos.Ty},{e.Pos.Tz}")));
         }
 
+        if (_effects.Weather.Count > 0 || _clock.Overcast != 0 || _clock.Fog != 0)
+        {
+            AgentLog($"weather {_effects.GetWeather()}: [{string.Join(", ", _effects.Weather.Select(w => w.Name))}]" +
+                     $" overcast {_clock.Overcast} fog {_clock.Fog} flashes {_effects.Flashes}");
+        }
+
         if (_combat.Missiles.Count > 0)
         {
             AgentLog("missiles " + string.Join(", ", _combat.Missiles.Select(m =>
@@ -833,7 +885,8 @@ public partial class U7Game
     {
         var av = _avatar.Avatar;
         var here = new TileCoord(av.Tx, av.Ty, av.Tz);
-        var eggs = _map.EggsNear(av.Tx, av.Ty, radius)
+        // (Distinct: a radius past half the map wraps onto chunks already searched.)
+        var eggs = _map.EggsNear(av.Tx, av.Ty, radius).Distinct()
             .Where(e => !e.Removed && (type < 0 || e.EggType == type) &&
                         here.Distance2d(new TileCoord(e.Tx, e.Ty, e.Tz)) <= radius)
             .OrderBy(AgentDist)
@@ -845,8 +898,25 @@ public partial class U7Game
             var crit = (uint)e.EggCriteria < (uint)AgentCriteria.Length ? AgentCriteria[e.EggCriteria] : $"{e.EggCriteria}";
             AgentLog($"  #{e.Id} {U7.World.EggType.Name(e.EggType)} egg (shape {e.Shape}:{e.Frame}) at {e.Tx},{e.Ty},{e.Tz} d={AgentDist(e)}" +
                      $" {crit} dist {e.EggDistance} prob {e.EggProbability} d1 0x{e.EggData1:X4} d2 0x{e.EggData2:X4}" +
+                     (e.EggType == U7.World.EggType.Weather ? $" (weather {e.EggData1 & 0xff} for {e.EggData1 >> 8} min)" : "") +
                      ((e.EggFlags & U7.World.EggFlag.Hatched) != 0 ? " hatched" : "") +
                      ((e.EggFlags & U7.World.EggFlag.Once) != 0 ? " once" : ""));
+        }
+    }
+
+    static readonly string[] AgentWeatherNames = ["none", "snowstorm", "storm", "sparkles", "fog", "overcast", "clouds"];
+
+    /// <summary>The weather (Exult <c>get_weather</c>), the clock's counters and each weather effect.</summary>
+    void AgentWeather()
+    {
+        var cur = _effects.GetWeather();
+        AgentLog($"weather {cur} ({((uint)cur < (uint)AgentWeatherNames.Length ? AgentWeatherNames[cur] : "?")}), " +
+                 $"overcast {_clock.Overcast} ({(_clock.Cloudy ? "cloudy" : "clear")}), fog {_clock.Fog} ({(_clock.Foggy ? "foggy" : "none")}), " +
+                 $"{_effects.Flashes} flashes so far{(_effects.LightningFlash ? ", flashing now" : "")}, " +
+                 $"{(_lighting.InDungeon ? "in a dungeon" : "outdoors")}, {_clock.HudText()}");
+        foreach (var w in _effects.Weather)
+        {
+            AgentLog("  " + w.Describe(_effects.NowMs));
         }
     }
 

@@ -33,18 +33,44 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (or your own
   model's attribution line).
 - **Ask about taste, decide engineering.** Visual or aesthetic choices (fonts,
-  UI look) go to the user, ideally with rendered options. The user picked
-  MedievalSharp and the "dark wood & gold" conversation panel, and accepted
-  (for now) books and scrolls in the original GUMPS.VGA art and FONTS.VGA font 4,
-  scaled to fit the window. The light spell is drawn as an animated glow round
-  the avatar (the user's idea), not Exult's whole-screen palette; its rules
-  stay Exult's. Palette colours cycle every 100 ms (the user's pick of
-  Exult's 100 and 200). Night (and dungeons) use the day palette under the
-  old blue tint, not Exult's teal NIGHT palette (the user's pick,
-  `SceneLighting.NightTint`); the hours' blending is Exult's. Light sources
-  cast flickering pools (radius ×1.3, smoothstep, flicker 0.25, smooth: the
-  user's picks), and the light-pool discs (440, 198) aren't drawn.
-  Engineering questions with an Exult answer don't need asking.
+  UI look) go to the user, ideally with rendered options; engineering
+  questions with an Exult answer don't need asking. The world keeps
+  **Exult's rules and is drawn the modern way**: Exult decides what shows,
+  when and for how long (palettes and their blending, light levels, flashes,
+  weather and its timing), the look is the user's. Their picks so far:
+  - **UI:** MedievalSharp and the "dark wood & gold" conversation panel;
+    books and scrolls (for now) in the original GUMPS.VGA art and FONTS.VGA
+    font 4, scaled to fit the window.
+  - **Colour cycling:** every 100 ms (of Exult's 100 and 200).
+  - **Darkness:** night (and dungeons) is the day palette under the old blue
+    tint, not Exult's teal NIGHT palette (`SceneLighting.NightTint`); the
+    hours' blending is Exult's.
+  - **Light spell:** an animated glow round the avatar (the user's idea), not
+    Exult's whole-screen palette.
+  - **Light sources:** flickering pools (radius ×1.3, smoothstep, flicker
+    0.25, smooth edges); the light-pool discs (440, 198) aren't drawn; a
+    painted roof hides the lights and effects under it (`GameMap.CoverAbove`;
+    Exult paints effects over everything).
+  - **Window light** (cosmetic, the user's wish, `WindowLights.Look`): a
+    roofed room's lights, blasts and missiles show through its windows:
+    medium strength, a 4-tile fan on the ground outside, panes lit in the
+    glass's own colours (not candlelight), north and west fans reaching past
+    the roof that hides their start; hidden effects show through the panes.
+  - **Magic glows** (cosmetic, the user's wish): magic sprites, missiles and
+    objects glow and light their surroundings, "strong", 60% brighter by day
+    too, see-through parts glowing fully, each in its own colour
+    (`GlowTable.Magic`).
+  - **Red flash:** a badly hurt avatar (Exult's rule) gets a faint red pulse
+    at the screen's edges, 0.35 strong and 0.12 wide, not the RED palette.
+  - **Weather look** (`WeatherLook`): rain as streaks with faint splashes,
+    big snowflakes at twice Exult's count, large glints for sparkles, cloud
+    shadows of Exult's size and darkness, fog at 70% of the FOG palette with
+    drifting mist, overcast as Exult's OVERCAST palette 30% greyer.
+  - **Weather rules:** Exult's weather bugs are fixed, not ported (listed in
+    PROGRESS.md, "Weather (current)"): clouds alone keep the overcast count,
+    the fog count stays true, lightning can't stick or flash past its end,
+    rain doesn't flicker back at its end. A storm's parts outliving its egg
+    stays Exult's.
 
 ## Layout
 
@@ -71,17 +97,24 @@ godot/scripts/
               ItemQuantity, ActorWalker (steps, Actor::is_blocked), tables
   World/      GameClock, EggHatcher, Pathfinder (Exult Find_path + clients),
               LightSources (Exult light rules: brightness, strength, carried
-              light, light level),
-              EffectsManager (Exult Sprites_effect, SPRITES.VGA animations)
+              light, light level), Weather (Exult's weather effects: storm,
+              snow, sparkles, fog, clouds, rain, lightning),
+              EffectsManager (Exult Sprites_effect, SPRITES.VGA animations;
+              the weather's time queue, set_weather)
   Rendering/  WorldView (paints the map into IndexBuffer8, Exult's Image_buffer8:
               XFORM.TBL translucency, invisible actors, status outlines;
               shown through the world shader: ambient/lit palettes and
               lights), WorldPalette (palette texture, colour cycling, Exult's
               special pixels), PaletteSet (PALETTES.FLX by Exult's names,
               blends), SceneLighting (final palette, lights), GlowTable (how
-              each light source looks), ScreenFx (whole-screen effects:
-              usecode's fades, over the gumps and the conversation too),
-              ShapeCache (frames by
+              each light source looks, what magic glows), GlowColours (a
+              glow's colour from the pixels), WindowLights (a roofed room's
+              light through its windows: fans, panes, effects behind the
+              glass), WeatherView (rain, snow and
+              sparkles over the world; cloud shadows and mist are in the
+              world shader), WeatherLook (the user's weather picks), ScreenFx
+              (whole-screen effects: usecode's fades and the red edge pulse,
+              over the gumps and the conversation too), ShapeCache (frames by
               index; RGBA shape textures for the gumps; gump, font and face
               frames)
   UI/         ConversationPanel, BarkOverlay, UiTheme
@@ -109,7 +142,8 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
      Fades hold the usecode for their 20 ms steps (`UsecodeWait.Fade`,
      as Exult's fade loop holds the game); a command ends once its fade
      is over. `die` is F6 (the death flow, waking in Paws).
-   - Object ids (`#231108`) are only usable after `look` or `find` has listed them.
+   - Object ids (`#231108`) are only usable after `look` or `find` has listed them;
+     pass them without the `#` (`use 231108`). A load renumbers them.
    - `save <slot>` / `load <slot>` keep progress across restarts; `timer`
      lists or sets usecode timers.
    - The user may have local saves `quest1`–`quest4`, Trinsic checkpoints
@@ -233,12 +267,22 @@ NPC proximity remarks and woken sleepers, all of Black Gate's schedules
 `Combat_schedule` for monsters, NPCs, the party and the avatar, and the agent
 console.
 
+The visual overhaul is done: the world painted as Exult's 8-bit buffer
+(SHAPES.VGA decoded at runtime, XFORM.TBL translucency, invisible actors,
+status outlines, colour cycling) through one world shader with Exult's time,
+lightning, invisible, overcast and fog palettes; the light spell, light
+sources and carried lights as flickering pools, magic glows, Exult's fades,
+missiles as effects (homing missiles, missile eggs), the red edge pulse, and
+Exult's weather drawn the modern way (rain, snow, sparkles, cloud shadows,
+fog). Roofs hide the lights and effects under them, and a roofed room's light
+shows through its windows.
+
 Next, in priority order:
 
 1. **Remaining intrinsics:** 29 stubbed, none reachable from Trinsic's or
    Britain's NPCs; the most-used are `flash_mouse` (needs Exult's cursors),
    `is_readied`, `set_attack_mode`, `kill_npc` and `set_oppressor`. Spells still
-   reach 11 (summon, wizard eye, clone, armageddon, ...).
+   reach 10 (summon, wizard eye, clone, armageddon, ...).
 2. **Signs:** `display_runes` still uses the conversation panel; port
    Exult's `Sign_gump` (runic signs, plaques, gravestones).
 3. **Walking follow-ups:** `Walk_to_schedule`'s off-screen legs, dormant

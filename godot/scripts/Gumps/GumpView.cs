@@ -150,9 +150,11 @@ public partial class GumpView : Node2D
         DrawFontString(font, text, rightX - w, y);
     }
 
+    /// <summary>Exult <c>Font::paint_text</c>: <paramref name="y"/> is the top of the text, the glyphs stand on the font's baseline.</summary>
     public void DrawFontString(int font, string text, int x, int y)
     {
         var cx = x;
+        var baseline = y + VgaFont.Get(font).Baseline;
         foreach (var ch in text)
         {
             var frame = (int)ch;
@@ -164,7 +166,7 @@ public partial class GumpView : Node2D
             }
 
             var fi = Shapes.GetFontFrame(font, frame);
-            DrawTexture(tex, new Vector2(cx - fi.XLeft, y - fi.YAbove));
+            DrawTexture(tex, new Vector2(cx - fi.XLeft, baseline - fi.YAbove));
             cx += Math.Max(1, fi.Width);
         }
     }

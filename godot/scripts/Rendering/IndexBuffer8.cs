@@ -4,16 +4,33 @@ namespace U7.Rendering;
 
 /// <summary>
 /// Exult <c>Image_buffer8</c> (imagewin/ibuf8.cc): the picture the world is
-/// painted into, one palette index a pixel, with a parallel glow plane that
-/// marks emissive pixels (all zero for now). Painters clip per scan.
+/// painted into, one palette index a pixel, with a parallel glow plane: its
+/// top six bits how emissive a pixel is (magic, cosmetic: Exult has none),
+/// its low two bits marks for the world shader (<see cref="RoofMark"/>,
+/// <see cref="PaneMark"/>). Every painter writes its glow byte (0 unless
+/// told) where it paints, so what covers a glowing thing or a pane doesn't
+/// glow or count as one. Painters clip per scan.
 /// </summary>
 public sealed class IndexBuffer8
 {
+    /// <summary>The glow plane's bits for how emissive a pixel is.</summary>
+    public const byte GlowBits = 0xFC;
+    /// <summary>A roof's (or upper floor's) pixel: window light doesn't fall on it.</summary>
+    public const byte RoofMark = 1;
+    /// <summary>A pane of glass: a window's light makes it glow, and what is behind it can show (<see cref="Panes"/>).</summary>
+    public const byte PaneMark = 2;
+
     public int Width { get; private set; }
     public int Height { get; private set; }
     /// <summary>Indices row by row, <see cref="Width"/> a row.</summary>
     public byte[] Pixels { get; private set; } = [];
     public byte[] Glow { get; private set; } = [];
+    /// <summary>
+    /// For a pixel marked <see cref="PaneMark"/>: its window's number (low
+    /// byte) and the translucency table the pane turned it through (high
+    /// byte). Meaningless where the glow plane has no pane mark.
+    /// </summary>
+    public ushort[] Panes { get; private set; } = [];
 
     /// <summary>Takes a new size, allocating only when it changes; the pixels are then undefined.</summary>
     public void Resize(int width, int height)
@@ -27,10 +44,14 @@ public sealed class IndexBuffer8
         Height = height;
         Pixels = new byte[width * height];
         Glow = new byte[width * height];
+        Panes = new ushort[width * height];
     }
 
     /// <summary>Exult <c>fill8(pix)</c>: the whole buffer.</summary>
     public void Fill8(byte color) => Pixels.AsSpan().Fill(color);
+
+    /// <summary>Nothing glows: the start of a frame.</summary>
+    public void ClearGlow() => Glow.AsSpan().Clear();
 
     /// <summary>Exult <c>fill8(pix, w, h, x, y)</c>: a rectangle.</summary>
     public void Fill8(byte color, int w, int h, int x, int y)
@@ -43,11 +64,12 @@ public sealed class IndexBuffer8
         for (var row = 0; row < h; row++)
         {
             Pixels.AsSpan((y + row) * Width + x, w).Fill(color);
+            Glow.AsSpan((y + row) * Width + x, w).Clear();
         }
     }
 
     /// <summary>Exult <c>copy8</c>: a rectangle of indices, <paramref name="srcw"/> a row, with its top left at x, y.</summary>
-    public void Copy8(ReadOnlySpan<byte> src, int srcw, int srch, int x, int y)
+    public void Copy8(ReadOnlySpan<byte> src, int srcw, int srch, int x, int y, byte glow = 0)
     {
         var w = srcw;
         var h = srch;
@@ -59,6 +81,7 @@ public sealed class IndexBuffer8
         for (var row = 0; row < h; row++)
         {
             src.Slice((sy + row) * srcw + sx, w).CopyTo(Pixels.AsSpan((y + row) * Width + x, w));
+            Glow.AsSpan((y + row) * Width + x, w).Fill(glow);
         }
     }
 
@@ -67,11 +90,11 @@ public sealed class IndexBuffer8
     /// (<c>paint_rle</c>); a raw terrain frame is copied with its top left at
     /// x - 8, y - 8.
     /// </summary>
-    public void PaintRle(ShapeFrame frame, int x, int y)
+    public void PaintRle(ShapeFrame frame, int x, int y, byte glow = 0)
     {
         if (!frame.IsRle)
         {
-            Copy8(frame.Pixels, ShapeFrame.TileSize, ShapeFrame.TileSize, x - ShapeFrame.TileSize, y - ShapeFrame.TileSize);
+            Copy8(frame.Pixels, ShapeFrame.TileSize, ShapeFrame.TileSize, x - ShapeFrame.TileSize, y - ShapeFrame.TileSize, glow);
             return;
         }
 
@@ -80,6 +103,7 @@ public sealed class IndexBuffer8
             if (ClipScan(scan, x, y, out var dest, out var src, out var len))
             {
                 frame.Pixels.AsSpan(src, len).CopyTo(Pixels.AsSpan(dest, len));
+                Glow.AsSpan(dest, len).Fill(glow);
             }
         }
     }
@@ -87,13 +111,16 @@ public sealed class IndexBuffer8
     /// <summary>
     /// Exult <c>paint_rle_translucent</c> (<c>copy_hline_translucent8</c>):
     /// indices 0xEE-0xFE turn the pixel under them through their table,
-    /// the others (0xFF too) are copied.
+    /// the others (0xFF too) are copied. The see-through pixels glow
+    /// <paramref name="haze"/>, the others <paramref name="glow"/>; if
+    /// <paramref name="haze"/> marks panes, they note <paramref name="window"/>
+    /// and their table in <see cref="Panes"/>.
     /// </summary>
-    public void PaintRleTranslucent(ShapeFrame frame, int x, int y, XformTables xforms)
+    public void PaintRleTranslucent(ShapeFrame frame, int x, int y, XformTables xforms, byte glow = 0, byte haze = 0, byte window = 0)
     {
         if (!frame.IsRle)
         {
-            PaintRle(frame, x, y);
+            PaintRle(frame, x, y, glow);
             return;
         }
 
@@ -107,12 +134,66 @@ public sealed class IndexBuffer8
 
             var from = frame.Pixels.AsSpan(src, len);
             var to = Pixels.AsSpan(dest, len);
+            var lit = Glow.AsSpan(dest, len);
+            var panes = (haze & PaneMark) != 0 ? Panes.AsSpan(dest, len) : default;
             for (var i = 0; i < len; i++)
             {
                 var c = from[i];
-                to[i] = c is >= XformTables.FirstTranslucent and <= 0xFE
-                    ? tables[((c - XformTables.FirstTranslucent) << 8) | to[i]]
-                    : c;
+                if (c is >= XformTables.FirstTranslucent and <= 0xFE)
+                {
+                    to[i] = tables[((c - XformTables.FirstTranslucent) << 8) | to[i]];
+                    lit[i] = haze;
+                    if (!panes.IsEmpty)
+                    {
+                        panes[i] = (ushort)(((c - XformTables.FirstTranslucent) << 8) | window);
+                    }
+                }
+                else
+                {
+                    to[i] = c;
+                    lit[i] = glow;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A frame behind window glass (cosmetic: what a roof hides shows through
+    /// its room's windows): painted only on pane pixels of the windows marked
+    /// in <paramref name="windows"/>, each seen through its pane's table; with
+    /// <paramref name="translucent"/>, its own see-through pixels turn what
+    /// the pane shows instead. The panes keep their marks and take
+    /// <paramref name="glow"/>.
+    /// </summary>
+    public void PaintRleThroughPanes(ShapeFrame frame, int x, int y, XformTables xforms, ReadOnlySpan<bool> windows, byte glow, bool translucent)
+    {
+        if (!frame.IsRle)
+        {
+            return;
+        }
+
+        var tables = xforms.All;
+        foreach (var scan in frame.Scans)
+        {
+            if (!ClipScan(scan, x, y, out var dest, out var src, out var len))
+            {
+                continue;
+            }
+
+            for (var i = 0; i < len; i++)
+            {
+                var at = dest + i;
+                var pane = Panes[at];
+                if ((Glow[at] & PaneMark) == 0 || !windows[pane & 0xFF])
+                {
+                    continue;
+                }
+
+                var c = frame.Pixels[src + i];
+                Pixels[at] = translucent && c is >= XformTables.FirstTranslucent and <= 0xFE
+                    ? tables[((c - XformTables.FirstTranslucent) << 8) | Pixels[at]]
+                    : tables[(pane & 0xFF00) | c];
+                Glow[at] = (byte)((glow & GlowBits) | (Glow[at] & ~GlowBits));
             }
         }
     }
@@ -140,6 +221,8 @@ public sealed class IndexBuffer8
             {
                 to[i] = xform[to[i]];
             }
+
+            Glow.AsSpan(dest, len).Clear();
         }
     }
 
@@ -175,6 +258,7 @@ public sealed class IndexBuffer8
         if ((uint)x < (uint)Width && (uint)y < (uint)Height)
         {
             Pixels[y * Width + x] = color;
+            Glow[y * Width + x] = 0;
         }
     }
 

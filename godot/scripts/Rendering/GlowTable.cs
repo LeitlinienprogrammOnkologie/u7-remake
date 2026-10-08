@@ -15,7 +15,9 @@ public enum GlowKind
     /// <summary>A slow pulse: the wisp.</summary>
     Magic,
     /// <summary>Lightning (shape 179), on only in its bright frames.</summary>
-    Flash
+    Flash,
+    /// <summary>A roofed room's light through a window (<see cref="WindowLights"/>), already flickering with the room's.</summary>
+    Window
 }
 
 /// <summary>
@@ -50,6 +52,67 @@ public static class GlowTable
     /// lamp's own light covers it, so it gets no light of its own.
     /// </summary>
     public static bool IsLampPool(int shape) => shape == 440;
+
+    /// <summary>The lightning missile (807) and the full-screen lightning sprite (17) light up in this colour.</summary>
+    public static readonly Vector3 LightningColour = new(0.8f, 0.85f, 1f);
+    public const int LightningMissile = 807;
+    public const int LightningSprite = 17;
+
+    /// <summary>
+    /// How magic glows (cosmetic; Exult has none): <see cref="Glow"/> how far
+    /// a glowing pixel shows its day colour at night, <see cref="Light"/> and
+    /// <see cref="Radius"/> the light it casts round it, <see cref="Day"/> how
+    /// much brighter than its colour a glowing pixel is, day and night, and
+    /// <see cref="Haze"/> how much of its glow a see-through pixel gets.
+    /// </summary>
+    public readonly record struct MagicLook(float Glow, float Light, float Radius, float Day, float Haze = 1f);
+
+    /// <summary>
+    /// The user's picks (2026-10-08) from shots at night and noon: "strong"
+    /// (of off, subtle, medium and strong), 0.6 brighter by day (of 0, 0.3
+    /// and 0.6), see-through parts glowing fully (of 1, 0.4 and 0), and each
+    /// thing's light in its own colour (not one cool white).
+    /// </summary>
+    public static MagicLook Magic { get; } = new(1f, 1.4f, 1.3f, 0.6f, 1f);
+
+    /// <summary>
+    /// SPRITES.VGA animations that glow: the teleport (7), the vortex (8),
+    /// fireworks (12), bubbles (13), sparkles (16), beads (18), the sword
+    /// strike (23) and the blasts; not the clouds (2), smoke (3), the poof
+    /// (9) or the notes (24).
+    /// </summary>
+    public static bool IsGlowingSprite(int sprite) => sprite is 1 or 4 or 5 or 7 or 8 or 12 or 13 or 16 or 18 or 19 or 23;
+
+    /// <summary>The explosion sprites, whose light flashes and dies away (Exult <c>Explosion_effect</c>).</summary>
+    public static bool IsBlast(int sprite) => sprite is 1 or 4 or 5 or 19;
+
+    /// <summary>Magic missiles that glow in flight: the fire, death and magic bolts, lightning, the starburst, the mist and the vortex.</summary>
+    public static bool IsGlowingMissile(int shape) => shape is 856 or 807 or 527 or 417 or 565 or 399 or 639;
+
+    /// <summary>
+    /// Magic things in the world that glow: the moongates, the Orb of the
+    /// Moons, the fire, poison, sleep and energy fields, the Virtue Stone,
+    /// the Orrery crystal, the crystal ball, the prisms, the beam of light
+    /// and the wisp.
+    /// </summary>
+    public static bool IsEmitter(int shape) =>
+        shape is 157 or 776 or 777 or 779 or 785 or 895 or 900 or 902 or 768 or 330 or 746 or 729 or 968 or 981 or 1010 or 168 or 534;
+
+    /// <summary>The glow plane's value for a magic pixel (in its glow bits, <see cref="IndexBuffer8.GlowBits"/>).</summary>
+    public static byte GlowByte => (byte)(Mathf.Clamp(Mathf.RoundToInt(63 * Magic.Glow), 0, 63) << 2);
+
+    /// <summary>The glow plane's value for a see-through magic pixel.</summary>
+    public static byte HazeByte => (byte)(Mathf.Clamp(Mathf.RoundToInt(63 * Magic.Glow * Magic.Haze), 0, 63) << 2);
+
+    /// <summary>
+    /// A blast's light by frame: up to full at a quarter of the way through
+    /// (when Exult's explosion strikes), then dying away.
+    /// </summary>
+    public static float BlastEnvelope(int frame, int frames)
+    {
+        var peak = Math.Max(1, frames / 4);
+        return frame <= peak ? (frame + 1f) / (peak + 1f) : Mathf.Max(0f, 1f - (frame - peak) / (float)Math.Max(1, frames - peak));
+    }
 
     public static Glow For(int shape, int brightness)
     {
