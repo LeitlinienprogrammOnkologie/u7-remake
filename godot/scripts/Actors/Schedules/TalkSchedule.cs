@@ -11,9 +11,13 @@ namespace U7.Actors;
 /// usecode, as a double-click). Black Gate's usecode sets it for NPCs that
 /// want a word.
 /// </summary>
-public sealed class TalkSchedule(NpcBrain brain) : Schedule(brain)
+public class TalkSchedule(NpcBrain brain, int firstBark, int lastBark) : Schedule(brain)
 {
     int _phase;
+
+    public TalkSchedule(NpcBrain brain) : this(brain, TextMessages.FirstTalk, TextMessages.LastTalk)
+    {
+    }
 
     U7Object Avatar => Runner.Avatar;
 
@@ -29,7 +33,7 @@ public sealed class TalkSchedule(NpcBrain brain) : Schedule(brain)
             return;
         }
 
-        if (Avatar.GetFlag(ObjFlag.Invisible))
+        if (Avatar.GetFlag(ObjFlag.Invisible) && !(Runner.Combat?.CanSeeInvisible(Npc) ?? false))
         {
             _phase = 0; // Not to an invisible avatar; try a little later.
             Start(Std, 5000);
@@ -102,7 +106,31 @@ public sealed class TalkSchedule(NpcBrain brain) : Schedule(brain)
     {
         if (Reachable && Rng.Next(3) == 0)
         {
-            Say(TextMessages.FirstTalk, TextMessages.LastTalk);
+            Say(firstBark, lastBark);
+        }
+    }
+}
+
+/// <summary>
+/// Exult <c>Arrest_avatar_schedule</c>: a guard called by
+/// <see cref="Guards.CallGuards"/> comes up to the avatar like a talker,
+/// calling "Surrender!" and the like (TEXT.FLX 0x17-0x1a), and its
+/// double-click is Black Gate's arrest, usecode 0x625 (pay, come quietly, or
+/// fight). Usecode asking its schedule is told combat. Leaving it for
+/// anything but combat calms the guard (neutral).
+/// </summary>
+public sealed class ArrestAvatarSchedule : TalkSchedule
+{
+    public ArrestAvatarSchedule(NpcBrain brain) : base(brain, TextMessages.FirstArrest, TextMessages.LastArrest)
+    {
+        Npc.AssignedUsecode = Guards.ArrestUsecode;
+    }
+
+    public override void Ending(int newType)
+    {
+        if (newType != ScheduleType.Combat)
+        {
+            Npc.Alignment = Alignment.Neutral;
         }
     }
 }

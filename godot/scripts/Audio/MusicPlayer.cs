@@ -56,7 +56,16 @@ public sealed class MusicPlayer : IDisposable
         Path.Combine(U7Paths.AssetsDir, "audio", "music_mt32", $"{track:D4}_MT32MUS.MID");
 
     /// <summary>Exult <c>MyMidiPlayer::start_music(num, repeat)</c>.</summary>
-    public bool Start(int track, bool repeat)
+    public bool Start(int track, bool repeat) => Start(TrackPath(track), -1, repeat, track);
+
+    /// <summary>
+    /// Exult <c>start_music(fname, num, repeat)</c>: the music of another
+    /// file, all of it, or only its MIDI track <paramref name="sequence"/>
+    /// (the XMIDI's sequence of that number in the endgame's ENDSCORE.MID).
+    /// </summary>
+    public bool StartFile(string path, int sequence, bool repeat) => Start(path, sequence, repeat, -1);
+
+    bool Start(string path, int sequence, bool repeat, int track)
     {
         Stop();
         if (!Enabled)
@@ -64,10 +73,9 @@ public sealed class MusicPlayer : IDisposable
             return false;
         }
 
-        var path = TrackPath(track);
         if (!File.Exists(path))
         {
-            LastError = $"music {track}: no file";
+            LastError = $"music {Path.GetFileName(path)}: no file";
             GD.Print(LastError);
             return false;
         }
@@ -82,11 +90,11 @@ public sealed class MusicPlayer : IDisposable
         int division;
         try
         {
-            events = MidiFile.Load(path, out division);
+            events = MidiFile.Load(path, out division, sequence);
         }
         catch (Exception ex)
         {
-            LastError = $"music {track}: {ex.Message}";
+            LastError = $"music {Path.GetFileName(path)}: {ex.Message}";
             GD.Print(LastError);
             return false;
         }
@@ -252,7 +260,8 @@ public sealed class MusicPlayer : IDisposable
             return t;
         }
 
-        public static List<MidiEvent> Load(string path, out int division)
+        /// <param name="onlyTrack">One MIDI track of the file, or -1 for all of them.</param>
+        public static List<MidiEvent> Load(string path, out int division, int onlyTrack = -1)
         {
             var data = File.ReadAllBytes(path);
             if (data.Length < 14 || data[0] != (byte)'M' || data[1] != (byte)'T' || data[2] != (byte)'h' || data[3] != (byte)'d')
@@ -277,7 +286,11 @@ public sealed class MusicPlayer : IDisposable
                 }
 
                 var len = (data[pos + 4] << 24) | (data[pos + 5] << 16) | (data[pos + 6] << 8) | data[pos + 7];
-                ReadTrack(data, pos + 8, Math.Min(data.Length, pos + 8 + len), events);
+                if (onlyTrack < 0 || t == onlyTrack)
+                {
+                    ReadTrack(data, pos + 8, Math.Min(data.Length, pos + 8 + len), events);
+                }
+
                 pos += 8 + len;
             }
 

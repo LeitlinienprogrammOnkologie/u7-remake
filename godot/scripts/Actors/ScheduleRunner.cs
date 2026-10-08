@@ -156,6 +156,8 @@ public sealed class ScheduleRunner
                 return new PreachSchedule(b);
             case ScheduleType.Talk:
                 return new TalkSchedule(b);
+            case ScheduleType.ArrestAvatar:
+                return new ArrestAvatarSchedule(b);
             case ScheduleType.Shy:
                 return new ShySchedule(b);
             case ScheduleType.Thief:
@@ -390,6 +392,11 @@ public sealed class ScheduleRunner
             return s.PrevType; // Exult Street_maintenance_schedule::get_actual_type.
         }
 
+        if (BrainOf(npc) is { Schedule: ArrestAvatarSchedule })
+        {
+            return ScheduleType.Combat; // Exult Arrest_avatar_schedule::get_actual_type.
+        }
+
         return npc.ScheduleType;
     }
 
@@ -443,10 +450,14 @@ public sealed class ScheduleRunner
         TickAvatar(delta);
     }
 
-    /// <summary>A monster acts while near the avatar; far off it waits (Exult: dormant).</summary>
+    /// <summary>
+    /// A monster acts while near the avatar or the screen; far off it waits
+    /// (Exult: dormant), unless it is about to walk on from off the screen
+    /// (Exult <c>approach_another</c> after <c>add_nearby_npc</c>: the guards).
+    /// </summary>
     void TickMonster(NpcBrain b, double delta)
     {
-        if (Dist(b.Npc) > ActivityDist)
+        if (Dist(b.Npc) > ActivityDist && !NearScreen(b.Npc) && b.CurrentAction is not PathWalk { FromOffscreen: true })
         {
             return;
         }

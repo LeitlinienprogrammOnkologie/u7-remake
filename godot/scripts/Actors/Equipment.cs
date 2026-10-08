@@ -531,6 +531,8 @@ public static class Equipment
             {
                 actor.Contents.Add(obj);
             }
+
+            GameMap.InheritOkayToTake(obj, actor);
         }
 
         obj.ReadySlot = slot;
@@ -560,6 +562,7 @@ public static class Equipment
                 actor.Contents.Remove(obj);
                 obj.Container = bag;
                 bag.Contents.Add(obj);
+                GameMap.InheritOkayToTake(obj, bag);
                 return;
             }
         }

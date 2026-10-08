@@ -23,6 +23,8 @@ public sealed class MonsterRecord
     /// <summary>Exult <c>Monster_info::cant_yell</c>: an animal or the like, which cannot speak.</summary>
     public bool CantYell;
     public bool NoBody;
+    /// <summary>Exult <c>Monster_info::see_invisible</c> (bit 7 of its flags).</summary>
+    public bool SeeInvisible;
     /// <summary>Exult <c>Monster_actor::create</c>: the fly/walk/swim/ethereal type flags it gets.</summary>
     public int MoveFlags = U7.Data.MoveFlags.Walk;
     /// <summary>
@@ -117,6 +119,7 @@ public sealed class MonsterTable
         var iCantDie = Col("cant_die");
         var iCantYell = Col("cant_yell");
         var iFlags = Col("move_flags");
+        var iFlagBits = Col("flags");
         var iMode = Col("attack_mode");
         var iEquip = Col("equip_offset");
 
@@ -151,6 +154,7 @@ public sealed class MonsterTable
                 CantDie = Num(c, iCantDie) != 0,
                 CantYell = Num(c, iCantYell) != 0,
                 NoBody = Get(c, iFlags).Contains("no_body", StringComparison.OrdinalIgnoreCase),
+                SeeInvisible = (Num(c, iFlagBits) & (1 << 7)) != 0,
                 MoveFlags = ParseMoveFlags(Get(c, iFlags)),
                 AttackModeClass = Math.Clamp(Num(c, iMode, 2), 0, 4),
                 EquipOffset = Num(c, iEquip)

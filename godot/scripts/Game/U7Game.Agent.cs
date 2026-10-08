@@ -5,6 +5,7 @@ using U7.Actors;
 using U7.Core;
 using U7.Data;
 using U7.Gumps;
+using U7.UI;
 using U7.Usecode;
 
 namespace U7.Game;
@@ -22,7 +23,7 @@ public partial class U7Game
         "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | quit | die [restart] | " +
-        "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] | damage <n> [type] | arena | combat [off] | close";
+        "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] | damage <n> [type] | arena | combat [off] | attack <id> | drag <id> | cursor <x> <y> | endgame [won|lost] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
     static bool _agentStarted;
@@ -67,6 +68,7 @@ public partial class U7Game
         _usecode.FadeStarted += (cycles, fadeIn) =>
             AgentLog($"FADE {(fadeIn ? "in" : "out")}" +
                      (cycles == 0 ? " at once" : $", {cycles + 1} steps ({(cycles + 1) * UsecodeMachine.FadeStepMs} ms)"));
+        _cursor.Flashed += shape => AgentLog($"FLASH {MouseShape.Name(shape)}");
         _usecode.BookPageShown += book =>
             AgentLog($"BOOK {(book is U7.Gumps.ScrollGump ? "scroll" : "book")}: " +
                      string.Join(" / ", book.Lines.Select(l => l.Text.Trim())));
@@ -82,6 +84,9 @@ public partial class U7Game
         AgentLog($"agent ready: {AgentHelp}");
         AgentLog($"DONE {_agentSeq}");
     }
+
+    /// <summary>A fade or a cursor flash holds the game.</summary>
+    bool AgentHeld => _usecode is { Wait: UsecodeWait.Fade or UsecodeWait.Flash } || _cursor.Holding;
 
     /// <summary>Called every frame from _Process; may supply a walk target.</summary>
     void AgentUpdate(double delta, ref Vector2I? click)
@@ -105,8 +110,8 @@ public partial class U7Game
                 return;
             }
 
-            // Exult's fades hold up the game: a command is over once its fade is.
-            if (_usecode is { Wait: UsecodeWait.Fade } && _agentElapsed < _agentLimit + 10)
+            // Exult's fades and cursor flashes hold up the game: a command is over once they are.
+            if (AgentHeld && _agentElapsed < _agentLimit + 10)
             {
                 return;
             }
@@ -161,7 +166,7 @@ public partial class U7Game
             _agentBusy = null;
         }
 
-        if (_agentBusy is null && _usecode is { Wait: UsecodeWait.Fade })
+        if (_agentBusy is null && AgentHeld)
         {
             Engine.TimeScale = 8;
             _agentElapsed = 0;
@@ -323,20 +328,42 @@ public partial class U7Game
             }
             case "take":
             {
+                // A drag into the avatar's gump, with Exult's theft check.
                 var target = AgentTarget(arg) ?? throw new ArgumentException("no such object");
-                AgentLog(Equipment.AddToActor(av, target, _catalog, _map)
-                    ? $"took {AgentDescribe(target)}"
-                    : "cannot take it (too heavy or no room)");
+                var okayToMove = target.GetFlag(ObjFlag.OkayToTake);
+                if (!Equipment.AddToActor(av, target, _catalog, _map))
+                {
+                    AgentLog("cannot take it (too heavy or no room)");
+                    break;
+                }
+
+                AgentLog($"took {AgentDescribe(target)}");
+                if (!okayToMove)
+                {
+                    _gumps.PossibleTheft?.Invoke();
+                }
+
                 break;
             }
             case "put":
             {
-                // A drag into a container's gump (also takes a readied item off).
+                // A drag into a container's gump (also takes a readied item off), with Exult's theft check.
                 var item = AgentTarget(parts[1]) ?? throw new ArgumentException("no such object");
                 var cont = AgentTarget(parts[2]) ?? throw new ArgumentException("no such container");
-                AgentLog(Equipment.TryPlace(_map, item, cont, 8, 8, _catalog)
-                    ? $"put {AgentDescribe(item)} into {AgentName(cont)}"
-                    : "it does not fit");
+                var from = item.Container;
+                var okayToMove = item.GetFlag(ObjFlag.OkayToTake);
+                if (!Equipment.TryPlace(_map, item, cont, 8, 8, _catalog))
+                {
+                    AgentLog("it does not fit");
+                    break;
+                }
+
+                AgentLog($"put {AgentDescribe(item)} into {AgentName(cont)}");
+                if (cont != from && !okayToMove)
+                {
+                    _gumps.PossibleTheft?.Invoke();
+                }
+
                 break;
             }
             case "book":
@@ -370,6 +397,14 @@ public partial class U7Game
             }
             case "cont":
             {
+                if (_endgame is { } endgame)
+                {
+                    // As a key that skips the endgame's movies or ends its credits.
+                    endgame.Skip();
+                    AgentLog("ENDGAME skip");
+                    break;
+                }
+
                 var n = arg == "all" ? 60 : parts.Length > 1 ? int.Parse(parts[1]) : 1;
                 for (var i = 0; i < n && _usecode is { Wait: UsecodeWait.ClickToContinue or UsecodeWait.BookPage or UsecodeWait.Picture or UsecodeWait.WizardEye }; i++)
                 {
@@ -487,6 +522,51 @@ public partial class U7Game
                 _combat.SetInCombat(arg != "off");
                 AgentLog(_combat.LastMessage);
                 break;
+            case "endgame":
+                // A test shortcut: usecode's run_endgame, won or lost.
+                StartEndgame(arg != "lost");
+                break;
+            case "cursor":
+            {
+                // The cursor with the mouse over a tile (at the avatar's lift), and the walking speed it means.
+                var tx = int.Parse(parts[1]);
+                var ty = int.Parse(parts[2]);
+                U7.Rendering.WorldView.ShapeLocation(tx, ty, av.Tz, out var px, out var py);
+                var world = new Vector2(px - U7Constants.TileSize / 2f, py - U7Constants.TileSize / 2f);
+                var shape = CursorFor(world, GetViewport().GetVisibleRect().Size / 2);
+                AgentLog(shape is { } s
+                    ? $"cursor {MouseShape.Name(s)}" + (s >= MouseShape.ShortArrows && s < MouseShape.Blocked
+                        ? $", walking {SpeedCursor(world).Speed} ms a step"
+                        : "")
+                    : "cursor unchanged");
+                break;
+            }
+            case "drag":
+            {
+                // The start of a mouse drag of a thing in the world (Exult Dragging_info::start), then put back.
+                var target = AgentTarget(arg) ?? throw new ArgumentException("no such object");
+                _gumps.OnWorldMouseDown(_gumpView, target, 0, 0);
+                _gumps.OnMouseMove(_gumpView, 10, 10);
+                if (_gumps.Drag is { Moved: true })
+                {
+                    _gumps.CancelDrag();
+                    AgentLog($"{AgentDescribe(target)} can be dragged");
+                }
+                else
+                {
+                    AgentLog($"{AgentDescribe(target)} can't be dragged");
+                }
+
+                break;
+            }
+            case "attack":
+            {
+                // A double-click in combat mode on anyone (Exult double_clicked), friend or foe.
+                var target = AgentTarget(arg) ?? throw new ArgumentException("no such object/npc");
+                _combat.AttackClicked(target);
+                AgentLog(_combat.LastMessage);
+                break;
+            }
             case "hour":
             {
                 var h = int.Parse(parts[1]);
@@ -699,7 +779,7 @@ public partial class U7Game
         }
 
         // As ActivateUnderMouse: the avatar opens its paperdoll, other NPCs run their usecode.
-        if (obj.NpcNum <= 0 && _gumps.ShowGump(obj))
+        if ((!obj.IsActor || obj.NpcNum == 0) && _gumps.ShowGump(obj))
         {
             AgentLog($"opened {AgentDescribe(obj)}:");
             AgentInventory(obj, 1);
@@ -792,9 +872,18 @@ public partial class U7Game
 
     void AgentFind(string text)
     {
-        var hits = AgentObjectsAround(120)
-            .Where(o => AgentName(o).Contains(text, StringComparison.OrdinalIgnoreCase) || o.Shape.ToString() == text)
-            .OrderBy(AgentDist)
+        // "find owned": portable things, in containers too, not okay to take (Exult's theft).
+        var hits = (text == "owned"
+                ? AgentObjectsAround(120).Where(o => !o.IsActor).SelectMany(o =>
+                {
+                    var all = new List<U7Object> { o };
+                    o.CollectContents(all);
+                    return all;
+                }).Where(o => o.Kind == ObjectKind.Ireg && !o.IsEgg && !o.GetFlag(ObjFlag.OkayToTake) &&
+                              _catalog[o.Shape].Weight > 0)
+                : AgentObjectsAround(120).Where(o =>
+                    AgentName(o).Contains(text, StringComparison.OrdinalIgnoreCase) || o.Shape.ToString() == text))
+            .OrderBy(o => AgentDist(Outermost(o)))
             .Take(30)
             .ToList();
         foreach (var n in _npcs)
@@ -807,8 +896,18 @@ public partial class U7Game
 
         foreach (var obj in hits)
         {
-            AgentLog("  " + AgentDescribe(obj));
+            AgentLog("  " + AgentDescribe(obj) + (obj.Container is { } c ? $" in #{c.Id} {AgentName(c)}" : ""));
         }
+    }
+
+    static U7Object Outermost(U7Object obj)
+    {
+        while (obj.Container is { } c)
+        {
+            obj = c;
+        }
+
+        return obj;
     }
 
     string AgentName(U7Object obj) =>
@@ -821,6 +920,8 @@ public partial class U7Game
         name.StartsWith('/') && name.IndexOf('/', 1) is var end and > 0 ? name[1..end] : name;
 
     /// <summary>Exult <c>Actor::Attack_mode</c> by number (the combat-mode button's frames).</summary>
+    static readonly string[] AlignmentNames = ["neutral", "good", "evil", "chaotic"];
+
     static readonly string[] AttackModeNames =
     [
         "nearest", "weakest", "strongest", "berserk", "protect", "defend", "flank", "flee", "random", "manual",
@@ -843,6 +944,19 @@ public partial class U7Game
             {
                 sb.Append(" party");
             }
+        }
+        else if (obj.IsActor)
+        {
+            sb.Append($" monster sched {obj.ScheduleType}");
+        }
+
+        if (obj.IsActor)
+        {
+            sb.Append($" {AlignmentNames[obj.Alignment & 3]} faces {"N?E?S?W?"[ActorWalker.FacingOfFrame(obj.Frame)]}");
+        }
+        else if (obj.Kind == ObjectKind.Ireg && !obj.IsEgg && !obj.GetFlag(ObjFlag.OkayToTake))
+        {
+            sb.Append(" owned"); // Not okay to take: moving it may be seen as theft.
         }
 
         if (obj.IsDead)

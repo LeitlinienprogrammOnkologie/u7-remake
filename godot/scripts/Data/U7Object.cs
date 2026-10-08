@@ -223,11 +223,19 @@ public sealed class U7Object
         return 1 + log;
     }
 
+    /// <summary>Exult <c>Actor::set_usecode</c>: a function the actor runs instead of its own (the arrest's guards), or -1.</summary>
+    public int AssignedUsecode = -1;
+
     public int GetUsecode()
     {
         if (IsEgg && EggType == U7.World.EggType.Usecode)
         {
             return EggData2;
+        }
+
+        if (AssignedUsecode >= 0)
+        {
+            return AssignedUsecode;
         }
 
         return NpcNum is >= 0 and < 256 ? 0x400 + NpcNum : -1;

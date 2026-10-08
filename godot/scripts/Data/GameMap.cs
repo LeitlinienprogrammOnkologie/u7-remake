@@ -150,6 +150,20 @@ public sealed class GameMap
         {
             container.Contents.Add(obj);
         }
+
+        InheritOkayToTake(obj, container);
+    }
+
+    /// <summary>
+    /// Exult <c>Container_game_object::add</c> ("Guessing"): what goes into a
+    /// container that is okay to take (the party's) is okay to take.
+    /// </summary>
+    public static void InheritOkayToTake(U7Object obj, U7Object container)
+    {
+        if (container.GetFlag(U7.Actors.ObjFlag.OkayToTake))
+        {
+            obj.SetFlag(U7.Actors.ObjFlag.OkayToTake);
+        }
     }
 
     /// <summary>A barge in barge mode when the map was read (Exult <c>set_moving_barge</c> on reading).</summary>

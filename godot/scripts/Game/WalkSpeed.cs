@@ -1,5 +1,7 @@
 using Godot;
+using U7.Actors;
 using U7.Core;
+using U7.UI;
 
 namespace U7.Game;
 
@@ -24,12 +26,15 @@ public static class WalkSpeed
     /// window's size, but at least 200 pixels: under 0.4 of the way to its
     /// edge slow, under 0.8 medium, beyond fast. Combat caps it at medium
     /// combat speed; a hostile nearby or a no-halt avatar script rules out fast.
+    /// The arrow (POINTERS.SHP) points from the avatar to the cursor, short,
+    /// medium or long by the speed, red in combat (which has no long arrows).
     /// </summary>
-    public static int Mouse(Vector2 avatar, Vector2 mouse, Vector2 gameSize, bool inCombat, bool hostileNearby,
-        bool noHaltScript)
+    public static (int Arrow, int Speed) SpeedCursor(Vector2 avatar, Vector2 mouse, Vector2 gameSize, bool inCombat,
+        bool hostileNearby, bool noHaltScript)
     {
         var dx = mouse.X - avatar.X;
         var dy = avatar.Y - mouse.Y;
+        var dir = ActorWalker.DirectionNoWrap((int)dy, (int)dx);
         var minSide = (int)Math.Min(gameSize.X, gameSize.Y);
         var rectSize = Math.Max(Math.Min(200, minSide), minSide / 2);
         var half = rectSize / 2;
@@ -37,23 +42,24 @@ public static class WalkSpeed
                      mouse.Y >= avatar.Y - half && mouse.Y < avatar.Y - half + rectSize;
         if (!inRect)
         {
-            return inCombat ? BaseSpeed / MediumCombat
-                : hostileNearby || noHaltScript ? BaseSpeed / Medium
-                : BaseSpeed / Fast;
+            return inCombat ? (MouseShape.MediumCombatArrows + dir, BaseSpeed / MediumCombat)
+                : hostileNearby || noHaltScript ? (MouseShape.MediumArrows + dir, BaseSpeed / Medium)
+                : (MouseShape.LongArrows + dir, BaseSpeed / Fast);
         }
 
         var section = Math.Max(Math.Abs(dx), Math.Abs(dy)) / half;
         if (section < 0.4f)
         {
-            return BaseSpeed / Slow;
+            return ((inCombat ? MouseShape.ShortCombatArrows : MouseShape.ShortArrows) + dir, BaseSpeed / Slow);
         }
 
         if (section < 0.8f || inCombat || hostileNearby || noHaltScript)
         {
-            return inCombat || hostileNearby ? BaseSpeed / MediumCombat : BaseSpeed / Medium;
+            return ((inCombat ? MouseShape.MediumCombatArrows : MouseShape.MediumArrows) + dir,
+                inCombat || hostileNearby ? BaseSpeed / MediumCombat : BaseSpeed / Medium);
         }
 
-        return BaseSpeed / Fast;
+        return (MouseShape.LongArrows + dir, BaseSpeed / Fast);
     }
 
     /// <summary>

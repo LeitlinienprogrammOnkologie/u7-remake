@@ -162,14 +162,15 @@ public sealed class SpellbookGump : Gump
 
     /// <summary>
     /// Exult <c>Spellbook_gump::do_spell</c>: the avatar casts it, closing the
-    /// gumps so the spell's animations can play. False if it cannot (Exult
-    /// flashes the red X cursor).
+    /// gumps so the spell's animations can play. False if it cannot, and the
+    /// red X cursor flashes.
     /// </summary>
     public bool DoSpell(int spell)
     {
         var caster = Manager.Avatar;
         if (!Spellbook.CanDoSpell(Book, caster, spell, Manager.Quantities))
         {
+            Manager.FlashMouse?.Invoke(U7.UI.MouseShape.RedX);
             return false;
         }
 

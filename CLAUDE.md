@@ -66,6 +66,16 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
   - **Crystal ball and Wizard Eye:** Exult's frame (SPRITES.VGA sprite 10)
     at the world's zoom over the original 320x200 screen, black outside it
     (not redrawn smooth, not the view filling the window).
+  - **Cursors** (`UI/MouseCursor`): Exult's POINTERS.SHP frames at the
+    world's zoom (crisp, the day palette) as the system cursor; the flashed
+    words (Too heavy, Out of range, Out of ammo, Won't fit, Blocked) in
+    MedievalSharp, gold on dark wood, centred on the cursor.
+  - **Endgame** (`Game/Endgame`, `UI/EndgameView`): the movies and the
+    credits' picture as they are (320x200 scaled to fit, black around);
+    every word in MedievalSharp at the window's size where Exult paints its
+    fonts: the Guardian's red with a dark outline, the narration,
+    congratulations and credits gold; the credits glide between Exult's
+    steps. After the end the game quits (as the original did).
   - **Red flash:** a badly hurt avatar (Exult's rule) gets a faint red pulse
     at the screen's edges, 0.35 strong and 0.12 wide, not the RED palette.
   - **Weather look** (`WeatherLook`): rain as streaks with faint splashes,
@@ -83,13 +93,15 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
 ```
 godot/scripts/
   Game/       U7Game (scene root, input, wiring), U7Game.Agent (agent console),
-              AvatarController (player walking), SaveGame (Exult GAMEDAT layout)
+              AvatarController (player walking), SaveGame (Exult GAMEDAT layout),
+              Endgame (Exult end_game and the credits)
   Data/       GameMap (chunks, IREG, eggs index, paint order), U7Object,
               ShapeCatalog, FlexFile, VgaShapeFile + ShapeFrame (Exult Shape_frame:
               SHAPES/SPRITES/GUMPS/FONTS/FACES.VGA frames by palette index),
               U7Palette (PALETTES.FLX, Get_color8), XformTables (XFORM.TBL),
               VgaFont (FONTS.VGA metrics, Exult paint_text_box), ChunkBlocking
-              (Exult Chunk_cache blocked flags + is_blocked)
+              (Exult Chunk_cache blocked flags + is_blocked), IffFile and
+              FlicFile (ENDGAME.DAT and its movies, Exult playfli)
   Gumps/      GumpManager, GumpView (paints gumps and the open book), container,
               actor and stats gumps, TextGump (Exult Book/Scroll_gump page layout),
               SignGump (Exult Sign_gump: signs, tombstones, plaques)
@@ -98,7 +110,8 @@ godot/scripts/
   Actors/     NpcDat, ScheduleRunner (schedule ticking, slots, proximity),
               Schedules/ (one class per Exult schedule), ActorActions (Exult
               Actor_action kinds), PathWalk (Path_walking_actor_action),
-              CombatEngine (also missile eggs), Missile (Exult
+              CombatEngine (also missile eggs), Guards (Exult's theft,
+              call_guards, attack_avatar; the arrest), Missile (Exult
               Projectile_effect, painted after the map), HomingMissile
               (Homing_projectile), PartyManager, Equipment, Inventory,
               ItemQuantity, ActorWalker (steps, Actor::is_blocked), tables
@@ -124,7 +137,9 @@ godot/scripts/
               over the gumps and the conversation too), ShapeCache (frames by
               index; RGBA shape textures for the gumps; gump, font and face
               frames)
-  UI/         ConversationPanel, BarkOverlay, UiTheme
+  UI/         ConversationPanel, BarkOverlay, UiTheme, MouseCursor (Exult
+              Mouse: POINTERS.SHP cursors and their flashes), EndgameView
+              (the endgame's 320x200 picture and words)
   Core/       U7Paths (data paths, ReadGameDat), U7Constants, TileCoord
 scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers)
 ```
@@ -151,10 +166,13 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
    it. Plain `restart.ps1` stops every headless game, theirs included.
 
    - Game time is frozen between commands.
-   - Conversation text (`SAY`), barks (`BARK`) and fades (`FADE`) are logged.
-     Fades hold the usecode for their 20 ms steps (`UsecodeWait.Fade`,
-     as Exult's fade loop holds the game); a command ends once its fade
-     is over. `die` is F6 (the death flow, waking in Paws).
+   - Conversation text (`SAY`), barks (`BARK`), fades (`FADE`) and cursor
+     flashes (`FLASH`) are logged. Fades hold the usecode for their 20 ms
+     steps (`UsecodeWait.Fade`, as Exult's fade loop holds the game), a
+     flash holds the game 600 ms (`UsecodeWait.Flash`); a command ends once
+     they are over. `die` is F6 (the death flow, waking in Paws). There is
+     no mouse headless: `cursor <x> <y>` tells the cursor over a tile, and
+     `drag <id>` starts a real drag (Exult's checks) and puts it back.
    - Object ids (`#231108`) are only usable after `look` or `find` has listed them;
      pass them without the `#` (`use 231108`). A load renumbers them.
    - `save <slot>` / `load <slot>` keep progress across restarts; `timer`
@@ -230,6 +248,11 @@ game running. Never stop a Godot process whose command line lacks
   must be at the walker's lift and reachable within ~3x the straight cost.
   Walls make some routes too long (e.g. out of walled Trinsic except via the
   east gate). Walks are `PathWalk`s ticked by their delays (ms per step).
+- **Theft:** moving a thing that isn't okay to take (`find owned`; IREG
+  flags, contents inherit their container's) into another gump or 2+ tiles
+  is a theft if a neutral NPC looking at the avatar sees it: warnings, then
+  guards who arrest. The console's `take` and `put` count; `attack <id>`
+  hits a non-enemy in combat mode (`use` attacks only enemies).
 - **Range:** the console can `talk` at any range; a player cannot. Some
   scripts search near the avatar (Johnson's gate, `0x0834`), so stand next to
   the NPC (`walkto` / `tp`) when it matters.
@@ -278,8 +301,11 @@ Exult's walking (blocking, A*, path following with doors, speeds, actors
 stepping aside), saves with timers, party order and restored NPC schedules,
 NPC proximity remarks and woken sleepers, all of Black Gate's schedules
 (street maintenance, patrol markers, crafts, duels), combat as Exult's
-`Combat_schedule` for monsters, NPCs, the party and the avatar, and the agent
-console.
+`Combat_schedule` for monsters, NPCs, the party and the avatar, thefts, guards
+and the arrest (usecode 0x625: pay, prison or fight), Exult's mouse cursors
+(speed arrows, the hand, the crosshair, flashes that hold the game, the drag
+checks behind them), the endgame (movies, texts, credits; every intrinsic is
+now ported), and the agent console.
 
 The visual overhaul is done: the world painted as Exult's 8-bit buffer
 (SHAPES.VGA decoded at runtime, XFORM.TBL translucency, invisible actors,
@@ -293,14 +319,10 @@ shows through its windows.
 
 Next, in priority order:
 
-1. **Remaining intrinsics:** 4 stubbed. `flash_mouse` needs Exult's
-   cursors (POINTERS.SHP; their look is the user's to pick); `call_guards`
-   and `attack_avatar` are arrest, `run_endgame` the endgame.
-2. **Walking follow-ups:** the speed cursors and right-button walking
-   (with `flash_mouse`'s cursors, a look for the user to pick); Exult's
+1. **Walking follow-ups:** right-button walking (asked for); Exult's
    dormancy and `Actor::follow` if the 32-tile activity range or the
    follow schedule ever show their seams.
-3. **Story:** the main thread past Minoc in order (Paws, Moonglow, the Wisps
+2. **Story:** the main thread past Minoc in order (Paws, Moonglow, the Wisps
    via Alagner's notebook, Hook and the Isle of the Avatar), the towns not
    yet explored (Vesper, Jhelom, Skara Brae, New Magincia, Serpent's Hold,
    Terfin), and a name for the avatar at a new game (usecode's "Avatar"

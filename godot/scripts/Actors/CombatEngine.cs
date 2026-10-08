@@ -426,6 +426,14 @@ public sealed class CombatEngine
     /// <summary>The food shape (Exult's monster food special case).</summary>
     const int FoodShape = 377;
 
+    /// <summary>
+    /// Exult <c>Monster_actor::create(shape, pos, sched, align)</c>: an
+    /// equipped monster put at <paramref name="pos"/> as it is (the guards,
+    /// made off the screen), its schedule run by the monster AI.
+    /// </summary>
+    public U7Object CreateMonsterAt(int shape, TileCoord pos, int sched, int align) =>
+        Place(CreateMonster(shape, 0, sched, align, equip: true), pos.Wrapped());
+
     /// <summary>Let the monster AI drive a monster that usecode placed in the world.</summary>
     public void AdoptMonster(U7Object npc)
     {
@@ -813,7 +821,8 @@ public sealed class CombatEngine
     /// Exult <c>Actor::fight_back</c>: a party member hit in combat mode (or
     /// with the avatar unable to act) brings the party into the fight; an
     /// NPC with no target takes on its attacker (play-fighting duelists
-    /// don't start a real fight). (Exult's calling of guards is not ported.)
+    /// don't start a real fight); one of the party bullying an NPC brings
+    /// the guards (<see cref="Guards.Bullied"/>).
     /// </summary>
     void FightBack(U7Object victim, U7Object attacker)
     {
@@ -844,21 +853,29 @@ public sealed class CombatEngine
         {
             SetTarget(victim, attacker, attacker.ScheduleType != ScheduleType.Duel);
         }
+
+        Guards?.Bullied(victim, attacker);
     }
 
+    /// <summary>Exult <c>Mouse::flash_shape</c>: flashes the cursor.</summary>
+    public Action<int>? FlashMouse { get; set; }
 
+    /// <summary>Exult <c>Game_window</c>'s thefts, guards and arrests.</summary>
+    public Guards? Guards { get; set; }
 
-    /// <summary>Restore spawned monsters from a saved game (MONSNPCS.DAT).</summary>
     /// <summary>Exult <c>Actor::can_speak</c>: no monster info, or one that can yell.</summary>
     public bool CanSpeak(U7Object actor) => !_monsters.Contains(actor.Shape) || !_monsters[actor.Shape].CantYell;
 
     /// <summary>Exult <c>Actor::is_sentient</c>: monster intelligence 6 or more (opens doors, joins fights).</summary>
     public bool IsSentient(U7Object actor) => _monsters[actor.Shape].Intelligence >= 6;
 
+    /// <summary>Exult <c>Actor::can_see_invisible</c>: the monster info's see_invisible flag.</summary>
+    public bool CanSeeInvisible(U7Object actor) => _monsters[actor.Shape].SeeInvisible;
+
     /// <summary>
     /// Exult <c>Game_window::is_hostile_nearby</c>: an evil or chaotic actor
-    /// in the tile rectangle that is fighting (Exult: a combat schedule that
-    /// has started its battle; here, one with a target).
+    /// in the tile rectangle that is fighting (a combat schedule that has
+    /// started its battle) or coming to arrest the avatar.
     /// </summary>
     public bool IsHostileNearby(int x0, int y0, int w, int h)
     {
@@ -866,7 +883,7 @@ public sealed class CombatEngine
         {
             var npc = b.Npc;
             if (!npc.IsDead && !npc.Removed && npc.Alignment >= Alignment.Evil &&
-                b.Schedule is CombatSchedule { StartedBattle: true } &&
+                b.Schedule is CombatSchedule { StartedBattle: true } or ArrestAvatarSchedule &&
                 U7Constants.TileDelta(x0, npc.Tx) is var dx && dx >= 0 && dx < w &&
                 U7Constants.TileDelta(y0, npc.Ty) is var dy && dy >= 0 && dy < h)
             {
@@ -877,6 +894,7 @@ public sealed class CombatEngine
         return false;
     }
 
+    /// <summary>Restore spawned monsters from a saved game (MONSNPCS.DAT).</summary>
     public void AdoptMonsters(IEnumerable<U7Object> monsters)
     {
         foreach (var m in monsters)
@@ -992,9 +1010,11 @@ public sealed class CombatEngine
 
     /// <summary>
     /// Exult <c>Combat_schedule::attack_target</c>: the blow itself (the
-    /// swing is the schedule's): out of range or ammunition, nothing; at
-    /// range a missile flies; in melee a roll to hit, damage, and the target
-    /// may back off. False if it could not attack or missed.
+    /// swing is the schedule's): out of range or ammunition, nothing (the
+    /// avatar's cursor flashes it when this is no fight of the combat
+    /// schedule's and the attack mode isn't manual); at range a missile
+    /// flies; in melee a roll to hit, damage, and the target may back off.
+    /// False if it could not attack or missed.
     /// </summary>
     public bool AttackTarget(U7Object attacker, U7Object target, int weaponShape, bool combat)
     {
@@ -1002,6 +1022,8 @@ public sealed class CombatEngine
         {
             return false;
         }
+
+        var flashMouse = !combat && attacker == _avatar && attacker.AttackMode != AttackMode.Manual;
 
         var wpn = weaponShape >= 0 ? _weapons[weaponShape] : null;
         int reach;
@@ -1023,6 +1045,11 @@ public sealed class CombatEngine
         if (EffectiveRange(attacker, wpn, reach) < dist)
         {
             LastMessage = "out of range";
+            if (flashMouse)
+            {
+                FlashMouse?.Invoke(U7.UI.MouseShape.OutOfRange);
+            }
+
             return false;
         }
 
@@ -1030,6 +1057,11 @@ public sealed class CombatEngine
         if (needAmmo > 0 && ammoObj is null)
         {
             LastMessage = $"{NameOf(attacker)}: out of ammo";
+            if (flashMouse)
+            {
+                FlashMouse?.Invoke(U7.UI.MouseShape.OutOfAmmo);
+            }
+
             return false;
         }
 

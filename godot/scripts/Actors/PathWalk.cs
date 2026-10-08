@@ -183,6 +183,9 @@ public sealed class PathWalk : IActorAction
     /// <summary>Exult <c>from_offscreen</c>: the walker is put on the first tile instead of stepping there.</summary>
     bool _fromOffscreen;
 
+    /// <summary>Not yet put on the first tile of a walk that comes on from off the screen.</summary>
+    public bool FromOffscreen => _fromOffscreen;
+
     /// <summary>Exult <c>reached_end</c>: the last step was taken.</summary>
     public bool ReachedEnd { get; private set; }
     public TileCoord Dest => _path.Dest;

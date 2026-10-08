@@ -16,7 +16,24 @@ public sealed class VgaShapeFile
     const int TileBytes = ShapeFrame.TileSize * ShapeFrame.TileSize;
 
     readonly FlexFile? _flex;
+    /// <summary>A single shape's file (Exult <c>Shape_file</c>), in place of a FLEX.</summary>
+    readonly byte[]? _single;
     readonly FrameInfo[][] _frames;
+
+    VgaShapeFile(byte[] single)
+    {
+        _single = single;
+        _frames = [ParseExtents(single)];
+    }
+
+    /// <summary>
+    /// Exult <c>Shape_file</c>: a file holding one shape (POINTERS.SHP), read
+    /// as shape 0; empty if it is missing.
+    /// </summary>
+    public static VgaShapeFile SingleShape(string path) => new(File.Exists(path) ? File.ReadAllBytes(path) : []);
+
+    /// <summary>Exult <c>Shape_file</c> from memory: one shape's bytes (a font of ENDGAME.DAT's, after its name).</summary>
+    public static VgaShapeFile SingleShape(ReadOnlySpan<byte> data) => new(data.ToArray());
 
     public VgaShapeFile(string path)
     {
@@ -67,12 +84,12 @@ public sealed class VgaShapeFile
     /// </summary>
     public ShapeFrame? DecodeFrame(int shape, int frame, bool wrap)
     {
-        if (_flex is null || (uint)shape >= (uint)_flex.Count)
+        if ((uint)shape >= (uint)_frames.Length)
         {
             return null;
         }
 
-        var entry = _flex.Get(shape);
+        var entry = _single ?? _flex!.Get(shape);
         if (IsRle(entry))
         {
             var nframes = RleFrameCount(entry);

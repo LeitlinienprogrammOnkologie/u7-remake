@@ -2,6 +2,8 @@ using U7.Actors;
 using U7.Core;
 using U7.Data;
 using U7.Rendering;
+using U7.UI;
+using U7.World;
 
 namespace U7.Gumps;
 
@@ -22,6 +24,14 @@ public sealed class GumpManager
     public int ScreenH = 200;
     public Action<U7Object>? ActivateUsecode { get; set; }
     public Action<U7Object>? DroppedInWorld { get; set; }
+    /// <summary>
+    /// Exult <c>Dragging_info::drop</c>'s theft check: something not okay to
+    /// take was put into another gump than it came from, or moved more than
+    /// 2 tiles in the world.
+    /// </summary>
+    public Action? PossibleTheft { get; set; }
+    /// <summary>Exult <c>Mouse::flash_shape</c>: a drag refused says why on the cursor.</summary>
+    public Action<int>? FlashMouse { get; set; }
     public Action? ToggleCombat { get; set; }
     public Func<bool>? IsCombatOn { get; set; }
     /// <summary>GUMPS.VGA, for gumps laid out from their art's sizes (the spellbook).</summary>
@@ -339,6 +349,13 @@ public sealed class GumpManager
 
         if (!drag.Moved)
         {
+            if (drag.Object is { } held && drag.Button is null && RefuseDrag(drag, held) is { } why)
+            {
+                Drag = null;
+                FlashMouse?.Invoke(why);
+                return true;
+            }
+
             drag.Moved = true;
             if (drag.Object is { } obj && drag.Button is null)
             {
@@ -404,12 +421,23 @@ public sealed class GumpManager
         }
 
         var obj = drag.Object;
+        var okayToMove = obj.GetFlag(ObjFlag.OkayToTake);
         var dest = FindGump(mx, my, view);
         if (dest is not null)
         {
-            if (!dest.Add(view, obj, mx, my))
+            if (RefuseDrop(dest, obj) is { } why)
             {
+                FlashMouse?.Invoke(why);
                 PutBack(drag);
+            }
+            else if (!dest.Add(view, obj, mx, my))
+            {
+                FlashMouse?.Invoke(MouseShape.WontFit);
+                PutBack(drag);
+            }
+            else if (dest != drag.SourceGump && !okayToMove)
+            {
+                PossibleTheft?.Invoke();
             }
 
             return true;
@@ -417,7 +445,76 @@ public sealed class GumpManager
 
         Map.PlaceInWorld(obj, worldTx, worldTy, worldTz);
         DroppedInWorld?.Invoke(obj);
+        if (drag.FromWorld && !okayToMove &&
+            new TileCoord(obj.Tx, obj.Ty, obj.Tz).Distance(new TileCoord(drag.OldTx, drag.OldTy, drag.OldTz)) > 2)
+        {
+            PossibleTheft?.Invoke();
+        }
+
         return true;
+    }
+
+    /// <summary>
+    /// Exult <c>Dragging_info::start</c>: the cursor's flash if the thing can't
+    /// be picked up, or null: in the world, what weighs nothing (walls,
+    /// furniture, people; Exult <c>is_dragable</c>) is too heavy, and what the
+    /// avatar can't reach is the red X; in a gump, its owner must be within
+    /// reach.
+    /// </summary>
+    int? RefuseDrag(DragState drag, U7Object obj)
+    {
+        if (drag.FromWorld)
+        {
+            if (obj.Kind is not (ObjectKind.Ireg or ObjectKind.Actor) || Catalog[obj.Shape].Weight <= 0)
+            {
+                return MouseShape.TooHeavy;
+            }
+
+            return FastPathClient.IsGrabable(Map, Avatar, obj) ? null : MouseShape.RedX;
+        }
+
+        return drag.SourceGump?.Owner is { } owner && !FastPathClient.IsGrabable(Map, Avatar, Outermost(owner))
+            ? MouseShape.OutOfRange
+            : null;
+    }
+
+    /// <summary>
+    /// Exult <c>Dragging_info::drop_on_gump</c>'s checks: not into itself (the
+    /// red X), the gump's owner within reach, and a party member not carrying
+    /// more than they can (Exult <c>Check_weight</c>: too heavy); null if fine.
+    /// </summary>
+    int? RefuseDrop(Gump dest, U7Object obj)
+    {
+        if (dest.Owner is not { } owner)
+        {
+            return null;
+        }
+
+        var outer = Outermost(owner);
+        if (outer == obj)
+        {
+            return MouseShape.RedX;
+        }
+
+        if (!FastPathClient.IsGrabable(Map, Avatar, outer))
+        {
+            return MouseShape.OutOfRange;
+        }
+
+        return outer.GetFlag(ObjFlag.InParty) &&
+               (Inventory.GetWeight(outer, Catalog) + Inventory.GetWeight(obj, Catalog)) / 10 > Inventory.GetMaxWeight(outer)
+            ? MouseShape.TooHeavy
+            : null;
+    }
+
+    static U7Object Outermost(U7Object obj)
+    {
+        while (obj.Container is { } c)
+        {
+            obj = c;
+        }
+
+        return obj;
     }
 
     public void PutBack(DragState drag)

@@ -26,7 +26,9 @@ public enum UsecodeWait
     /// <summary>Exult <c>Get_click</c> over a picture (<c>display_map</c>, <c>display_area</c>, <c>display_runes</c>); resume with <see cref="UsecodeMachine.ClosePicture"/>.</summary>
     Picture,
     /// <summary>Exult <c>Wizard_eye</c>: the game runs while the player looks about; <see cref="UsecodeMachine.EndWizardEye"/> resumes.</summary>
-    WizardEye
+    WizardEye,
+    /// <summary>Exult <c>Mouse::flash_shape</c>: the cursor flashes and the game holds 600 ms; <see cref="UsecodeMachine.EndFlash"/> resumes.</summary>
+    Flash
 }
 
 /// <summary>
@@ -62,7 +64,7 @@ public sealed class UsecodeMachine
     public UsecodeWait Wait { get; private set; }
     public bool WaitingForChoice => Wait != UsecodeWait.None;
     /// <summary>Waiting for the player (a click, an answer, a target), not for a fade or a Wizard Eye's time.</summary>
-    public bool WaitingForPlayer => Wait is not (UsecodeWait.None or UsecodeWait.Fade or UsecodeWait.WizardEye);
+    public bool WaitingForPlayer => Wait is not (UsecodeWait.None or UsecodeWait.Fade or UsecodeWait.WizardEye or UsecodeWait.Flash);
     public string? UserChoice { get; private set; }
     public string StringReg { get; private set; } = "";
     public string LastIntrinsic { get; private set; } = "";
@@ -1654,6 +1656,40 @@ public sealed class UsecodeMachine
         if (FadeCycles > 0 && InUsecode)
         {
             RequestWait(UsecodeWait.Fade);
+        }
+    }
+
+    /// <summary>Exult <c>UI_run_endgame(success)</c>: the endgame, won or lost; the game is over.</summary>
+    public Action<bool>? RunEndgame { get; set; }
+
+    /// <summary>Exult <c>Mouse::flash_shape</c>: flashes the cursor (a POINTERS.SHP frame).</summary>
+    public Action<int>? FlashMouse { get; set; }
+
+    /// <summary>
+    /// Exult <c>UI_flash_mouse</c>: the cursor shows the shape for 600 ms,
+    /// the whole game holding meanwhile, so the usecode waits for it
+    /// (<see cref="UsecodeWait.Flash"/>).
+    /// </summary>
+    public void Flash(int shape)
+    {
+        if (FlashMouse is null)
+        {
+            return;
+        }
+
+        FlashMouse(shape);
+        if (InUsecode)
+        {
+            RequestWait(UsecodeWait.Flash);
+        }
+    }
+
+    /// <summary>The flash is over: the usecode carries on.</summary>
+    public void EndFlash()
+    {
+        if (Wait == UsecodeWait.Flash)
+        {
+            ResumeWait(UsecodeValue.FromInt(0));
         }
     }
 

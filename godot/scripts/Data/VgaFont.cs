@@ -8,9 +8,11 @@ namespace U7.Data;
 public readonly record struct TextLine(int X, int Y, string Text);
 
 /// <summary>
-/// One FONTS.VGA font, Exult <c>Font</c>: glyph widths plus the font's
-/// horizontal lead, line height and baseline from the tallest glyphs
-/// (<c>calc_highlow</c>), and the word-wrapping text box.
+/// One font, Exult <c>Font</c>: a FONTS.VGA font, or a shape elsewhere
+/// (<see cref="FromShape"/>: the endgame's and the menu's, for their line
+/// heights); glyph widths plus the font's horizontal lead, line height and
+/// baseline from the tallest glyphs (<c>calc_highlow</c>), and the
+/// word-wrapping text box.
 /// </summary>
 public sealed class VgaFont
 {
@@ -24,6 +26,7 @@ public sealed class VgaFont
     /// <summary>FONTS.VGA, loaded once.</summary>
     public static VgaShapeFile File => _file ??= new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "FONTS.VGA"));
 
+    /// <summary>The FONTS.VGA font, or -1 for one from elsewhere.</summary>
     public int Number { get; }
     public int HorLead { get; }
     /// <summary>Exult <c>Font::highest</c>: the tallest glyph's extent above its hotspot.</summary>
@@ -46,15 +49,20 @@ public sealed class VgaFont
         return font;
     }
 
-    VgaFont(int number)
+    VgaFont(int number) : this(File, number, number < HorLeads.Length ? HorLeads[number] : 0) => Number = number;
+
+    /// <summary>Exult <c>Font::load</c>: shape <paramref name="shape"/> of <paramref name="source"/> as a font.</summary>
+    public static VgaFont FromShape(VgaShapeFile source, int shape, int horLead) => new(source, shape, horLead);
+
+    VgaFont(VgaShapeFile source, int shape, int horLead)
     {
-        Number = number;
-        HorLead = number < HorLeads.Length ? HorLeads[number] : 0;
-        _widths = new int[File.FrameCount(number)];
+        Number = -1;
+        HorLead = horLead;
+        _widths = new int[source.FrameCount(shape)];
         var unset = true;
         for (var i = 0; i < _widths.Length; i++)
         {
-            var fi = File.Get(number, i);
+            var fi = source.Get(shape, i);
             _widths[i] = fi.Width;
             if (unset)
             {

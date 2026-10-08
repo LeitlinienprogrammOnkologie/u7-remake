@@ -124,6 +124,7 @@ public static class ScheduleType
     public const int FollowAvatar = 31;
     public const int WalkToSchedule = 32;
     public const int StreetMaintenance = 33;
+    public const int ArrestAvatar = 34;
 
     public static readonly string[] Names =
     [
@@ -131,7 +132,8 @@ public static class ScheduleType
         "tend_shop", "miner", "hound", "stand", "loiter", "wander", "blacksmith",
         "sleep", "wait", "sit", "graze", "bake", "sew", "shy", "lab", "thief",
         "waiter", "special", "kid_games", "eat_at_inn", "duel", "preach",
-        "patrol", "desk_work", "follow_avatar", "walk_to_schedule"
+        "patrol", "desk_work", "follow_avatar", "walk_to_schedule",
+        "street_maintenance", "arrest_avatar"
     ];
 
     public static string Name(int type) =>

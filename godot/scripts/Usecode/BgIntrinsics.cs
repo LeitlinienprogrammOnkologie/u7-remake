@@ -2,6 +2,7 @@ using Godot;
 using U7.Actors;
 using U7.Core;
 using U7.Data;
+using U7.UI;
 
 namespace U7.Usecode;
 
@@ -204,6 +205,10 @@ public sealed class BgIntrinsics
             0x67 => WearingFellowship(),
             0x91 => ResetConvFace(),
             0x55 => BookMode(p),
+            0x6a => FlashMouse(p),
+            0x75 => RunEndgame(p),
+            0x7a => CallGuards(),
+            0x7c => AttackAvatar(),
             _ => Stub(id, p, n)
         };
 
@@ -774,7 +779,7 @@ public sealed class BgIntrinsics
     UsecodeValue GetScheduleType(UsecodeValue[] p)
     {
         var npc = _vm.GetItem(p[0]);
-        if (npc is null || npc.NpcNum < 0)
+        if (npc is not { IsActor: true })
         {
             return Zero();
         }
@@ -795,6 +800,13 @@ public sealed class BgIntrinsics
             else
             {
                 npc.ScheduleType = type;
+            }
+
+            // Exult: taking the avatar out of combat ends combat mode (a bribed guard's 0x625 does).
+            if (npc == _vm.Avatar && _vm.Combat is { InCombat: true } combat && type != ScheduleType.Combat)
+            {
+                _vm.Music?.Stop();
+                combat.SetInCombat(false);
             }
         }
 
@@ -2102,6 +2114,48 @@ public sealed class BgIntrinsics
     {
         var obj = U7.Actors.Equipment.GetReadied(_vm.Avatar, U7.Actors.ReadySpot.Neck);
         return UsecodeValue.FromInt(obj is { Shape: 955 } && (obj.Frame & 31) == 1 ? 1 : 0);
+    }
+
+    /// <summary>
+    /// Exult <c>UI_flash_mouse(code)</c>: 2 out of range, 3 out of ammo, 4 too
+    /// heavy, 5 won't fit, 7 blocked, anything else the red X.
+    /// </summary>
+    UsecodeValue FlashMouse(UsecodeValue[] p)
+    {
+        _vm.Flash((int)p[0].IntValue switch
+        {
+            2 => MouseShape.OutOfRange,
+            3 => MouseShape.OutOfAmmo,
+            4 => MouseShape.TooHeavy,
+            5 => MouseShape.WontFit,
+            7 => MouseShape.Blocked,
+            _ => MouseShape.RedX
+        });
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>UI_run_endgame(success)</c>: the endgame (the Black Gate
+    /// destroyed, or the avatar through it), then the game is over.
+    /// </summary>
+    UsecodeValue RunEndgame(UsecodeValue[] p)
+    {
+        _vm.RunEndgame?.Invoke(p[0].IntValue != 0);
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_call_guards</c>: guards come to arrest the avatar (<c>Game_window::call_guards</c>).</summary>
+    UsecodeValue CallGuards()
+    {
+        _vm.Combat?.Guards?.CallGuards();
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_attack_avatar</c>: nearby guards and neutral residents attack (<c>Game_window::attack_avatar</c>).</summary>
+    UsecodeValue AttackAvatar()
+    {
+        _vm.Combat?.Guards?.AttackAvatar();
+        return Zero();
     }
 
     /// <summary>Exult <c>UI_reset_conv_face</c>: first face back to frame 0.</summary>

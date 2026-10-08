@@ -46,6 +46,9 @@ public partial class U7Game : Node2D
     TileCoord _viewTileFrom;
     SceneLighting _lighting = null!;
     ScreenFx _screenFx = null!;
+    MouseCursor _cursor = null!;
+    /// <summary>Exult <c>run_endgame</c>: once it runs, the game is over.</summary>
+    Endgame? _endgame;
     MusicPlayer _music = null!;
     PartyManager _party = null!;
     CombatEngine _combat = null!;
@@ -186,6 +189,12 @@ public partial class U7Game : Node2D
             _gumps = new GumpManager(_map, avatar);
             _gumps.ActivateUsecode = obj => RunUsecode(obj);
             _gumps.DroppedInWorld = obj => _eggs.ActivateSomethingOn(obj);
+            _combat.Guards = new Guards(_map, avatar, _combat, _schedules, _party)
+            {
+                InDungeon = () => _lighting.InDungeon,
+                CloseGumps = () => _gumps.CloseAll()
+            };
+            _gumps.PossibleTheft = _combat.Guards.PossibleTheft;
             _gumps.ToggleCombat = () =>
             {
                 _combat.ToggleCombat();
@@ -230,6 +239,12 @@ public partial class U7Game : Node2D
             // Over the game's picture (world, gumps, barks, conversation); the debug lines stay on top.
             _screenFx = new ScreenFx { Name = "ScreenFx" };
             layer.AddChild(_screenFx);
+            var cursorLayer = new CanvasLayer { Name = "Cursor", Layer = 30 };
+            AddChild(cursorLayer);
+            _cursor = new MouseCursor { Name = "MouseCursor", Zoom = _zoom };
+            cursorLayer.AddChild(_cursor);
+            _gumps.FlashMouse = _cursor.Flash;
+            _combat.FlashMouse = _cursor.Flash;
 
             _hud = new Label
             {
@@ -270,6 +285,8 @@ public partial class U7Game : Node2D
             }
 
             _usecode.Gumps = _gumps;
+            _usecode.FlashMouse = _cursor.Flash;
+            _usecode.RunEndgame = StartEndgame;
             _usecode.Npcs = _npcs;
             _usecode.Clock = _clock;
             _usecode.Schedules = _schedules;
@@ -521,6 +538,34 @@ public partial class U7Game : Node2D
             return;
         }
 
+        // Exult run_endgame: only the endgame runs; when it is over, so is the game.
+        if (_endgame is { } endgame)
+        {
+            endgame.Update(delta);
+            Vector2I? noWalk = null;
+            AgentUpdate(delta, ref noWalk);
+            if (endgame.Done && _agentDir is null)
+            {
+                GetTree().Quit();
+            }
+
+            return;
+        }
+
+        // Exult flash_shape: while the cursor flashes, the whole game holds (its SDL_Delay).
+        if (_cursor.Holding)
+        {
+            if (!_cursor.Tick(delta))
+            {
+                _world.Frozen = true;
+                return;
+            }
+
+            _usecode?.EndFlash();
+            _conversation.Refresh();
+        }
+
+        UpdateCursor();
         var avPos = _avatar.Avatar;
         var schunk = (avPos.Ty / U7Constants.TilesPerSuperchunk) * 12 + avPos.Tx / U7Constants.TilesPerSuperchunk;
         if (schunk != _lastSchunk)
@@ -737,8 +782,15 @@ public partial class U7Game : Node2D
 
     public override void _UnhandledInput(InputEvent @event)
     {
-        if (!_ready)
+        // Exult's flash_shape holds the game (SDL_Delay): nothing answers the mouse or keys meanwhile.
+        if (!_ready || _cursor.Holding)
         {
+            return;
+        }
+
+        if (_endgame is { } endgame)
+        {
+            EndgameInput(endgame, @event);
             return;
         }
 
@@ -974,6 +1026,48 @@ public partial class U7Game : Node2D
         }
     }
 
+    /// <summary>
+    /// Exult <c>UI_run_endgame</c>: the game stops, and the endgame plays on a
+    /// screen over everything, without the mouse cursor (Exult paints none).
+    /// </summary>
+    void StartEndgame(bool success)
+    {
+        if (_endgame is not null)
+        {
+            return;
+        }
+
+        var layer = new CanvasLayer { Name = "Endgame", Layer = 25 };
+        AddChild(layer);
+        var view = new EndgameView { Name = "EndgameView" };
+        layer.AddChild(view);
+        _cursor.HideCursor = true;
+        _endgame = new Endgame(view, _music, _clock.TotalHours, success)
+        {
+            Log = _agentDir is null ? null : AgentLog
+        };
+    }
+
+    /// <summary>
+    /// Exult's endgame input: in the movies <c>wait_delay</c> (Esc, Space,
+    /// Enter, a double-click) skips; in the credits any key but Shift, or a
+    /// click, ends them (<c>TextScroller::run</c>).
+    /// </summary>
+    static void EndgameInput(Endgame endgame, InputEvent @event)
+    {
+        switch (@event)
+        {
+            case InputEventKey { Pressed: true, Echo: false } key when endgame.InCredits
+                ? key.Keycode != Key.Shift
+                : key.Keycode is Key.Escape or Key.Space or Key.Enter or Key.KpEnter:
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left or MouseButton.Right } button when endgame.InCredits
+                ? !button.Pressed
+                : button is { Pressed: true, DoubleClick: true }:
+                endgame.Skip();
+                break;
+        }
+    }
+
     /// <summary>Debug: move the avatar one lift level up or down in place, then re-check eggs there.</summary>
     void ShiftLift(int delta)
     {
@@ -1026,12 +1120,72 @@ public partial class U7Game : Node2D
     const ulong QuickClickMsec = 300;
 
     /// <summary>Exult <c>Mouse::set_speed_cursor</c>'s speed for the cursor at this world point.</summary>
-    int MouseWalkSpeed(Vector2 world)
+    int MouseWalkSpeed(Vector2 world) => SpeedCursor(world).Speed;
+
+    /// <summary>
+    /// Exult <c>Mouse::set_speed_cursor</c>: the arrow and the walking speed
+    /// for the cursor at this world point, measured from the avatar, or from
+    /// the centre of the barge in barge mode.
+    /// </summary>
+    (int Arrow, int Speed) SpeedCursor(Vector2 world)
     {
-        var av = _avatar.Avatar;
-        WorldView.ShapeLocation(av.Tx, av.Ty, av.Tz, out var ax, out var ay);
+        int ax, ay;
+        if (_barges.Moving is { } barge)
+        {
+            WorldView.ShapeLocation(barge.Obj.Tx, barge.Obj.Ty, barge.Obj.Tz, out ax, out ay);
+            ax -= barge.Obj.BargeXTiles * (U7Constants.TileSize / 2);
+            ay -= barge.Obj.BargeYTiles * (U7Constants.TileSize / 2);
+        }
+        else
+        {
+            var av = _avatar.Avatar;
+            WorldView.ShapeLocation(av.Tx, av.Ty, av.Tz, out ax, out ay);
+        }
+
         var game = GetViewport().GetVisibleRect().Size / _zoom;
-        return WalkSpeed.Mouse(new Vector2(ax, ay), world, game, _combat.InCombat, HostileNearby(), AvatarNoHaltScript());
+        return WalkSpeed.SpeedCursor(new Vector2(ax, ay), world, game, _combat.InCombat, HostileNearby(),
+            AvatarNoHaltScript());
+    }
+
+    /// <summary>
+    /// Exult's cursor: <c>Get_click</c>'s shape while usecode waits for a
+    /// click (the hand for a conversation, book, sign or picture, the
+    /// crosshair for a target), the Wizard Eye's short arrows from the
+    /// screen's centre; otherwise <c>set_speed_cursor</c>: the hand while
+    /// usecode runs the avatar, in gump mode or dragging, else the walking
+    /// arrow.
+    /// </summary>
+    void UpdateCursor()
+    {
+        _cursor.Zoom = _zoom;
+        var view = GetViewport();
+        if (CursorFor(_camera.GetGlobalMousePosition(), view.GetMousePosition()) is { } shape)
+        {
+            _cursor.Shape = shape;
+        }
+    }
+
+    /// <summary>The cursor for the mouse at this world (and screen) point; null to leave it (Exult <c>dontchange</c>).</summary>
+    int? CursorFor(Vector2 world, Vector2 screen)
+    {
+        switch (_usecode?.Wait)
+        {
+            case UsecodeWait.Fade or UsecodeWait.Flash:
+                return null;
+            case UsecodeWait.ClickOnItem:
+                return MouseShape.GreenSelect;
+            case UsecodeWait.WizardEye:
+            {
+                var c = GetViewport().GetVisibleRect().Size / 2;
+                return MouseShape.ShortArrows + ActorWalker.DirectionNoWrap((int)(c.Y - screen.Y), (int)(screen.X - c.X));
+            }
+            case not (UsecodeWait.None or null):
+                return MouseShape.Hand;
+        }
+
+        return ObjFlag.DontMoveMode(_avatar.Avatar) || _gumps.GumpMode || _gumps.IsDragging
+            ? MouseShape.Hand
+            : SpeedCursor(world).Arrow;
     }
 
     /// <summary>Exult <c>is_hostile_nearby</c> over the visible part of the map.</summary>
@@ -1239,6 +1393,7 @@ public partial class U7Game : Node2D
         if (!obj.IsActor && !FastPathClient.IsGrabable(_map, _avatar.Avatar, obj))
         {
             _statusExtra = "blocked";
+            _cursor.Flash(MouseShape.Blocked);
             return;
         }
 
@@ -1252,7 +1407,8 @@ public partial class U7Game : Node2D
             return;
         }
 
-        if (obj.NpcNum > 0)
+        // Exult Actor::activate: only the avatar shows its inventory; NPCs and monsters run their usecode.
+        if (obj.IsActor && obj.NpcNum != 0)
         {
             RunUsecode(obj);
             return;
@@ -1311,7 +1467,7 @@ public partial class U7Game : Node2D
             }
         }
 
-        var fun = obj.NpcNum >= 0 ? obj.GetUsecode() : UsecodeMachine.GetItemFun(obj);
+        var fun = obj.NpcNum >= 0 || obj.AssignedUsecode >= 0 ? obj.GetUsecode() : UsecodeMachine.GetItemFun(obj);
         if (fun < 0)
         {
             fun = UsecodeMachine.GetShapeFun(obj.Shape);
