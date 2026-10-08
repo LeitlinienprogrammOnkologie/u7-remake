@@ -18,3 +18,8 @@ Thumbs.db
 /stub_report.txt
 # Agent console I/O (scripts/agent/restart.ps1)
 /agent_io/
+
+# Poster pipeline output (renders of the game's map; regenerate with python -m u7poster.run)
+/poster/
+# Python bytecode
+__pycache__/
