@@ -156,6 +156,9 @@ public sealed class IfElsePathAction : IActorAction
     /// <summary>Exult <c>done_and_failed</c>: there was no way there.</summary>
     public bool DoneAndFailed => _done && _failed;
 
+    /// <summary>Exult <c>is_done</c>: walked (or failed) and its usecode run.</summary>
+    public bool Done => _done;
+
     /// <summary>Called after every step of the walk (from x, y).</summary>
     public Action<U7Object, int, int>? Stepped
     {

@@ -161,10 +161,12 @@ public abstract class Schedule(NpcBrain brain)
             return false;
         }
 
-        foreach (var actor in Map.FindNearby(Here(Npc), U7Constants.AnyShape, 20, 8))
+        // Exult: the invisible only for those who can see them.
+        var seeInvisible = Runner.Combat?.CanSeeInvisible(Npc) == true;
+        foreach (var actor in Map.FindNearby(Here(Npc), U7Constants.AnyShape, 20, 0x28)) // Exult: invisible ones too.
         {
-            if (actor == Npc || actor.IsDead || actor.GetFlag(ObjFlag.Asleep) || actor.GetFlag(ObjFlag.Invisible) ||
-                !Runner.IsStraightPath(Npc, actor))
+            if (actor == Npc || actor.IsDead || actor.GetFlag(ObjFlag.Asleep) ||
+                (!seeInvisible && actor.GetFlag(ObjFlag.Invisible)) || !Runner.IsStraightPath(Npc, actor))
             {
                 continue;
             }
@@ -378,7 +380,8 @@ public abstract class Schedule(NpcBrain brain)
     }
 
     /// <summary>Within <paramref name="dist"/> tiles of the schedule's spot.</summary>
-    protected bool AtDest(int dist) => Here(Npc).Distance2d(Brain.Dest) <= dist;
+    /// <summary>Exult <c>npc->distance(dest)</c>: from the NPC's nearest edge, lifts counting.</summary>
+    protected bool AtDest(int dist) => ObjectGeometry.Distance(Npc, Brain.Dest) <= dist;
 
     /// <summary>Exult: what diners eat, and the plates it goes on.</summary>
     protected const int FoodShape = 377;

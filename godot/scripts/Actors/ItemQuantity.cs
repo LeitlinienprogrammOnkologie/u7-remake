@@ -20,6 +20,20 @@ public sealed class ItemQuantity
     /// <summary>Exult <c>shape_info.txt</c> locked_containers (BG).</summary>
     static readonly HashSet<int> LockedContainers = [522, 798];
 
+    /// <summary>Exult <c>Game_object::inside_locked</c>: some container holding it, at any depth, is locked.</summary>
+    public static bool InsideLocked(U7Object obj)
+    {
+        for (var above = obj.Container; above is not null; above = above.Container)
+        {
+            if (LockedContainers.Contains(above.Shape))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     readonly ShapeCatalog _catalog;
     readonly GameMap _map;
     readonly WeaponTable? _weapons;
@@ -305,14 +319,14 @@ public sealed class ItemQuantity
     public U7Object NewItem(int shape, int frame) => _map.CreateIregObject(shape, frame);
 
     /// <summary>Exult <c>Container_game_object::add</c> / <c>Actor::add</c> (no combining).</summary>
-    public bool AddTo(U7Object cont, U7Object obj)
+    public bool AddTo(U7Object cont, U7Object obj, bool dontCheck = false)
     {
         if (cont.IsActor)
         {
-            return Equipment.AddToActor(cont, obj, _catalog, _map);
+            return Equipment.AddToActor(cont, obj, _catalog, _map, dontCheck);
         }
 
         // 255,255: let the gump pick a fresh spot (Exult sets cx/cy invalid).
-        return Equipment.TryPlace(_map, obj, cont, 255, 255, _catalog);
+        return Equipment.TryPlace(_map, obj, cont, 255, 255, _catalog, checkLimits: !dontCheck);
     }
 }

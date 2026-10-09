@@ -21,6 +21,7 @@ public sealed class ShapeCache
     readonly Dictionary<(int Sprite, int Frame, bool Translucent), Texture2D?> _spriteTex = new();
     readonly FrameTable _shapes8;
     readonly FrameTable _sprites8;
+    readonly FrameTable _gumps8;
     readonly VgaShapeFile _gumpsVga;
     readonly VgaShapeFile _fontsVga;
     readonly VgaShapeFile _facesVga;
@@ -46,6 +47,7 @@ public sealed class ShapeCache
         _facesVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "FACES.VGA"));
         _spritesVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "SPRITES.VGA"));
         _sprites8 = new FrameTable(_spritesVga);
+        _gumps8 = new FrameTable(_gumpsVga, wrap: true);
         _palette = U7Palette.DayRgb();
         _translucentPalette = U7Palette.DayRgbaTranslucent();
         Xforms = XformTables.Load();
@@ -53,6 +55,9 @@ public sealed class ShapeCache
 
     /// <summary>A SHAPES.VGA frame by palette index; bit 5 is the reflection. Null when the shape has no such frame.</summary>
     public ShapeFrame? GetFrame8(int shape, int frame) => _shapes8.Get(shape, frame);
+
+    /// <summary>A GUMPS.VGA frame by palette index (the frame number wrapping, as painted), for Exult's pixel hit-tests.</summary>
+    public ShapeFrame? GetGump8(int shape, int frame) => _gumps8.Get(shape, frame);
 
     /// <summary>A SPRITES.VGA frame by palette index.</summary>
     public ShapeFrame? GetSprite8(int sprite, int frame) => _sprites8.Get(sprite, frame);
@@ -238,13 +243,16 @@ public sealed class ShapeCache
     {
         const int Slots = 64;
         readonly VgaShapeFile _file;
+        /// <summary>Frame numbers wrap round the count (gumps), instead of bit 5 reflecting (shapes, sprites).</summary>
+        readonly bool _wrap;
         readonly ShapeFrame?[]?[] _frames;
         /// <summary>Per shape, a bit for each slot already decoded (the frame may be null).</summary>
         readonly ulong[] _decoded;
 
-        public FrameTable(VgaShapeFile file)
+        public FrameTable(VgaShapeFile file, bool wrap = false)
         {
             _file = file;
+            _wrap = wrap;
             var count = file.ShapeCount;
             _frames = new ShapeFrame?[count][];
             _decoded = new ulong[count];
@@ -259,7 +267,7 @@ public sealed class ShapeCache
 
             if ((uint)frame >= Slots)
             {
-                return _file.DecodeFrame(shape, frame, false);
+                return _file.DecodeFrame(shape, frame, _wrap);
             }
 
             var frames = _frames[shape] ??= new ShapeFrame?[Slots];
@@ -275,6 +283,11 @@ public sealed class ShapeCache
 
         ShapeFrame? Decode(int shape, int frame)
         {
+            if (_wrap)
+            {
+                return _file.DecodeFrame(shape, frame, true);
+            }
+
             // Exult Shape::read: a stored frame, or past them with bit 5 the
             // reflection; terrain ignores the bit.
             if (frame >= 32 && frame >= _file.FrameCount(shape) && !_file.Get(shape, 0).IsTile)

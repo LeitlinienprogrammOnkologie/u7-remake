@@ -538,7 +538,7 @@ public sealed class GumpManager
             return FastPathClient.IsGrabable(Map, Avatar, obj) ? null : MouseShape.RedX;
         }
 
-        return drag.SourceGump?.Owner is { } owner && !FastPathClient.IsGrabable(Map, Avatar, Outermost(owner))
+        return drag.SourceGump?.Owner is { } owner && !FastPathClient.IsGrabable(Map, Avatar, Inventory.Outermost(owner))
             ? MouseShape.OutOfRange
             : null;
     }
@@ -555,7 +555,7 @@ public sealed class GumpManager
             return null;
         }
 
-        var outer = Outermost(owner);
+        var outer = Inventory.Outermost(owner);
         if (outer == obj)
         {
             return MouseShape.RedX;
@@ -566,20 +566,7 @@ public sealed class GumpManager
             return MouseShape.OutOfRange;
         }
 
-        return outer.GetFlag(ObjFlag.InParty) &&
-               (Inventory.GetWeight(outer, Catalog) + Inventory.GetWeight(obj, Catalog)) / 10 > Inventory.GetMaxWeight(outer)
-            ? MouseShape.TooHeavy
-            : null;
-    }
-
-    static U7Object Outermost(U7Object obj)
-    {
-        while (obj.Container is { } c)
-        {
-            obj = c;
-        }
-
-        return obj;
+        return Inventory.CheckWeight(obj, outer, Catalog) ? null : MouseShape.TooHeavy;
     }
 
     public void PutBack(DragState drag)

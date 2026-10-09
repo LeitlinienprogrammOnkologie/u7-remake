@@ -92,6 +92,10 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
     the fog count stays true, lightning can't stick or flash past its end,
     rain doesn't flicker back at its end. A storm's parts outliving its egg
     stays Exult's.
+  - **Left to the best choice** (2026-10-09, `docs/AUDIT.md` D12, D18):
+    roofs are Exult's `is_roof` on the chunk cache, actors counting, set
+    when the avatar moves; a sleeper sent to sleep elsewhere gets up (Exult
+    leaves it lying, its own "stuck?" bug, fixed not ported).
 
 ## Layout
 
@@ -127,7 +131,8 @@ godot/scripts/
               light, light level), Weather (Exult's weather effects: storm,
               snow, sparkles, fog, clouds, rain, lightning),
               EffectsManager (Exult Sprites_effect, SPRITES.VGA animations;
-              the weather's time queue, set_weather)
+              the weather's time queue, set_weather), Animators (Exult
+              Frame_animator: animated shapes' frames on screen)
   Rendering/  WorldView (paints the map into IndexBuffer8, Exult's Image_buffer8:
               XFORM.TBL translucency, invisible actors, status outlines;
               shown through the world shader: ambient/lit palettes and
@@ -148,7 +153,8 @@ godot/scripts/
               Mouse: POINTERS.SHP cursors and their flashes), EndgameView
               (the endgame's 320x200 picture and words), NewGameView (Exult
               BG_Game::new_game: the avatar's name and sex)
-  Core/       U7Paths (data paths, ReadGameDat), U7Constants, TileCoord
+  Core/       U7Paths (data paths, ReadGameDat), U7Constants, TileCoord,
+              Directions (Exult dir.cc: the 8 directions, steps, frame rotation)
 scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers)
 ```
 
@@ -308,6 +314,13 @@ Alagner and the Time Lord's mission, and the Black Gate confrontation.
 `quick` carries a stray invisible flag on the avatar (NPCs won't come to talk:
 `setflag npc:0 invisible 0`) and has no barges (`scripts/repair_barges.py`).
 
+Also done: Exult's NPC timers (poison, sleep, invisibility and the other
+flags wear off), knockouts (dead only below -strength/3), fields (fire,
+sleep, poison, caltrops, campfires) and voice eggs; Hook's and
+Dracothraxus's death usecode. Saves from the dungeon play-tests are local
+(`sphere_*`, `tetra_*`, `cube_*`, `gate_*`, `sweep_*`, `fire_*`, listed in
+PROGRESS.md).
+
 Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
 SPRITES.VGA effects (`sprite_effect`, translucent), the spellbook and casting,
@@ -337,11 +350,15 @@ shows through its windows.
 
 Next, in priority order:
 
-1. **Story:** every town has been explored (PROGRESS.md, "Story
-   exploration"); next the dungeons and the main thread's late parts played
-   in order (the Time Lord's mission: Dungeon Despise and the generators,
-   the Ethereal Ring and Dracothraxus, Hook's death), and Alagner's notebook
-   by the user's route (the storeroom maze, crates stacked on the table).
+1. **Story:** every town and the main thread have been played (PROGRESS.md,
+   "Story exploration" and "Dungeons and the main thread": the Sphere,
+   Tetrahedron and Cube, the finale to both endgames, the Isle of Fire up
+   to the Black Sword, Destard, Despise, Shame, the mines, Hythloth's
+   edge). Left: Dracothraxus's end by the Black Sword, the Talisman of
+   Courage, the Dark Core and Erethian's end; the Isle of the Avatar's way
+   from the lower ring room up; Dungeon Wrong and Covetous proper; and
+   Alagner's notebook by the user's route (the storeroom maze, crates
+   stacked on the table).
 2. **Walking follow-ups:** Exult's dormancy and `Actor::follow` if the
    32-tile activity range or the follow schedule ever show their seams.
 

@@ -120,7 +120,7 @@ public sealed class Barge
         }
 
         FrameTime = speedMs;
-        FaceDirection(ActorWalker.Direction4(-U7Constants.TileDelta(cur.Ty, dest.Ty), U7Constants.TileDelta(cur.Tx, dest.Tx)));
+        FaceDirection(Directions.Of4(-U7Constants.TileDelta(cur.Ty, dest.Ty), U7Constants.TileDelta(cur.Tx, dest.Tx)));
         if (!_queued)
         {
             _queued = true;

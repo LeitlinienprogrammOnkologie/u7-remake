@@ -23,6 +23,37 @@ public sealed class AmmoRecord
     /// <summary>Exult <c>is_homing</c>: an exploding missile that becomes a <see cref="HomingMissile"/> (energy mist, death vortex).</summary>
     public bool Homing;
     public int DropType;
+    /// <summary>Exult <c>Weapon_data::Powers</c> bits: sleep 1, charm 2, curse 4, poison 8, paralyze 16, magebane 32, no damage 128.</summary>
+    public int Powers;
+
+    /// <summary>Exult <c>Ammo_info::get_base_strength</c> (its own "utter guesses"), for <c>find_best_ammo</c>.</summary>
+    public int BaseStrength
+    {
+        get
+        {
+            var strength = Damage;
+            strength += (Powers & 128) != 0 ? 10 : 0; // no damage
+            strength += (Powers & 1) != 0 ? 10 : 0; // sleep
+            strength += (Powers & 16) != 0 ? 10 : 0; // paralyze
+            strength += (Powers & 2) != 0 ? 10 : 0; // charm
+            strength += (Powers & 8) != 0 ? 5 : 0; // poison
+            strength += (Powers & 4) != 0 ? 5 : 0; // curse
+            strength += (Powers & 32) != 0 ? 5 : 0; // magebane
+            strength += Lucky ? 5 : 0;
+            strength += DamageType != 0 ? 5 : 0;
+            if (Autohit)
+            {
+                strength *= 2;
+            }
+
+            if (NoBlocking)
+            {
+                strength *= 2;
+            }
+
+            return strength;
+        }
+    }
 }
 
 /// <summary>Loads <c>assets/data/ammo.csv</c>.</summary>
@@ -79,6 +110,7 @@ public sealed class AmmoTable
         var iDrop = Col("drop_type");
         var iExplodes = Col("explodes");
         var iHoming = Col("homing");
+        var iPowers = Col("powers");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
         int Num(string[] c, int i, int fallback = 0) =>
@@ -108,7 +140,8 @@ public sealed class AmmoTable
                 NoBlocking = Num(c, iNoBlock) != 0,
                 DropType = Num(c, iDrop),
                 Explodes = Num(c, iExplodes) != 0,
-                Homing = Num(c, iHoming) != 0
+                Homing = Num(c, iHoming) != 0,
+                Powers = Num(c, iPowers)
             };
         }
 

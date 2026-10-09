@@ -66,7 +66,7 @@ public sealed class AvatarController
                          (!levitating && Math.Abs(start.Tz - next.Tz) > 1);
         }
 
-        var dir = ActorWalker.DirectionNoWrap(ay - Mathf.RoundToInt(target.Y), Mathf.RoundToInt(target.X) - ax);
+        var dir = Directions.NoWrap(ay - Mathf.RoundToInt(target.Y), Mathf.RoundToInt(target.X) - ax);
         if (blocked[dir])
         {
             if (!blocked[(dir + 1) % 8])

@@ -20,9 +20,6 @@ public sealed class UsecodeScript
     const int Usecode = 0x55, Speech = 0x56, Sfx = 0x58, FaceDir = 0x59, Weather = 0x5a;
     const int Hit = 0x78, Attack = 0x7a, Usecode2 = 0x80, Resurrect = 0x81;
     const int TicksPerMinute = 25; // Exult gameclk.h
-    static readonly int[] Rotate = [0, 0, 48, 48, 16, 16, 32, 32];
-    static readonly int[] DirDx = [0, 1, 1, 1, 0, -1, -1, -1];
-    static readonly int[] DirDy = [-1, -1, 0, 1, 1, 1, 0, -1];
 
     readonly UsecodeMachine _vm;
     readonly UsecodeValue _code;
@@ -378,8 +375,9 @@ public sealed class UsecodeScript
                     break;
                 case FaceDir:
                 {
+                    // Exult: the frame turned that way, an empty one skipped; the walk starts over.
                     var dir = Int(++_i) & 7;
-                    Obj.Frame = (Obj.Frame & 0xf) | Rotate[dir];
+                    _vm.SetItemFrame(Obj, (Obj.Frame & 0xf) | Directions.FrameRotation[dir], checkEmpty: true, setRotated: true);
                     Obj.WalkFrameIndex = 0;
                     break;
                 }
@@ -415,8 +413,8 @@ public sealed class UsecodeScript
                 default:
                     if (opcode is >= 0x61 and <= 0x70)
                     {
-                        Obj.Frame = (Obj.Frame & 48) | (opcode - 0x61);
-                        Obj.WalkFrameIndex = 0;
+                        // Frames with the actor's facing ("U7-verified", Exult), an empty one skipped.
+                        _vm.SetItemFrame(Obj, (Obj.Frame & 48) | (opcode - 0x61), checkEmpty: true, setRotated: true);
                     }
                     else if (opcode is >= 0x30 and < 0x38)
                     {
@@ -450,7 +448,7 @@ public sealed class UsecodeScript
                 for (var i = 0; i < 4; i++)
                 {
                     var t = dir >= 0
-                        ? new TileCoord(U7Constants.WrapTile(Obj.Tx + DirDx[dir]), U7Constants.WrapTile(Obj.Ty + DirDy[dir]), Obj.Tz)
+                        ? new TileCoord(U7Constants.WrapTile(Obj.Tx + Directions.Dx[dir]), U7Constants.WrapTile(Obj.Ty + Directions.Dy[dir]), Obj.Tz)
                         : new TileCoord(Obj.Tx, Obj.Ty, Obj.Tz);
                     barge.Step(t with { Tz = Math.Max(0, t.Tz + dz / 4 + (i == 0 ? dz % 4 : 0)) }, force: true);
                 }
@@ -468,8 +466,8 @@ public sealed class UsecodeScript
         var ty = Obj.Ty;
         if (dir >= 0)
         {
-            tx = U7Constants.WrapTile(tx + DirDx[dir]);
-            ty = U7Constants.WrapTile(ty + DirDy[dir]);
+            tx = U7Constants.WrapTile(tx + Directions.Dx[dir]);
+            ty = U7Constants.WrapTile(ty + Directions.Dy[dir]);
         }
 
         var tz = Math.Max(0, Obj.Tz + dz);

@@ -141,7 +141,7 @@ public sealed class EggHatcher
             var ty = actor.Ty;
             var tz = actor.Tz;
             var eggs = new List<U7Object>();
-            foreach (var egg in _map.EggsNear(tx, ty, TryAllDist))
+            foreach (var egg in _map.EggsInChunksNear(tx, ty, TryAllDist))
             {
                 if (egg.EggType is EggType.Jukebox or EggType.Teleport)
                 {
@@ -239,22 +239,10 @@ public sealed class EggHatcher
                     return inArea;
                 }
 
-                return dz / 2 == 0 && inArea && !fromIn;
+                // Exult: missile eggs take a lift difference of up to 4.
+                return (dz / 2 == 0 || (type == EggType.Missile && dz / 5 == 0)) && inArea && !fromIn;
             case EggCriteria.AvatarFar:
-            {
-                if (!isAvatar || !inArea)
-                {
-                    return false;
-                }
-
-                var ix = egg.EggAreaX + 1;
-                var iy = egg.EggAreaY + 1;
-                var iw = Math.Max(0, egg.EggAreaW - 2);
-                var ih = Math.Max(0, egg.EggAreaH - 2);
-                var fromInside = fromTx >= ix && fromTx < ix + iw && fromTy >= iy && fromTy < iy + ih;
-                var nowInside = tx >= ix && tx < ix + iw && ty >= iy && ty < iy + ih;
-                return fromInside && !nowInside;
-            }
+                return isAvatar && inArea && InInner(egg, fromTx, fromTy) && !InInner(egg, tx, ty);
             case EggCriteria.AvatarFootpad:
                 return isAvatar && dz == 0 && inArea;
             case EggCriteria.PartyFootpad:
@@ -264,6 +252,16 @@ public sealed class EggHatcher
             default:
                 return false;
         }
+    }
+
+    /// <summary>Exult <c>avatar_far</c>'s inner rectangle: the egg's area less a tile all round.</summary>
+    static bool InInner(U7Object egg, int tx, int ty)
+    {
+        var ix = egg.EggAreaX + 1;
+        var iy = egg.EggAreaY + 1;
+        var iw = Math.Max(0, egg.EggAreaW - 2);
+        var ih = Math.Max(0, egg.EggAreaH - 2);
+        return tx >= ix && tx < ix + iw && ty >= iy && ty < iy + ih;
     }
 
     static bool InArea(U7Object egg, int tx, int ty) =>
@@ -352,20 +350,7 @@ public sealed class EggHatcher
 
                 return !(dz / 2 == 0 && inArea && !fromIn);
             case EggCriteria.AvatarFar:
-            {
-                if (!fromIn)
-                {
-                    return false;
-                }
-
-                var ix = egg.EggAreaX + 1;
-                var iy = egg.EggAreaY + 1;
-                var iw = Math.Max(0, egg.EggAreaW - 2);
-                var ih = Math.Max(0, egg.EggAreaH - 2);
-                var fromInside = fromTx >= ix && fromTx < ix + iw && fromTy >= iy && fromTy < iy + ih;
-                var nowInside = tx >= ix && tx < ix + iw && ty >= iy && ty < iy + ih;
-                return !fromInside && nowInside;
-            }
+                return fromIn && !InInner(egg, fromTx, fromTy) && InInner(egg, tx, ty);
             case EggCriteria.AvatarFootpad:
             case EggCriteria.PartyFootpad:
                 return dz != 0 || !inArea;
@@ -512,6 +497,10 @@ public sealed class EggHatcher
                 Effects?.SetWeather(weather, minutes, new TileCoord(egg.Tx, egg.Ty, egg.Tz));
                 break;
             }
+            case EggType.Voice:
+                // Exult Voice_egg::hatch_now.
+                Usecode?.DoSpeech(egg.EggData1 & 0xff);
+                break;
             default:
                 if (_loggedStub.Add(egg.EggType))
                 {

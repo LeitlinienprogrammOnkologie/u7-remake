@@ -54,6 +54,8 @@ public partial class U7Game : Node2D
     MusicPlayer _music = null!;
     PartyManager _party = null!;
     CombatEngine _combat = null!;
+    NpcTimers _timers = null!;
+    Fields _fields = null!;
     List<U7Object?> _npcs = new();
     float _zoom = 4f;
     double _quakeTimer;
@@ -157,7 +159,13 @@ public partial class U7Game : Node2D
             _schedules.AvatarBusy = () => _avatar.IsPlayerMoving;
             _combat.Party = _party;
             _combat.Music = _music;
-            _combat.AdoptMonsters(NpcDat.LoadMonsters(_map));
+            var monsters = NpcDat.LoadMonsters(_map);
+            _combat.AdoptMonsters(monsters);
+            _timers = new NpcTimers(_schedules, _combat);
+            _timers.Restore(_npcs.Concat(monsters));
+            _combat.Timers = _timers;
+            _fields = new Fields(_map, _combat, _timers, _schedules);
+            ActorWalker.Stepped = _fields.Stepped;
             if (gwin is { } g1)
             {
                 _combat.Armageddon = g1.Armageddon;
@@ -170,6 +178,9 @@ public partial class U7Game : Node2D
                 {
                     _music.Start(g1.Track, g1.Repeat);
                 }
+
+                // After the start, which clears it (Exult's stop_music doesn't).
+                _music.EggCount = g1.EggCount;
             }
 
             _effects = new EffectsManager(_shapes.SpritesVga, _clock) { InDungeon = () => _lighting.InDungeon };
@@ -186,7 +197,8 @@ public partial class U7Game : Node2D
                 Effects = _effects,
                 Missiles = _combat.Missiles,
                 HomingMissiles = _combat.HomingMissiles,
-                TextureFilter = TextureFilterEnum.Nearest
+                TextureFilter = TextureFilterEnum.Nearest,
+                Animators = new Animators(_map, _clock)
             };
             AddChild(_world);
             _lighting = new SceneLighting(_clock, _map, _catalog, avatar, _effects, _party, new GlowColours(_shapes, _catalog))
@@ -287,6 +299,7 @@ public partial class U7Game : Node2D
             var usecodeFile = UsecodeFile.Load();
             GD.Print($"USECODE loaded: {usecodeFile.Count} functions.");
             _usecode = new UsecodeMachine(usecodeFile, _map, avatar);
+            _usecode.Frame8 = _shapes.GetFrame8;
             foreach (var (tnum, hours) in usecodeDat?.Timers ?? [])
             {
                 _usecode.Timers[tnum] = hours;
@@ -405,6 +418,13 @@ public partial class U7Game : Node2D
             };
             PathWalk.IsSentient = _combat.IsSentient;
             _combat.WeaponUsecode = (fun, target) => _usecode.Call(fun, target, UsecodeEvent.Weapon);
+            _combat.DoSpeech = _usecode.DoSpeech;
+            _combat.DeathUsecode = (npc, finish) => _usecode.WhenDone(() =>
+            {
+                _usecode.Call(UsecodeMachine.GetShapeFun(npc.Shape), npc, UsecodeEvent.InternalExec);
+                _conversation.Refresh();
+                _usecode.WhenDone(finish);
+            });
             _gumps.CastSpell = (fun, caster) =>
             {
                 _usecode.Call(fun, caster, UsecodeEvent.DoubleClick);
@@ -441,7 +461,7 @@ public partial class U7Game : Node2D
                 _usecode.StartScript(npc, code, 0);
             };
             _schedules.Fight = _combat.Fight;
-            _schedules.ReadyBestWeapon = _combat.ReadyBestWeapon;
+            _schedules.ReadyBestWeapon = npc => _combat.ReadyBestWeapon(npc);
             _schedules.Weapons = _combat.Weapons;
             _schedules.Activate = obj =>
             {
@@ -469,7 +489,23 @@ public partial class U7Game : Node2D
             SitAction.Say = _usecode.Bark;
             _schedules.CanSpeak = _combat.CanSpeak;
             _schedules.InUsecodeControl = _usecode.InUsecodeControl;
+            if (U7Paths.GameDatOverride is null)
+            {
+                // Exult read_npcs: a new game readies the avatar's and Iolo's best weapons.
+                foreach (var id in (int[])[0, 1])
+                {
+                    if (id < _npcs.Count && _npcs[id] is { } npc)
+                    {
+                        _combat.ReadyBestWeapon(npc);
+                    }
+                }
+            }
+
             _schedules.Start(restore: U7Paths.GameDatOverride is not null);
+            _timers.TerminateScripts = _usecode.TerminateScripts;
+            _schedules.TerminateScripts = _usecode.TerminateScripts;
+            _schedules.ForceSleep = _timers.ForceSleep;
+            _usecode.ActorFlags = _timers;
             _conversation.Machine = _usecode;
             _gumpView.ShownBook = () => _usecode is { Wait: UsecodeWait.BookPage } vm ? vm.Book : null;
             _gumpView.ShownPicture = () => _usecode is { Wait: UsecodeWait.Picture or UsecodeWait.WizardEye } vm ? vm.Picture : null;
@@ -735,6 +771,8 @@ public partial class U7Game : Node2D
 
         _schedules.Update(delta, frozen);
         _combat.Update(delta, frozen);
+        _timers.Update(delta, frozen);
+        _fields.Update(delta, frozen);
         // Exult pauses its time queue while usecode waits for a click and in gump mode.
         if (!inUsecode && !_gumps.GumpMode)
         {
@@ -1268,9 +1306,7 @@ public partial class U7Game : Node2D
     /// <summary>Exult <c>Check_weight</c>: a party member (or what one carries) takes no more than it can carry.</summary>
     bool CheckWeight(U7Object obj, U7Object onto)
     {
-        var owner = Inventory.Outermost(onto);
-        if (!owner.GetFlag(ObjFlag.InParty) ||
-            (Inventory.GetWeight(owner, _catalog) + Inventory.GetWeight(obj, _catalog)) / 10 <= Inventory.GetMaxWeight(owner))
+        if (Inventory.CheckWeight(obj, onto, _catalog))
         {
             return true;
         }
@@ -1647,7 +1683,7 @@ public partial class U7Game : Node2D
             case UsecodeWait.WizardEye:
             {
                 var c = GetViewport().GetVisibleRect().Size / 2;
-                return MouseShape.ShortArrows + ActorWalker.DirectionNoWrap((int)(c.Y - screen.Y), (int)(screen.X - c.X));
+                return MouseShape.ShortArrows + Directions.NoWrap((int)(c.Y - screen.Y), (int)(screen.X - c.X));
             }
             case not (UsecodeWait.None or null):
                 return MouseShape.Hand;
@@ -1739,7 +1775,7 @@ public partial class U7Game : Node2D
             {
                 var centre = GetViewport().GetVisibleRect().Size / 2;
                 var m = GetViewport().GetMousePosition();
-                var dir = ActorWalker.DirectionNoWrap((int)(centre.Y - m.Y), (int)(m.X - centre.X));
+                var dir = Directions.NoWrap((int)(centre.Y - m.Y), (int)(m.X - centre.X));
                 _usecode!.MoveWizardEye(EyeDeltas[2 * dir], EyeDeltas[2 * dir + 1]);
             }
         }

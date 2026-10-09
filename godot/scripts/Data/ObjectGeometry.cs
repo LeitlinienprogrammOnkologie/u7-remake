@@ -82,20 +82,11 @@ public static class ObjectGeometry
         }
     }
 
-    /// <summary>Exult <c>Get_direction</c>: the 8-way direction for a slope, across the world's wrap; dy grows northwards.</summary>
-    public static int Direction(int dy, int dx) => U7.Actors.ActorWalker.DirectionNoWrap(WrapDelta(dy), WrapDelta(dx));
-
-    // Exult Wrap_Delta.
-    static int WrapDelta(int delta) =>
-        delta >= U7Constants.NumTiles / 2 ? U7Constants.NumTiles / 2 - delta
-        : delta <= -U7Constants.NumTiles / 2 ? -U7Constants.NumTiles / 2 - delta
-        : delta;
-
     /// <summary>Exult <c>Game_object::get_direction(Tile_coord)</c>: from the object's centre tile.</summary>
     public static int Direction(U7Object from, TileCoord to)
     {
         var t1 = CenterTile(from);
-        return Direction(t1.Ty - to.Ty, to.Tx - t1.Tx);
+        return Directions.Of(t1.Ty - to.Ty, to.Tx - t1.Tx);
     }
 
     /// <summary>Exult <c>Game_object::get_direction(Game_object*)</c>: centre tile to centre tile.</summary>

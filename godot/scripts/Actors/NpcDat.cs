@@ -127,18 +127,9 @@ public static class NpcDat
                 $"sched {n.ScheduleType} unused={n.Unused} items={n.Contents.Count}");
         }
 
-        var weapons = WeaponTable.Load();
+        // (A new game readies the avatar's and Iolo's best weapons once the combat
+        // engine is up: U7Game, Exult read_npcs. Everyone else keeps what NPC.DAT says.)
         var armor = ArmorTable.Load();
-        foreach (var n in npcs)
-        {
-            if (n is not { Unused: false })
-            {
-                continue;
-            }
-
-            Equipment.ReadyBestWeapon(n, map.Catalog, weapons, armor);
-        }
-
         var avW = Equipment.GetReadied(avatar, ReadySpot.Lhand)
                   ?? Equipment.GetReadied(avatar, ReadySpot.Rhand);
         GD.Print(

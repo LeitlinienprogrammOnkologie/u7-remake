@@ -19,7 +19,8 @@ public sealed class GameMap
     public ushort[,] TerrainMap { get; } = new ushort[U7Constants.NumChunks, U7Constants.NumChunks];
     public TerrainCell[][] Terrains { get; } = new TerrainCell[TerrainCount][];
     public List<U7Object>[][] ChunkObjects { get; }
-    public List<U7Object> Eggs { get; } = new();
+    /// <summary>The eggs in the world (kept with the chunk lists, <see cref="AddEgg"/>).</summary>
+    public HashSet<U7Object> Eggs { get; } = new();
     readonly Dictionary<int, List<U7Object>> _pathEggs = new();
     /// <summary>
     /// Exult <c>Chunk_cache::eggs</c>: per chunk, 16 bits per tile naming the
@@ -94,16 +95,7 @@ public sealed class GameMap
     public List<U7Object> ObjectsInChunk(int cx, int cy) =>
         ChunkObjects[U7Constants.WrapChunk(cx)][U7Constants.WrapChunk(cy)];
 
-    public void AddObject(U7Object obj)
-    {
-        InsertIntoChunk(obj);
-        if (obj.IsEgg && !Eggs.Contains(obj))
-        {
-            Eggs.Add(obj);
-            SetEggArea(obj);
-            UpdateEgg(obj, add: true);
-        }
-    }
+    public void AddObject(U7Object obj) => InsertIntoChunk(obj);
 
     /// <summary>
     /// Remove from the chunk list without marking <see cref="U7Object.Removed"/>.
@@ -184,10 +176,6 @@ public sealed class GameMap
         foreach (var obj in objs)
         {
             RemoveFromChunk(obj);
-            if (obj.IsEgg)
-            {
-                UpdateEgg(obj, add: false);
-            }
         }
 
         for (var k = 0; k < objs.Count; k++)
@@ -201,12 +189,6 @@ public sealed class GameMap
             obj.Tx = U7Constants.WrapTile(positions[k].Tx);
             obj.Ty = U7Constants.WrapTile(positions[k].Ty);
             obj.Tz = positions[k].Tz;
-            if (obj.IsEgg)
-            {
-                SetEggArea(obj);
-                UpdateEgg(obj, add: true);
-            }
-
             InsertIntoChunk(obj);
         }
     }
@@ -229,6 +211,13 @@ public sealed class GameMap
             return;
         }
 
+        if (obj.Container is not null)
+        {
+            // Exult Ireg_game_object::move: a carried thing leaves its owner first.
+            PlaceInWorld(obj, newTx, newTy, newTz);
+            return;
+        }
+
         if (obj.Removed)
         {
             // A removed object (dead NPC) keeps a position but never re-enters a chunk.
@@ -239,20 +228,9 @@ public sealed class GameMap
         }
 
         RemoveFromChunk(obj);
-        if (obj.IsEgg)
-        {
-            UpdateEgg(obj, add: false);
-        }
-
         obj.Tx = U7Constants.WrapTile(newTx);
         obj.Ty = U7Constants.WrapTile(newTy);
         obj.Tz = newTz;
-        if (obj.IsEgg)
-        {
-            SetEggArea(obj);
-            UpdateEgg(obj, add: true);
-        }
-
         InsertIntoChunk(obj);
     }
 
@@ -272,6 +250,11 @@ public sealed class GameMap
             _covers.Clear();
         }
 
+        if (obj.IsEgg)
+        {
+            AddEgg(obj);
+        }
+
         if (_chunkOrdered[cx][cy] && !obj.IsFlat)
         {
             AddDependencies(obj, cx, cy, onlyEarlierInOwnChunk: false);
@@ -289,6 +272,11 @@ public sealed class GameMap
             if (Catalog[obj.Shape].IsBuilding)
             {
                 _covers.Clear();
+            }
+
+            if (obj.IsEgg)
+            {
+                RemoveEgg(obj);
             }
         }
 
@@ -385,6 +373,40 @@ public sealed class GameMap
         }
     }
 
+    /// <summary>
+    /// Exult <c>Map_chunk::add_egg</c> (<c>Egg_object::move</c> and its
+    /// placing): the trigger area from where the egg now is, and the path-egg
+    /// index. Kept with the chunk list, so no way of moving an egg leaves its
+    /// area behind.
+    /// </summary>
+    void AddEgg(U7Object egg)
+    {
+        Eggs.Add(egg);
+        SetEggArea(egg);
+        UpdateEgg(egg, add: true);
+        if (egg.EggType == U7.World.EggType.Path)
+        {
+            if (!_pathEggs.TryGetValue(egg.Quality, out var list))
+            {
+                list = new List<U7Object>();
+                _pathEggs[egg.Quality] = list;
+            }
+
+            list.Add(egg);
+        }
+    }
+
+    /// <summary>Exult <c>Map_chunk::remove_egg</c>.</summary>
+    void RemoveEgg(U7Object egg)
+    {
+        UpdateEgg(egg, add: false);
+        Eggs.Remove(egg);
+        if (egg.EggType == U7.World.EggType.Path && _pathEggs.TryGetValue(egg.Quality, out var list))
+        {
+            list.Remove(egg);
+        }
+    }
+
     public void RemoveObject(U7Object obj)
     {
         obj.Removed = true;
@@ -397,16 +419,6 @@ public sealed class GameMap
         }
 
         RemoveFromChunk(obj);
-        if (obj.IsEgg)
-        {
-            UpdateEgg(obj, add: false);
-            Eggs.Remove(obj);
-            if (obj.EggType == U7.World.EggType.Path &&
-                _pathEggs.TryGetValue(obj.Quality, out var list))
-            {
-                list.Remove(obj);
-            }
-        }
     }
 
     /// <summary>
@@ -591,6 +603,32 @@ public sealed class GameMap
         public readonly List<U7Object?> Eggs = new();
     }
 
+    /// <summary>
+    /// Exult <c>Map_chunk::try_all_eggs</c>'s search: every egg in the chunks
+    /// the 2 x <paramref name="dist"/> square round the tile touches, with no
+    /// distance test, in Exult's chunk order.
+    /// </summary>
+    public List<U7Object> EggsInChunksNear(int tx, int ty, int dist)
+    {
+        var result = new List<U7Object>();
+        for (var cy = (ty - dist) >> 4; cy <= (ty + dist - 1) >> 4; cy++)
+        {
+            for (var cx = (tx - dist) >> 4; cx <= (tx + dist - 1) >> 4; cx++)
+            {
+                ForEachInExultOrder(ObjectsInChunk(cx, cy), obj =>
+                {
+                    if (obj.IsEgg && !obj.Removed)
+                    {
+                        result.Add(obj);
+                    }
+                });
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Eggs within <paramref name="dist"/> tiles each way (a button egg's, the console's).</summary>
     public List<U7Object> EggsNear(int tx, int ty, int dist)
     {
         var result = new List<U7Object>();
@@ -660,87 +698,25 @@ public sealed class GameMap
     }
 
     /// <summary>
-    /// Objects of <paramref name="shape"/> (-359 = any) within Chebyshev
-    /// <paramref name="dist"/> tiles of <paramref name="origin"/>, of the
-    /// given quality and frame (-359 = any).
+    /// Exult <c>Game_object::find_nearby</c> (objs/find_nearby.h): objects of
+    /// <paramref name="shape"/> (any if negative) whose tile is within
+    /// <paramref name="dist"/> tiles each way (24 if negative), of the given
+    /// quality and frame (-359 = any), passing Exult's <paramref name="mask"/>
+    /// (<see cref="FindMaskAllows"/>: 0 objects and actors alike but nothing
+    /// invisible or transparent; 4 NPC shapes, 8 living ones; 0x10 eggs and
+    /// barges too; 0x20 invisible things, 0x40 the party's; 0x80 transparent
+    /// shapes). A shape given ignores mask 4. Only the chunks the box touches
+    /// are read, row by row, each in Exult's chunk order
+    /// (<see cref="ForEachInExultOrder"/>); the engine's callers take that
+    /// order as it is, usecode's sorts (<see cref="FindNearbyExult"/>).
     /// </summary>
     public List<U7Object> FindNearby(
         TileCoord origin, int shape, int dist, int mask = 0,
         int qual = U7Constants.AnyShape, int frame = U7Constants.AnyShape)
     {
-        var npcOnly = mask == 8;
-        var includeActors = (mask & 8) != 0 || (mask & 0x80) != 0;
-        var includeObjects = !npcOnly;
-        var result = new List<U7Object>();
-        var chunks = Math.Max(1, (dist + 15) / 16 + 1);
-        var ocx = origin.Tx / U7Constants.TilesPerChunk;
-        var ocy = origin.Ty / U7Constants.TilesPerChunk;
-        for (var cy = ocy - chunks; cy <= ocy + chunks; cy++)
+        if (dist < 0)
         {
-            for (var cx = ocx - chunks; cx <= ocx + chunks; cx++)
-            {
-                foreach (var obj in ObjectsInChunk(cx, cy))
-                {
-                    if (obj.Removed)
-                    {
-                        continue;
-                    }
-
-                    if (obj.IsEgg && (mask & 16) == 0)
-                    {
-                        continue;
-                    }
-
-                    if (obj.IsActor)
-                    {
-                        if (!includeActors)
-                        {
-                            continue;
-                        }
-                    }
-                    else if (!includeObjects)
-                    {
-                        continue;
-                    }
-
-                    if (shape != U7Constants.AnyShape && obj.Shape != shape)
-                    {
-                        continue;
-                    }
-
-                    if ((qual != U7Constants.AnyShape && obj.Quality != qual) ||
-                        (frame != U7Constants.AnyShape && obj.Frame != frame))
-                    {
-                        continue;
-                    }
-
-                    if (origin.Distance2d(new TileCoord(obj.Tx, obj.Ty, obj.Tz)) <= dist)
-                    {
-                        result.Add(obj);
-                    }
-                }
-            }
-        }
-
-        result.Sort((a, b) => b.RenderOrder.CompareTo(a.RenderOrder));
-        return result;
-    }
-
-    /// <summary>
-    /// Exult <c>Game_object::find_nearby</c> with Exult's mask (objs/find_nearby.h),
-    /// for usecode: NPCs count unless the mask narrows to NPC shapes (4) or
-    /// live ones (8); eggs and barges only with 0x10, invisible objects only
-    /// with 0x20 (or 0x40 for the party's), transparent shapes only with 0x80.
-    /// A shape of -1 or -359 is any, and a shape given ignores mask 4. Objects
-    /// whose tile is within <paramref name="delta"/> tiles each way (24 if
-    /// negative), sorted right to left, near to far (Exult <c>Object_reverse_sorter</c>).
-    /// </summary>
-    public List<U7Object> FindNearbyExult(TileCoord pos, int shape, int delta, int mask,
-        int qual = U7Constants.AnyShape, int frame = U7Constants.AnyShape)
-    {
-        if (delta < 0)
-        {
-            delta = 24;
+            dist = 24;
         }
 
         if (shape > 0 && mask == 4)
@@ -749,36 +725,79 @@ public sealed class GameMap
         }
 
         var result = new List<U7Object>();
-        var chunks = delta / U7Constants.TilesPerChunk + 1;
-        var ocx = pos.Tx / U7Constants.TilesPerChunk;
-        var ocy = pos.Ty / U7Constants.TilesPerChunk;
-        var span = Math.Min(2 * chunks + 1, U7Constants.NumChunks);
-        for (var cy = ocy - chunks; cy < ocy - chunks + span; cy++)
+        for (var cy = (origin.Ty - dist) >> 4; cy <= (origin.Ty + dist) >> 4; cy++)
         {
-            for (var cx = ocx - chunks; cx < ocx - chunks + span; cx++)
+            for (var cx = (origin.Tx - dist) >> 4; cx <= (origin.Tx + dist) >> 4; cx++)
             {
-                foreach (var obj in ObjectsInChunk(cx, cy))
+                ForEachInExultOrder(ObjectsInChunk(cx, cy), obj =>
                 {
                     if (obj.Removed || (shape >= 0 && obj.Shape != shape) ||
                         (qual != U7Constants.AnyShape && obj.Quality != qual) ||
                         (frame != U7Constants.AnyShape && obj.Frame != frame) ||
                         !FindMaskAllows(obj, mask))
                     {
-                        continue;
+                        return;
                     }
 
-                    if (Math.Abs(U7Constants.TileDelta(pos.Tx, obj.Tx)) <= delta &&
-                        Math.Abs(U7Constants.TileDelta(pos.Ty, obj.Ty)) <= delta)
+                    if (Math.Abs(U7Constants.TileDelta(origin.Tx, obj.Tx)) <= dist &&
+                        Math.Abs(U7Constants.TileDelta(origin.Ty, obj.Ty)) <= dist)
                     {
                         result.Add(obj);
                     }
-                }
+                });
             }
         }
 
-        result.Sort((a, b) => b.RenderOrder.CompareTo(a.RenderOrder));
         return result;
     }
+
+    /// <summary>
+    /// Exult's <c>Map_chunk</c> list order: the flat objects (lift 0, no
+    /// height) in the order they came, then the others newest first
+    /// (<c>Map_chunk::add</c> puts each new one before the old first). The
+    /// port appends, so the second part runs backwards.
+    /// </summary>
+    static void ForEachInExultOrder(List<U7Object> list, Action<U7Object> visit)
+    {
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (list[i].IsFlat)
+            {
+                visit(list[i]);
+            }
+        }
+
+        for (var i = list.Count - 1; i >= 0; i--)
+        {
+            if (!list[i].IsFlat)
+            {
+                visit(list[i]);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Usecode's <c>find_nearby</c> (Exult <c>Usecode_internal::find_nearby</c>):
+    /// <see cref="FindNearby"/> sorted by <see cref="ReverseSorter"/>.
+    /// </summary>
+    public List<U7Object> FindNearbyExult(TileCoord pos, int shape, int delta, int mask,
+        int qual = U7Constants.AnyShape, int frame = U7Constants.AnyShape)
+    {
+        var result = FindNearby(pos, shape, delta, mask, qual, frame);
+        result.Sort(ReverseSorter);
+        return result;
+    }
+
+    /// <summary>
+    /// Exult <c>Object_reverse_sorter</c> (ucinternal.cc), which usecode's
+    /// <c>find_nearby</c> sorts by "to fix the SI/SS cask bug": the larger ty
+    /// first, then the larger tx, then the higher lift. Usecode often takes
+    /// element 0, so the order decides which object a script picks.
+    /// </summary>
+    static int ReverseSorter(U7Object a, U7Object b) =>
+        a.Ty != b.Ty ? b.Ty.CompareTo(a.Ty)
+        : a.Tx != b.Tx ? b.Tx.CompareTo(a.Tx)
+        : b.Tz.CompareTo(a.Tz);
 
     /// <summary>Exult <c>find_nearby</c>'s <c>Check_mask</c>.</summary>
     bool FindMaskAllows(U7Object obj, int mask)
@@ -947,6 +966,32 @@ public sealed class GameMap
         }
     }
 
+    /// <summary>
+    /// Exult <c>change_frame</c>: a new frame. A frame that turns the
+    /// footprint (the reflection bit on a shape that isn't square) takes the
+    /// object out of its chunk and back, so the blocking and paint order
+    /// follow; Exult's chunk cache has no counts to drift.
+    /// </summary>
+    public void SetFrame(U7Object obj, int frame)
+    {
+        var info = Catalog[obj.Shape];
+        var turns = ((obj.Frame ^ frame) & 32) != 0 && info.DimX != info.DimY;
+        if (!turns || obj.Container is not null || obj.Removed)
+        {
+            obj.Frame = frame;
+            if (turns)
+            {
+                SetFrameDims(obj, frame);
+            }
+
+            return;
+        }
+
+        RemoveFromChunk(obj);
+        SetFrameDims(obj, frame);
+        InsertIntoChunk(obj);
+    }
+
     /// <summary>Exult <c>Map_chunk::find_spot</c>, 1-tile version.</summary>
     /// <summary>
     /// Exult <c>Map_chunk::find_spot</c>: a free spot for an object of the
@@ -986,7 +1031,7 @@ public sealed class GameMap
             {
                 var p = SquareTile(pos, d, index % count);
                 if (!Blocking.IsBlockedArea(zs, p.Tz, p.Tx - xs + 1, p.Ty - ys + 1, xs, ys, out lift, flags, maxDrop) &&
-                    (inside is not { } want || want == (RoofHeight(p.Tx, p.Ty, lift) < U7Constants.NoRoof)))
+                    (inside is not { } want || want == (RoofHeight(p.Tx, p.Ty, lift) < InsideBelow)))
                 {
                     return p with { Tz = lift };
                 }
@@ -998,7 +1043,7 @@ public sealed class GameMap
 
     /// <summary>Exult <c>find_spot(pos, dist, obj)</c>: a spot near <paramref name="pos"/> for the object, preferring the side it comes from.</summary>
     public TileCoord? FindSpot(TileCoord pos, int dist, U7Object obj, int maxDrop = 0) =>
-        FindSpot(pos, dist, obj.Shape, obj.Frame, maxDrop, ObjectGeometry.Direction(pos.Ty - obj.Ty, obj.Tx - pos.Tx));
+        FindSpot(pos, dist, obj.Shape, obj.Frame, maxDrop, Directions.Of(pos.Ty - obj.Ty, obj.Tx - pos.Tx));
 
     /// <summary>
     /// Exult <c>Get_square</c>: the i-th of the 8·<paramref name="dist"/> tiles
@@ -1063,14 +1108,42 @@ public sealed class GameMap
     }
 
     /// <summary>
-    /// Exult <c>Map_chunk::is_roof</c>: lowest solid lift at or above
-    /// <c>lift + 4</c>, or <see cref="U7Constants.NoRoof"/> if none.
+    /// Exult <c>Map_chunk::is_roof</c>: the lowest blocked lift at or above
+    /// <c>lift + 4</c> in the chunk cache (actors count, as in Exult), or
+    /// <see cref="U7Constants.NoRoof"/> if none.
     /// </summary>
     public int RoofHeight(int tx, int ty, int lift)
     {
-        var height = LowestBlocked(tx, ty, lift + 4);
+        var height = ChunkBlocking.LowestBlocked(Blocking.Column(tx, ty), lift + 4);
         return height < 0 ? U7Constants.NoRoof : height;
     }
+
+    /// <summary>Exult: a roof below this lift is "inside" (<c>is_main_actor_inside</c>, <c>find_spot</c>).</summary>
+    public const int InsideBelow = 31;
+
+    (int Tx, int Ty, int Tz)? _roofAt;
+    int _roofOverAvatar = U7Constants.NoRoof;
+
+    /// <summary>
+    /// Exult <c>Game_window::skip_above_actor</c>: the roof over the avatar,
+    /// worked out when the avatar moves (<c>Main_actor::step</c> / <c>move</c>,
+    /// <c>center_view</c>), so something passing overhead doesn't change it
+    /// while the avatar stands still.
+    /// </summary>
+    public int RoofOverAvatar(U7Object avatar)
+    {
+        var at = (avatar.Tx, avatar.Ty, avatar.Tz);
+        if (_roofAt != at)
+        {
+            _roofAt = at;
+            _roofOverAvatar = RoofHeight(avatar.Tx, avatar.Ty, avatar.Tz);
+        }
+
+        return _roofOverAvatar;
+    }
+
+    /// <summary>Exult <c>is_main_actor_inside</c>.</summary>
+    public bool AvatarInside(U7Object avatar) => RoofOverAvatar(avatar) < InsideBelow;
 
     /// <summary>
     /// The lift of the lowest roof or upper floor over the tile that starts
@@ -1089,7 +1162,7 @@ public sealed class GameMap
 
         if (!_covers.TryGetValue((tx, ty, lift), out var cover))
         {
-            var height = LowestBlocked(tx, ty, lift + 1, buildingsAbove: true);
+            var height = LowestBuilding(tx, ty, lift + 1);
             cover = height < 0 ? U7Constants.NoRoof : height;
             _covers[(tx, ty, lift)] = cover;
         }
@@ -1159,7 +1232,8 @@ public sealed class GameMap
         return arr[ly * U7Constants.TilesPerChunk + lx];
     }
 
-    int LowestBlocked(int tx, int ty, int fromLift, bool buildingsAbove = false)
+    /// <summary>The lowest solid building-class object over the tile starting at or above <paramref name="fromLift"/>, or -1.</summary>
+    int LowestBuilding(int tx, int ty, int fromLift)
     {
         tx = U7Constants.WrapTile(tx);
         ty = U7Constants.WrapTile(ty);
@@ -1182,16 +1256,14 @@ public sealed class GameMap
                         continue;
                     }
 
-                    var top = obj.Tz + obj.DimZ - 1;
-                    if (top < fromLift || (buildingsAbove && (obj.Tz < fromLift || !Catalog[obj.Shape].IsBuilding)))
+                    if (obj.Tz < fromLift || !Catalog[obj.Shape].IsBuilding)
                     {
                         continue;
                     }
 
-                    var z = Math.Max(obj.Tz, fromLift);
-                    if (best < 0 || z < best)
+                    if (best < 0 || obj.Tz < best)
                     {
-                        best = z;
+                        best = obj.Tz;
                     }
                 }
             }
@@ -1751,20 +1823,8 @@ public sealed class GameMap
         egg.Solid = false;
         egg.IsEgg = true;
         FillEgg(egg, itype, prob, data1, data2, data3);
-        ChunkObjects[wcx][wcy].Add(egg);
-        Eggs.Add(egg);
-        UpdateEgg(egg, add: true);
-        if (egg.EggType == U7.World.EggType.Path)
-        {
-            if (!_pathEggs.TryGetValue(egg.Quality, out var list))
-            {
-                list = new List<U7Object>();
-                _pathEggs[egg.Quality] = list;
-            }
-
-            list.Add(egg);
-        }
-
+        ChunkObjects[wcx][wcy].Add(egg); // (At load: no blocking or paint order to update.)
+        AddEgg(egg);
         return egg;
     }
 

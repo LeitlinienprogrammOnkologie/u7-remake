@@ -182,6 +182,54 @@ public sealed class U7Object
         }
     }
 
+    /// <summary>
+    /// Everything inside, depth first, each thing before its own contents
+    /// (Exult <c>Container_game_object</c>'s searches); removed things and what
+    /// they hold are skipped. One iterator and stack, not one per nesting level.
+    /// </summary>
+    public IEnumerable<U7Object> AllInside()
+    {
+        var stack = new Stack<(U7Object Container, int Next)>();
+        var container = this;
+        var next = 0;
+        while (true)
+        {
+            if (next < container.Contents.Count)
+            {
+                var obj = container.Contents[next++];
+                if (obj.Removed)
+                {
+                    continue;
+                }
+
+                yield return obj;
+                if (obj.Contents.Count > 0)
+                {
+                    stack.Push((container, next));
+                    (container, next) = (obj, 0);
+                }
+            }
+            else if (stack.Count > 0)
+            {
+                (container, next) = stack.Pop();
+            }
+            else
+            {
+                yield break;
+            }
+        }
+    }
+
+    /// <summary>Sets the flag on this and on everything inside it.</summary>
+    public void SetFlagWithContents(int flag)
+    {
+        SetFlag(flag);
+        foreach (var item in Contents)
+        {
+            item.SetFlagWithContents(flag);
+        }
+    }
+
     public void CollectContents(List<U7Object> dest, bool recursive = true)
     {
         foreach (var child in Contents)

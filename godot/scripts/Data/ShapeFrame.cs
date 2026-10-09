@@ -34,6 +34,8 @@ public sealed class ShapeFrame
     public byte[] Pixels { get; }
 
     public int Width => XLeft + XRight + 1;
+    /// <summary>Exult <c>Shape_frame::is_empty</c>: an RLE frame with no pixels.</summary>
+    public bool IsEmpty => IsRle && Scans.Length == 0;
     public int Height => YAbove + YBelow + 1;
 
     ShapeFrame(int xleft, int yabove, int xright, int ybelow, bool rle, Scan[] scans, byte[] pixels)

@@ -25,8 +25,6 @@ public sealed class PartyManager
     // Follower offsets by 4-way direction (N, E, S, W): behind-left, behind-right.
     static readonly int[,] LeftOffsets = { { -2, 2 }, { -2, -2 }, { 2, -2 }, { 2, 2 } };
     static readonly int[,] RightOffsets = { { 2, 2 }, { -2, 2 }, { -2, -2 }, { 2, -2 } };
-    static readonly int[] DirDx = [0, 1, 1, 1, 0, -1, -1, -1];
-    static readonly int[] DirDy = [-1, -1, 0, 1, 1, 1, 0, -1];
     static readonly int[] DeltaDir = [0, 1, 7, 2, 6, 3, 5];
     const int MaxCost = 10000;
 
@@ -85,7 +83,7 @@ public sealed class PartyManager
 
         npc.Alignment = Alignment.Good;
         npc.SetFlag(ObjFlag.InParty);
-        SetFlagRecursively(npc, ObjFlag.OkayToTake);
+        npc.SetFlagWithContents(ObjFlag.OkayToTake);
         _members.Add(npc);
         return true;
     }
@@ -109,7 +107,7 @@ public sealed class PartyManager
     public void LinkParty(IReadOnlyList<int>? saved = null)
     {
         _avatar.SetFlag(ObjFlag.InParty);
-        SetFlagRecursively(_avatar, ObjFlag.OkayToTake);
+        _avatar.SetFlagWithContents(ObjFlag.OkayToTake);
         if (saved is not null)
         {
             // Exult: the members saved in usecode.dat, in their order; bad entries are skipped
@@ -124,7 +122,7 @@ public sealed class PartyManager
                 }
 
                 member.SetFlag(ObjFlag.InParty);
-                SetFlagRecursively(member, ObjFlag.OkayToTake);
+                member.SetFlagWithContents(ObjFlag.OkayToTake);
                 _members.Add(member);
             }
 
@@ -139,15 +137,6 @@ public sealed class PartyManager
                 npc.ClearFlag(ObjFlag.InParty);
                 AddToParty(npc);
             }
-        }
-    }
-
-    static void SetFlagRecursively(U7Object obj, int flag)
-    {
-        obj.SetFlag(flag);
-        foreach (var item in obj.Contents)
-        {
-            SetFlagRecursively(item, flag);
         }
     }
 
@@ -302,8 +291,8 @@ public sealed class PartyManager
             var d = ActorWalker.DirIndex(
                 Math.Sign(U7Constants.TileDelta(fx, leader.Tx)),
                 Math.Sign(U7Constants.TileDelta(fy, leader.Ty)));
-            var nx = U7Constants.WrapTile(fx + DirDx[d]);
-            var ny = U7Constants.WrapTile(fy + DirDy[d]);
+            var nx = U7Constants.WrapTile(fx + Directions.Dx[d]);
+            var ny = U7Constants.WrapTile(fy + Directions.Dy[d]);
             if (!ActorWalker.ResolveStep(_map, npc, nx, ny, fz, out var nz))
             {
                 return false;
@@ -350,8 +339,8 @@ public sealed class PartyManager
         foreach (var i in DeltaDir)
         {
             var diri = (dir + i) % 8;
-            var tx = U7Constants.WrapTile(npc.Tx + DirDx[diri]);
-            var ty = U7Constants.WrapTile(npc.Ty + DirDy[diri]);
+            var tx = U7Constants.WrapTile(npc.Tx + Directions.Dx[diri]);
+            var ty = U7Constants.WrapTile(npc.Ty + Directions.Dy[diri]);
             var cost = Cost(npc, leader, tx, ty, out var nz);
             if (cost < bestCost)
             {

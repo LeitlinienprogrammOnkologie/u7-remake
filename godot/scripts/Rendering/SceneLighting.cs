@@ -56,6 +56,8 @@ public sealed class SceneLighting
     readonly U7Object _avatar;
     readonly PaletteSet _palettes = new();
     readonly byte[] _scratch = new byte[768];
+    /// <summary>The day palette, which <see cref="Lit"/> is unless a palette overrides the time's.</summary>
+    readonly byte[] _day = new byte[768];
     readonly List<SceneLight> _found = new();
     readonly Func<U7Object, int> _frameOf;
     readonly GlowColours? _colours;
@@ -161,10 +163,11 @@ public sealed class SceneLighting
         _avatar = avatar;
         _effects = effects;
         _party = party;
-        _frameOf = obj => WorldView.DisplayFrame(_catalog, obj, _ticks);
+        _frameOf = obj => obj.Frame;
         Windows = new WindowLights(map);
         _palettes.SetNightTint(NightTint);
-        _palettes.Get(PaletteSet.Day, Lit);
+        _palettes.Get(PaletteSet.Day, _day);
+        _day.CopyTo(Lit, 0);
     }
 
     /// <summary>Exult <c>Game_clock::reset_palette</c> (<c>set_time_palette</c>): the light spell shows at once, without easing.</summary>
@@ -187,8 +190,8 @@ public sealed class SceneLighting
         Class = LightSources.Classify(Level);
         Carried = LightSources.CarriedLight(av, _catalog);
         Flash = LightningFlash();
-        _skip = RemoteView ? WorldView.RemoteViewSkipLift : _map.RoofHeight(av.Tx, av.Ty, av.Tz);
-        Inside = _skip < U7Constants.NoRoof;
+        _skip = RemoteView ? WorldView.RemoteViewSkipLift : _map.RoofOverAvatar(av);
+        Inside = _skip < GameMap.InsideBelow;
         // Exult get_final_palette: overcast and fog on the day palettes.
         var ease = (float)(delta / WeatherEaseSeconds);
         OvercastWeight = Mathf.MoveToward(OvercastWeight, _clock.Cloudy ? 1f : 0f, ease);
@@ -300,7 +303,7 @@ public sealed class SceneLighting
 
                     if (!_catalog[obj.Shape].LightSource && GlowTable.IsEmitter(obj.Shape))
                     {
-                        AddEmitter(obj, WorldView.DisplayFrame(_catalog, obj, ticks), mid);
+                        AddEmitter(obj, obj.Frame, mid);
                         continue;
                     }
 
@@ -309,7 +312,7 @@ public sealed class SceneLighting
                         continue;
                     }
 
-                    var frame = WorldView.DisplayFrame(_catalog, obj, ticks);
+                    var frame = obj.Frame;
                     var b = LightSources.Brightness(_catalog, obj.Shape, frame);
                     if (b > 0)
                     {
@@ -520,7 +523,8 @@ public sealed class SceneLighting
         var flash = Override < 0 ? Mathf.RoundToInt(Flash * Mathf.Min(1f, GlowTable.Magic.Light) * 32) : 0;
         var overcast = Mathf.RoundToInt(OvercastWeight * WeatherLook.Overcast.Palette * 64);
         var fog = Mathf.RoundToInt(FogWeight * WeatherLook.Fog.Palette * 64);
-        var key = (From, To, T, Override, Class, lift, flash, overcast, fog);
+        // Between two hours of the same palette the blend doesn't depend on T.
+        var key = (From, To, From == To ? 0f : T, Override, Class, lift, flash, overcast, fog);
         if (_built == key)
         {
             return;
@@ -536,7 +540,7 @@ public sealed class SceneLighting
         {
             var weather = new PaletteSet.Weather(overcast / 64f, fog / 64f, WeatherLook.Overcast.Grey);
             _palettes.Blend(From, To, T, weather, Ambient);
-            _palettes.Get(PaletteSet.Day, Lit);
+            _day.CopyTo(Lit, 0);
             if (lift > 0)
             {
                 _palettes.Get(Class, _scratch);

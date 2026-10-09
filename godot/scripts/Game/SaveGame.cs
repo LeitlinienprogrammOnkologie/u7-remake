@@ -76,7 +76,9 @@ public static class SaveGame
         w.Write((byte)0); // infravision
     }
 
-    public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCombat, int Track, bool Repeat, int SpecialLight, bool Armageddon);
+    /// <param name="EggCount">Exult <c>set_egg_count(repeat >> 16)</c>: the continuous jukebox eggs holding the track.</param>
+    public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCombat, int Track, bool Repeat, int EggCount,
+        int SpecialLight, bool Armageddon);
 
     /// <summary>Exult <c>Game_window::read_gwin</c> (the parts we keep).</summary>
     public static GwinState? ReadGwin()
@@ -97,6 +99,7 @@ public static class SaveGame
             int minute = r.ReadUInt16();
             var track = -1;
             var repeat = false;
+            var eggCount = 0;
             var combat = false;
             var armageddon = false;
             var light = 0;
@@ -104,7 +107,9 @@ public static class SaveGame
             {
                 light = (int)r.ReadUInt32();
                 track = unchecked((int)r.ReadUInt32());
-                repeat = (r.ReadUInt32() & 1) != 0;
+                var repeatWord = r.ReadUInt32();
+                repeat = (repeatWord & 1) != 0;
+                eggCount = (int)(repeatWord >> 16);
                 if (r.BaseStream.Length - r.BaseStream.Position >= 3)
                 {
                     armageddon = r.ReadByte() == 1;
@@ -113,7 +118,7 @@ public static class SaveGame
                 }
             }
 
-            return new GwinState(day, hour, minute, combat, track, repeat, light, armageddon);
+            return new GwinState(day, hour, minute, combat, track, repeat, eggCount, light, armageddon);
         }
         catch (Exception ex)
         {

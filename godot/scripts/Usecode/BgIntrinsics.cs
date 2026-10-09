@@ -52,7 +52,6 @@ public sealed class BgIntrinsics
 
     readonly UsecodeMachine _vm;
     /// <summary>Exult <c>speech_track</c>: the last speech asked for.</summary>
-    int _speechTrack = -1;
 
     public BgIntrinsics(UsecodeMachine vm) => _vm = vm;
 
@@ -151,7 +150,7 @@ public sealed class BgIntrinsics
             0x6e => GetContainer(p),
             0x6f => RemoveItem(p),
             0x62 => IsPcInside(),
-            0x69 => UsecodeValue.FromInt(_speechTrack), // get_speech_track
+            0x69 => UsecodeValue.FromInt(_vm.SpeechTrack), // get_speech_track
             0x70 => Zero(), // UNKNOWN: Exult's does nothing either
             0x71 => ReduceHealth(p),
             0x72 => IsReadied(p),
@@ -283,6 +282,8 @@ public sealed class BgIntrinsics
 
     UsecodeValue ShowNpcFace(UsecodeValue[] p)
     {
+        // Exult: the text said so far shows first, under the face that said it.
+        _vm.ShowPendingText();
         var frame = p.Length > 1 ? (int)p[1].IntValue : 0;
         var item = _vm.GetItem(p[0]);
         var shape = FaceShape(p[0], item);
@@ -307,19 +308,27 @@ public sealed class BgIntrinsics
             item.SetFlag(U7.Actors.ObjFlag.Met);
         }
 
-        _vm.Conv.ShowFace(shape, frame, name);
-        _vm.NotifyFaces();
+        _vm.AfterText(() =>
+        {
+            _vm.Conv.ShowFace(shape, frame, name);
+            _vm.NotifyFaces();
+        });
         return Zero();
     }
 
+    /// <summary>Exult <c>remove_npc_face</c>: the pending text is shown (with the face) first.</summary>
     UsecodeValue RemoveNpcFace(UsecodeValue[] p)
     {
+        _vm.ShowPendingText();
         var item = _vm.GetItem(p[0]);
         var shape = FaceShape(p[0], item);
         if (shape >= 0)
         {
-            _vm.Conv.RemoveFace(shape);
-            _vm.NotifyFaces();
+            _vm.AfterText(() =>
+            {
+                _vm.Conv.RemoveFace(shape);
+                _vm.NotifyFaces();
+            });
         }
 
         return Zero();
@@ -432,16 +441,10 @@ public sealed class BgIntrinsics
         return UsecodeValue.FromInt(item is null ? 0 : item.Frame & 31);
     }
 
+    /// <summary>Exult <c>UI_set_item_frame</c>: the frame, keeping the reflection.</summary>
     UsecodeValue SetItemFrame(UsecodeValue[] p)
     {
-        var item = _vm.GetItem(p[0]);
-        if (item is null)
-        {
-            return Zero();
-        }
-
-        var frame = (int)p[1].IntValue;
-        item.Frame = (item.Frame & 32) | (frame & 31);
+        _vm.SetItemFrame(_vm.GetItem(p[0]), (int)p[1].IntValue);
         return Zero();
     }
 
@@ -451,14 +454,10 @@ public sealed class BgIntrinsics
         return UsecodeValue.FromInt(item?.Frame ?? 0);
     }
 
+    /// <summary>Exult <c>UI_set_item_frame_rot</c>: the whole frame, reflection included.</summary>
     UsecodeValue SetItemFrameRot(UsecodeValue[] p)
     {
-        var item = _vm.GetItem(p[0]);
-        if (item is not null)
-        {
-            item.Frame = (int)p[1].IntValue;
-        }
-
+        _vm.SetItemFrame(_vm.GetItem(p[0]), (int)p[1].IntValue, setRotated: true);
         return Zero();
     }
 
@@ -506,20 +505,26 @@ public sealed class BgIntrinsics
         return UsecodeValue.FromInt(item is not null && _vm.Catalog[item.Shape].HasQuantity ? 1 : 0);
     }
 
+    /// <summary>
+    /// Exult <c>UI_get_object_position</c>: the tile of the outermost object, so a
+    /// carried item reports where its carrier stands, not its spot in the gump.
+    /// </summary>
     UsecodeValue GetObjectPosition(UsecodeValue[] p)
     {
         var obj = _vm.GetItem(p[0]);
         var arr = UsecodeValue.FromArray(3);
         if (obj is not null)
         {
-            arr.PutElem(0, UsecodeValue.FromInt(obj.Tx));
-            arr.PutElem(1, UsecodeValue.FromInt(obj.Ty));
-            arr.PutElem(2, UsecodeValue.FromInt(obj.Tz));
+            var top = Inventory.Outermost(obj);
+            arr.PutElem(0, UsecodeValue.FromInt(top.Tx));
+            arr.PutElem(1, UsecodeValue.FromInt(top.Ty));
+            arr.PutElem(2, UsecodeValue.FromInt(top.Tz));
         }
 
         return arr;
     }
 
+    /// <summary>Exult <c>UI_get_distance</c>: <c>Game_object::distance</c> between the outermost objects.</summary>
     UsecodeValue GetDistance(UsecodeValue[] p)
     {
         var a = _vm.GetItem(p[0]);
@@ -529,7 +534,7 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
-        return UsecodeValue.FromInt(new TileCoord(a.Tx, a.Ty, a.Tz).Distance2d(new TileCoord(b.Tx, b.Ty, b.Tz)));
+        return UsecodeValue.FromInt(ObjectGeometry.Distance(Inventory.Outermost(a), Inventory.Outermost(b)));
     }
 
     /// <summary>
@@ -541,20 +546,31 @@ public sealed class BgIntrinsics
     {
         var from = PositionOf(p[0]);
         var to = PositionOf(p[1]);
-        return UsecodeValue.FromInt(U7.Actors.ActorWalker.Direction(from.Ty - to.Ty, to.Tx - from.Tx));
+        return UsecodeValue.FromInt(Directions.Of(from.Ty - to.Ty, to.Tx - from.Tx));
     }
 
+    /// <summary>
+    /// Exult <c>Usecode_internal::get_position</c>: an object (its outermost
+    /// container's tile), three coordinates, or <c>click_on_item</c>'s
+    /// (object, x, y, z) read as the clicked tile; else the caller item.
+    /// </summary>
     TileCoord PositionOf(UsecodeValue v)
     {
-        var obj = _vm.GetItem(v);
-        if (obj is not null)
+        var size = v.ArraySize;
+        if (size <= 1 && _vm.GetItem(v) is { } obj)
         {
-            return new TileCoord(obj.Tx, obj.Ty, obj.Tz);
+            var top = Inventory.Outermost(obj);
+            return new TileCoord(top.Tx, top.Ty, top.Tz);
         }
 
-        if (v.ArraySize >= 3)
+        if (size == 3)
         {
             return new TileCoord((int)v.GetElem(0).IntValue, (int)v.GetElem(1).IntValue, (int)v.GetElem(2).IntValue);
+        }
+
+        if (size == 4)
+        {
+            return new TileCoord((int)v.GetElem(1).IntValue, (int)v.GetElem(2).IntValue, (int)v.GetElem(3).IntValue);
         }
 
         var c = _vm.CurrentFrame?.Caller;
@@ -572,7 +588,7 @@ public sealed class BgIntrinsics
         if (delayed)
         {
             // Exult: BG infinite-loop guard for internal_exec + [.., .., 0x6f7].
-            if (_vm.LastEvent == (int)UsecodeEvent.InternalExec && code.ArraySize == 3 &&
+            if (_vm.CurrentFrame?.EventId == (int)UsecodeEvent.InternalExec && code.ArraySize == 3 &&
                 code.GetElem(2).IntValue == 0x6f7)
             {
                 return Zero();
@@ -1253,7 +1269,7 @@ public sealed class BgIntrinsics
 
     /// <summary>Exult <c>is_main_actor_inside</c>: a roof over the avatar.</summary>
     bool AvatarInside() =>
-        _vm.Avatar is { } av && _vm.Map.RoofHeight(av.Tx, av.Ty, av.Tz) < U7Constants.NoRoof;
+        _vm.Avatar is { } av && _vm.Map.AvatarInside(av);
 
     /// <summary>Exult <c>sprites/map</c> in Black Gate (bggame.cc).</summary>
     const int MapSprite = 22;
@@ -1287,7 +1303,7 @@ public sealed class BgIntrinsics
     /// </summary>
     UsecodeValue StartSpeech(UsecodeValue[] p)
     {
-        _speechTrack = (int)p[0].IntValue;
+        _vm.SpeechTrack = (int)p[0].IntValue;
         _vm.Conv.InitFaces();
         _vm.NotifyFaces();
         return Zero();
@@ -1978,7 +1994,9 @@ public sealed class BgIntrinsics
         }
 
         var obj = _vm.LastCreated[^1];
-        var ok = obj.Container is null && obj.Removed && Quantities.AddTo(cont, obj);
+        // Exult adds without checking the volume ("Causes failures"): the marker scrolls
+        // egg usecode 0x6A3 gives its monsters (Dracothraxus) find no free spot otherwise.
+        var ok = obj.Container is null && obj.Removed && Quantities.AddTo(cont, obj, dontCheck: true);
         if (ok)
         {
             _vm.LastCreated.RemoveAt(_vm.LastCreated.Count - 1);
@@ -2186,7 +2204,7 @@ public sealed class BgIntrinsics
         var obj = _vm.GetItem(p[0]);
         if (obj is null)
         {
-            return UsecodeValue.FromArray(0);
+            return UsecodeValue.FromObject(null); // Exult: a null object, not an empty array (get_array_size says 1).
         }
 
         var shape = (int)p[1].IntValue;
@@ -2303,7 +2321,15 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
-        obj.SetFlag(flag);
+        if (_vm.ActorFlags is { } timers)
+        {
+            timers.SetFlag(obj, flag);
+        }
+        else
+        {
+            obj.SetFlag(flag);
+        }
+
         if (IsMovingBargeFlag(flag) && _vm.Barges is { } barges && barges.GetBarge(obj) is { } barge)
         {
             // Set the barge in motion.
@@ -2322,7 +2348,19 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
-        obj.ClearFlag(flag);
+        // Exult: the knocked out don't wake for usecode.
+        if (flag != U7.Actors.ObjFlag.Asleep || !obj.IsActor || obj.GetProp(ActorProp.Health) > 0)
+        {
+            if (_vm.ActorFlags is { } timers)
+            {
+                timers.ClearFlag(obj, flag);
+            }
+            else
+            {
+                obj.ClearFlag(flag);
+            }
+        }
+
         if (IsMovingBargeFlag(flag) && _vm.Barges is { } barges && barges.GetBarge(obj) is { } barge && barge == barges.Moving)
         {
             // Stop the barge it is on or part of.

@@ -71,19 +71,13 @@ public class Gump
     /// <summary>The things in the owner are shown in the gump (not the stats or the spellbook).</summary>
     public virtual bool ShowsContents => true;
 
-    public virtual bool HasPoint(GumpView view, int mx, int my)
-    {
-        var fi = view.Shapes.GetGumpFrame(GumpShape, 0);
-        var tex = view.Shapes.GetGump(GumpShape, 0);
-        if (tex is null)
-        {
-            return false;
-        }
-
-        var left = X - fi.XLeft;
-        var top = Y - fi.YAbove;
-        return mx >= left && my >= top && mx < left + tex.GetWidth() && my < top + tex.GetHeight();
-    }
+    /// <summary>
+    /// Exult <c>Gump::has_point</c>: on the gump's own pixels
+    /// (<c>Shape_frame::has_point</c>, a pixel of slack), so a click on a
+    /// round bag's transparent corner goes to the world behind it.
+    /// </summary>
+    public virtual bool HasPoint(GumpView view, int mx, int my) =>
+        view.Shapes.GetGump8(GumpShape, 0) is { } frame && frame.Covers(mx - X, my - Y);
 
     public GumpButton? OnButton(GumpView view, int mx, int my)
     {

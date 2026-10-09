@@ -87,6 +87,18 @@ public static class Inventory
         return used;
     }
 
+    /// <summary>
+    /// Exult <c>Check_weight</c> (drag.cc) without its cursor flash: false when
+    /// <paramref name="onto"/>'s outermost owner is in the party and would carry
+    /// more than it can with <paramref name="obj"/>.
+    /// </summary>
+    public static bool CheckWeight(U7Object obj, U7Object onto, ShapeCatalog catalog)
+    {
+        var owner = Outermost(onto);
+        return !owner.GetFlag(ObjFlag.InParty) ||
+               (GetWeight(owner, catalog) + GetWeight(obj, catalog)) / 10 <= GetMaxWeight(owner);
+    }
+
     /// <summary>Stones the outermost NPC can carry, or 0 if no limit.</summary>
     public static int GetMaxWeight(U7Object obj)
     {

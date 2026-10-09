@@ -83,8 +83,8 @@ public sealed class Conversation
         Answers.AddRange(_answerStack.Pop());
     }
 
-    public int LocateAnswer(string str) =>
-        Answers.FindIndex(a => a.Equals(str, StringComparison.OrdinalIgnoreCase));
+    /// <summary>Exult <c>Conversation::locate_answer</c>: the exact answer's index, or -1.</summary>
+    public int LocateAnswer(string str) => Answers.IndexOf(str);
 
     public void ShowFace(int shape, int frame, string name = "", int slot = -1)
     {

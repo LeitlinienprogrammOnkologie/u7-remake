@@ -32,8 +32,47 @@ public sealed class WeaponRecord
     public int ActorFrames = 2;
     /// <summary>Exult <c>Weapon_info::usecode</c>: run on whatever it hits, with the weapon event (0: none).</summary>
     public int Usecode;
+    /// <summary>Exult <c>Weapon_data::Powers</c> bits: sleep 1, charm 2, curse 4, poison 8, paralyze 16, magebane 32, no damage 128.</summary>
+    public int Powers;
 
     public bool UsesCharges => Ammo == -2;
+
+    /// <summary>Exult <c>Weapon_info::get_base_strength</c> (its own "utter guesses"), for <c>ready_best_weapon</c>.</summary>
+    public int BaseStrength
+    {
+        get
+        {
+            if (Explodes && Uses == UsesMelee)
+            {
+                return -50; // Avoid hand-held explosives at all costs.
+            }
+
+            if (Usecode == 0x689)
+            {
+                return 5000; // Causes death in BG.
+            }
+
+            if (Explodes)
+            {
+                return 3000;
+            }
+
+            var strength = (Powers & 128) != 0 ? 0 : Damage;
+            strength += (Powers & 1) != 0 ? 25 : 0; // sleep
+            strength += (Powers & 16) != 0 ? 25 : 0; // paralyze
+            strength += (Powers & 2) != 0 ? 20 : 0; // charm
+            strength += (Powers & 8) != 0 ? 10 : 0; // poison
+            strength += (Powers & 4) != 0 ? 5 : 0; // curse
+            strength += Lucky ? 5 : 0;
+            strength += DamageType != 0 ? 10 : 0;
+            if (Autohit)
+            {
+                strength *= 2;
+            }
+
+            return strength;
+        }
+    }
 }
 
 /// <summary>Loads <c>assets/data/weapons.csv</c>.</summary>
@@ -92,6 +131,7 @@ public sealed class WeaponTable
         var iRot = Col("rotation_speed");
         var iFrames = Col("actor_frames");
         var iUsecode = Col("usecode");
+        var iPowers = Col("powers");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
         int Num(string[] c, int i, int fallback = 0) =>
@@ -130,7 +170,8 @@ public sealed class WeaponTable
                 MissileSpeed = Num(c, iSpeed, 4),
                 RotationSpeed = Num(c, iRot),
                 ActorFrames = Num(c, iFrames, 2),
-                Usecode = Num(c, iUsecode)
+                Usecode = Num(c, iUsecode),
+                Powers = Num(c, iPowers)
             };
         }
 

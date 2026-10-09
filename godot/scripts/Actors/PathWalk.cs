@@ -203,7 +203,7 @@ public sealed class PathWalk : IActorAction
     }
 
     static int OriginalDir(PathSteps path) =>
-        ActorWalker.Direction4(-U7Constants.TileDelta(path.Src.Ty, path.Dest.Ty),
+        Directions.Of4(-U7Constants.TileDelta(path.Src.Ty, path.Dest.Ty),
             U7Constants.TileDelta(path.Src.Tx, path.Dest.Tx));
 
     /// <summary>Exult <c>Actor::walk_to_tile</c>: a straight walk (Zombie); null if already there.</summary>

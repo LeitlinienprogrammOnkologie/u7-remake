@@ -99,6 +99,8 @@ public sealed class UsecodeMachine
     public List<U7Object?> Npcs { get; set; } = new();
     public U7.World.GameClock? Clock { get; set; }
     public U7.Actors.ScheduleRunner? Schedules { get; set; }
+    /// <summary>Exult <c>Actor::set_flag</c> / <c>clear_flag</c> with their timers.</summary>
+    public U7.Actors.NpcTimers? ActorFlags { get; set; }
     public U7.Actors.PartyManager? Party { get; set; }
     public U7.Actors.CombatEngine? Combat { get; set; }
     public U7.Audio.MusicPlayer? Music { get; set; }
@@ -366,7 +368,10 @@ public sealed class UsecodeMachine
             return;
         }
 
-        for (var i = 0; i < _scripts.Count; i++)
+        // Scripts started in this pass wait for the next one (Exult's time queue runs only what was due):
+        // a script that starts itself again (the Black Sword's 0x70B) would otherwise run forever.
+        var due = _scripts.Count;
+        for (var i = 0; i < due && i < _scripts.Count; i++)
         {
             var s = _scripts[i];
             if (s.Done)
@@ -391,14 +396,72 @@ public sealed class UsecodeMachine
     }
 
     /// <summary>Exult <c>set_item_frame</c>: keep the reflection bit, reset the walk cycle for actors.</summary>
-    public void SetItemFrame(U7Object item, int frame)
+    /// <summary>A SHAPES.VGA frame (bit 5 the reflection), for telling empty frames; null if there is none.</summary>
+    public Func<int, int, ShapeFrame?>? Frame8 { get; set; }
+
+    /// <summary>
+    /// Exult <c>Usecode_internal::set_item_frame</c>: the reflection bit kept
+    /// unless <paramref name="setRotated"/>; nothing for the frame already
+    /// shown; an actor gets <see cref="ChangeActorFrame"/>'s stand-in for an
+    /// empty frame; another object ignores a frame it doesn't have, or an
+    /// empty one when <paramref name="checkEmpty"/>.
+    /// </summary>
+    public void SetItemFrame(U7Object? item, int frame, bool checkEmpty = false, bool setRotated = false)
     {
-        item.Frame = (item.Frame & 32) | (frame & 31);
+        if (item is null)
+        {
+            return;
+        }
+
+        if (!setRotated)
+        {
+            frame = (item.Frame & 32) | (frame & 31);
+        }
+
+        if (frame == item.Frame)
+        {
+            return;
+        }
+
         if (item.IsActor)
         {
-            item.WalkFrameIndex = 0;
+            ChangeActorFrame(item, frame);
+            return;
+        }
+
+        var count = Catalog[item.Shape].FrameCount;
+        if ((frame & 31) >= count || (checkEmpty && IsEmptyFrame(item.Shape, frame)))
+        {
+            return;
+        }
+
+        if ((frame & 0xf) < count) // (Exult: don't mess up rotated frames.)
+        {
+            Map.SetFrame(item, frame);
         }
     }
+
+    /// <summary>Exult <c>visible_frames</c>: the actor frame shown when one is empty (1-handed and 2-handed strikes swap).</summary>
+    static readonly int[] VisibleFrames = [0, 0, 0, 0, 7, 8, 9, 4, 5, 6, 0, 12, 11, 0, 9, 3];
+
+    /// <summary>Exult <c>Actor::change_frame</c>: an empty frame becomes its <see cref="VisibleFrames"/> stand-in, else standing.</summary>
+    void ChangeActorFrame(U7Object actor, int frame)
+    {
+        if (IsEmptyFrame(actor.Shape, frame))
+        {
+            frame = (frame & 48) | VisibleFrames[frame & 15];
+            if (IsEmptyFrame(actor.Shape, frame))
+            {
+                frame &= 48;
+            }
+        }
+
+        Map.SetFrame(actor, frame);
+    }
+
+    /// <summary>Exult <c>!shape || shape->is_empty()</c>.</summary>
+    bool IsEmptyFrame(int shape, int frame) =>
+        (frame & 31) >= Catalog[shape].FrameCount || Frame8?.Invoke(shape, frame & 31) is { IsEmpty: true };
 
     /// <summary>
     /// Exult <c>Actor::resurrect(body)</c>: give the NPC its items back, remove
@@ -460,6 +523,7 @@ public sealed class UsecodeMachine
     readonly UsecodeValue[] _stack = new UsecodeValue[StackSize];
     int _sp;
     readonly List<UsecodeFrame> _callStack = new();
+    readonly List<Action> _whenDone = new();
     bool _foundAnswer;
     bool _exitRun;
     bool _aborted;
@@ -510,6 +574,16 @@ public sealed class UsecodeMachine
 
     public int Call(int id, U7Object? item, UsecodeEvent ev)
     {
+        if (InUsecode || WaitingForChoice)
+        {
+            // Called from within usecode (an intrinsic's death, eggs hatched by a move): Exult runs it
+            // nested at once; with one run loop here it waits for the running usecode instead of
+            // starting over on top of its frames. Text left showing after the last RET still waits
+            // with an empty stack, and starting over would drop it.
+            WhenDone(() => Call(id, item, ev));
+            return 1;
+        }
+
         Conv.ClearAnswers();
         Conv.InitFaces();
         NotifyFaces();
@@ -520,6 +594,7 @@ public sealed class UsecodeMachine
         _pendingCallisPush = false;
         _abortAfterText = false;
         _textQueue.Clear();
+        _afterText = null;
         if (!CallFunction(id, (int)ev, item, entrypoint: true))
         {
             HudMessage = $"no usecode 0x{id:X3}";
@@ -545,6 +620,44 @@ public sealed class UsecodeMachine
         SetBook(null);
         Conv.InitFaces();
         FacesChanged?.Invoke();
+        while (_whenDone.Count > 0 && !InUsecode && !WaitingForChoice)
+        {
+            var action = _whenDone[0];
+            _whenDone.RemoveAt(0);
+            action();
+        }
+    }
+
+    /// <summary>Exult <c>speech_track</c>: the last speech started, for <c>get_speech_track</c>.</summary>
+    public int SpeechTrack { get; set; } = -1;
+
+    /// <summary>
+    /// Exult <c>Usecode_internal::do_speech</c> with no speech played (none is
+    /// yet): the track is kept and usecode 0x614 shows its text (the
+    /// Guardian's words of the voice eggs, a dying companion's).
+    /// </summary>
+    public void DoSpeech(int num) => WhenDone(() =>
+    {
+        SpeechTrack = num;
+        Call(SpeechUsecode, null, UsecodeEvent.DoubleClick);
+    });
+
+    const int SpeechUsecode = 0x614;
+
+    /// <summary>
+    /// Runs an action once no usecode runs or waits: at once when none does.
+    /// Exult's usecode runs to its end (its conversations wait in a loop of
+    /// their own), so the engine code after a call sees it finished.
+    /// </summary>
+    public void WhenDone(Action action)
+    {
+        if (InUsecode || WaitingForChoice)
+        {
+            _whenDone.Add(action);
+            return;
+        }
+
+        action();
     }
 
     public void Choose(string answer, int index = -1)
@@ -1351,9 +1464,33 @@ public sealed class UsecodeMachine
         ResumeAfterText();
     }
 
+    /// <summary>
+    /// Runs an action once the text shown is clicked away (Exult's
+    /// <c>show_pending_text</c> waits in a loop of its own before the
+    /// intrinsic goes on), or at once when nothing waits.
+    /// </summary>
+    public void AfterText(Action action)
+    {
+        if (Wait is UsecodeWait.ClickToContinue or UsecodeWait.BookPage)
+        {
+            _afterText += action;
+            return;
+        }
+
+        action();
+    }
+
+    Action? _afterText;
+
     /// <summary>The text was clicked away: carry on running, or finish the abort that waited for it.</summary>
     void ResumeAfterText()
     {
+        if (_afterText is { } after)
+        {
+            _afterText = null;
+            after();
+        }
+
         if (_pendingCallisPush)
         {
             _pendingCallisPush = false;
@@ -1525,6 +1662,7 @@ public sealed class UsecodeMachine
         _pendingCallisPush = false;
         _abortAfterText = false;
         _textQueue.Clear();
+        _afterText = null;
         SetBook(null);
         UserChoice = null;
         StringReg = "";
@@ -1565,7 +1703,8 @@ public sealed class UsecodeMachine
         if (val >= 0 && val < 0x400 && _callStack.Count > 0)
         {
             var caller = _callStack[^1].Caller;
-            if (caller is not null && !itemref.IsArray && val == caller.Shape)
+            // Exult's special case: palace guards, the Time Lord (0x269 in Black Gate).
+            if (caller is not null && !itemref.IsArray && (val == 0x269 || val == caller.Shape))
             {
                 return caller;
             }

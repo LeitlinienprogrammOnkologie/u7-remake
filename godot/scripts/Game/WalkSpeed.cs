@@ -34,7 +34,7 @@ public static class WalkSpeed
     {
         var dx = mouse.X - avatar.X;
         var dy = avatar.Y - mouse.Y;
-        var dir = ActorWalker.DirectionNoWrap((int)dy, (int)dx);
+        var dir = Directions.NoWrap((int)dy, (int)dx);
         var minSide = (int)Math.Min(gameSize.X, gameSize.Y);
         var rectSize = Math.Max(Math.Min(200, minSide), minSide / 2);
         var half = rectSize / 2;

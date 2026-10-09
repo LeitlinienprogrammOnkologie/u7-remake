@@ -27,6 +27,8 @@ public sealed class ShapeRecord
     public bool Solid;
     public bool Water;
     public bool Animated;
+    /// <summary>The TFA animation type (Exult <c>Animation_info::create_from_tfa</c>), -1 if none.</summary>
+    public int AnimType = -1;
     public bool Occludes;
     public bool Transparent;
     public bool Translucent;
@@ -201,6 +203,7 @@ public sealed class ShapeCatalog
         var iSolid = IndexOf(cols, "solid");
         var iWater = IndexOf(cols, "water");
         var iAnim = IndexOf(cols, "animated");
+        var iAnimType = IndexOf(cols, "anim_type");
         var iOcc = IndexOf(cols, "occludes");
         var iTrans = IndexOf(cols, "transparent");
         var iTluc = IndexOf(cols, "translucency");
@@ -229,6 +232,7 @@ public sealed class ShapeCatalog
             rec.Solid = Get(c, iSolid) == "1";
             rec.Water = Get(c, iWater) == "1";
             rec.Animated = Get(c, iAnim) == "1";
+            rec.AnimType = ParseInt(Get(c, iAnimType), -1);
             rec.Occludes = Get(c, iOcc) == "1";
             rec.Transparent = Get(c, iTrans) == "1";
             rec.Translucent = Get(c, iTluc) == "1";

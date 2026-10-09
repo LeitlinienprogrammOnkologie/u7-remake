@@ -745,41 +745,4 @@ public static class Pathfinder
         path.Reverse();
         return path;
     }
-
-    public static Vector2I GreedyStep(GameMap map, int sx, int sy, int gx, int gy, int lift)
-    {
-        var dx = Math.Sign(U7Constants.TileDelta(sx, gx));
-        var dy = Math.Sign(U7Constants.TileDelta(sy, gy));
-        if (dx == 0 && dy == 0)
-        {
-            return new Vector2I(sx, sy);
-        }
-
-        var nx = U7Constants.WrapTile(sx + dx);
-        var ny = U7Constants.WrapTile(sy + dy);
-        if (!map.IsBlocked(nx, ny, lift))
-        {
-            return new Vector2I(nx, ny);
-        }
-
-        if (dx != 0)
-        {
-            nx = U7Constants.WrapTile(sx + dx);
-            if (!map.IsBlocked(nx, sy, lift))
-            {
-                return new Vector2I(nx, sy);
-            }
-        }
-
-        if (dy != 0)
-        {
-            ny = U7Constants.WrapTile(sy + dy);
-            if (!map.IsBlocked(sx, ny, lift))
-            {
-                return new Vector2I(sx, ny);
-            }
-        }
-
-        return new Vector2I(sx, sy);
-    }
 }

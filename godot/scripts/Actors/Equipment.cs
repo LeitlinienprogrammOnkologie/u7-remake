@@ -3,8 +3,9 @@ using U7.Data;
 namespace U7.Actors;
 
 /// <summary>
-/// Ready-slot helpers. Ports Exult <c>Actor::ready_best_weapon</c> /
-/// <c>ready_best_shield</c> / worn-armor sum (no ammo swap).
+/// Ready-slot helpers: Exult <c>Actor::add</c>, <c>add_readied</c>,
+/// <c>find_best_spot</c>, the worn armour. The best weapon and shield are
+/// <see cref="CombatEngine.ReadyBestWeapon"/>'s, which has the ammunition rules.
 /// </summary>
 public static class Equipment
 {
@@ -43,114 +44,6 @@ public static class Equipment
         }
 
         return points;
-    }
-
-    public static bool ReadyBestWeapon(
-        U7Object actor, ShapeCatalog catalog, WeaponTable weapons, ArmorTable armor)
-    {
-        if (HasReadiedWeapon(actor, weapons))
-        {
-            ReadyBestShield(actor, catalog, weapons, armor);
-            return true;
-        }
-
-        U7Object? best = null;
-        var bestDmg = -1;
-        foreach (var obj in AllPossessions(actor))
-        {
-            var w = weapons[obj.Shape];
-            if (w is null)
-            {
-                continue;
-            }
-
-            var rdy = catalog[obj.Shape].ReadyType;
-            if (rdy is not (ReadySpot.Lhand or ReadySpot.Rhand or ReadySpot.BothHands
-                or ReadySpot.Back))
-            {
-                continue;
-            }
-
-            if (w.Damage > bestDmg)
-            {
-                best = obj;
-                bestDmg = w.Damage;
-            }
-        }
-
-        if (best is null)
-        {
-            ReadyBestShield(actor, catalog, weapons, armor);
-            return false;
-        }
-
-        UnequipSlot(actor, ReadySpot.Lhand, catalog);
-        if (catalog[best.Shape].ReadyType == ReadySpot.BothHands)
-        {
-            UnequipSlot(actor, ReadySpot.Rhand, catalog);
-        }
-
-        Equip(actor, best, ReadySpot.Lhand);
-        ReadyBestShield(actor, catalog, weapons, armor);
-        return true;
-    }
-
-    static bool HasReadiedWeapon(U7Object actor, WeaponTable weapons) =>
-        (GetReadied(actor, ReadySpot.Lhand) is { } left && weapons[left.Shape] is not null) ||
-        (GetReadied(actor, ReadySpot.Rhand) is { } right && weapons[right.Shape] is not null);
-
-    public static void ReadyBestShield(
-        U7Object actor, ShapeCatalog catalog, WeaponTable weapons, ArmorTable armor)
-    {
-        if (GetReadied(actor, ReadySpot.Lhand) is { } left &&
-            catalog[left.Shape].ReadyType == ReadySpot.BothHands)
-        {
-            return;
-        }
-
-        if (GetReadied(actor, ReadySpot.Rhand) is { } cur)
-        {
-            if (armor[cur.Shape] is not null || weapons[cur.Shape] is not null)
-            {
-                return;
-            }
-        }
-
-        U7Object? best = null;
-        var bestPts = -1;
-        foreach (var obj in AllPossessions(actor))
-        {
-            if (obj.ReadySlot == ReadySpot.Lhand)
-            {
-                continue;
-            }
-
-            var rec = armor[obj.Shape];
-            if (rec is null)
-            {
-                continue;
-            }
-
-            var rdy = catalog[obj.Shape].ReadyType;
-            if (rdy is not (ReadySpot.Lhand or ReadySpot.Back or ReadySpot.Rhand))
-            {
-                continue;
-            }
-
-            if (rec.Protection > bestPts)
-            {
-                best = obj;
-                bestPts = rec.Protection;
-            }
-        }
-
-        if (best is null)
-        {
-            return;
-        }
-
-        UnequipSlot(actor, ReadySpot.Rhand, catalog);
-        Equip(actor, best, ReadySpot.Rhand);
     }
 
     public static bool IsTwoHanded(U7Object actor, ShapeCatalog catalog) =>
@@ -519,69 +412,5 @@ public static class Equipment
         map.PlaceInContainer(obj, container, gx, gy);
         obj.ReadySlot = -1;
         return true;
-    }
-
-    static void Equip(U7Object actor, U7Object obj, int slot)
-    {
-        if (obj.Container != actor)
-        {
-            obj.Container?.Contents.Remove(obj);
-            obj.Container = actor;
-            if (!actor.Contents.Contains(obj))
-            {
-                actor.Contents.Add(obj);
-            }
-
-            GameMap.InheritOkayToTake(obj, actor);
-        }
-
-        obj.ReadySlot = slot;
-    }
-
-    /// <summary>
-    /// Exult re-adds a displaced item with <c>add(obj, true)</c>: it lands in a
-    /// readied bag if one has room, otherwise loose in the main inventory with
-    /// a fresh gump position, never dangling at its old spot.
-    /// </summary>
-    static void UnequipSlot(U7Object actor, int slot, ShapeCatalog catalog)
-    {
-        var obj = GetReadied(actor, slot);
-        if (obj is null)
-        {
-            return;
-        }
-
-        obj.ReadySlot = -1;
-        obj.Tx = 255;
-        obj.Ty = 255;
-        foreach (var bagSlot in new[] { ReadySpot.Back, ReadySpot.Belt })
-        {
-            if (GetReadied(actor, bagSlot) is { } bag && bag != obj &&
-                Inventory.IsContainer(bag, catalog) && Inventory.CanAdd(bag, obj, catalog, true))
-            {
-                actor.Contents.Remove(obj);
-                obj.Container = bag;
-                bag.Contents.Add(obj);
-                GameMap.InheritOkayToTake(obj, bag);
-                return;
-            }
-        }
-    }
-
-    static IEnumerable<U7Object> AllPossessions(U7Object container)
-    {
-        foreach (var obj in container.Contents)
-        {
-            if (obj.Removed)
-            {
-                continue;
-            }
-
-            yield return obj;
-            foreach (var nested in AllPossessions(obj))
-            {
-                yield return nested;
-            }
-        }
     }
 }

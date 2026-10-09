@@ -208,6 +208,8 @@ public partial class WorldView : Node2D
     const int MaxCachedTerrains = 256;
 
     public GameMap Map = null!;
+    /// <summary>The animated shapes' frames (Exult <c>Frame_animator</c>), told what is painted.</summary>
+    public U7.World.Animators? Animators;
     public ShapeCatalog Catalog = null!;
     public ShapeCache Shapes = null!;
     public U7Object Avatar = null!;
@@ -287,7 +289,7 @@ public partial class WorldView : Node2D
         }
 
         // Exult display_area paints the view elsewhere up to lift 4, dungeons not dark.
-        SkipAboveLift = RemoteView ? RemoteViewSkipLift : Map.RoofHeight(Avatar.Tx, Avatar.Ty, Avatar.Tz);
+        SkipAboveLift = RemoteView ? RemoteViewSkipLift : Map.RoofOverAvatar(Avatar);
         InDungeonLift = RemoteView ? 0 : Map.DungeonHeight(Avatar.Tx, Avatar.Ty);
         _frameNo++;
         _paintCounter = 0;
@@ -326,6 +328,7 @@ public partial class WorldView : Node2D
         }
 
         var ticks = Time.GetTicksMsec();
+        Animators?.Update(ticks);
 
         // Exult Game_render::paint_map: flat RLE objects for every chunk first ...
         for (var cy = c0y; cy <= c1y; cy++)
@@ -343,11 +346,15 @@ public partial class WorldView : Node2D
             }
         }
 
-        // ... then non-flat objects chunk by chunk, each after its dependencies.
+        // ... then non-flat objects chunk by chunk, each after its dependencies,
+        // the chunks diagonally north-east (Exult): by x + y, each diagonal from
+        // its south-west end (down the west column, then along the south row).
         _renderSeq++;
-        for (var cy = c0y; cy <= c1y; cy++)
+        for (var start = 0; start <= (c1y - c0y) + (c1x - c0x); start++)
         {
-            for (var cx = c0x; cx <= c1x; cx++)
+            var sx = c0x + Math.Max(0, start - (c1y - c0y));
+            var sy = c0y + Math.Min(start, c1y - c0y);
+            for (int cx = sx, cy = sy; cx <= c1x && cy >= c0y; cx++, cy--)
             {
                 var list = Map.ObjectsInChunk(cx, cy);
                 for (var i = 0; i < list.Count; i++)
@@ -616,15 +623,6 @@ public partial class WorldView : Node2D
         DrawBark(obj, ticks);
     }
 
-    /// <summary>The frame an object shows: animated shapes (not actors) cycle through their frames.</summary>
-    public static int DisplayFrame(ShapeCatalog catalog, U7Object obj, ulong ticks)
-    {
-        var info = catalog[obj.Shape];
-        return info.Animated && info.FrameCount > 1 && !obj.IsActor
-            ? (int)((ticks / 180) % (ulong)info.FrameCount)
-            : obj.Frame;
-    }
-
     /// <summary>
     /// Whether the world shows the object, by the paint passes' rules: flats
     /// always, others below the roof (Exult <c>paint_object</c>'s skip lift),
@@ -666,8 +664,9 @@ public partial class WorldView : Node2D
             return;
         }
 
-        var frame = DisplayFrame(Catalog, obj, ticks);
-        if (Shapes.GetFrame8(obj.Shape, frame) is not { } shape)
+        // (Animated shapes: their animators set the frame, Exult's Frame_animator.)
+        Animators?.Painted(obj);
+        if (Shapes.GetFrame8(obj.Shape, obj.Frame) is not { } shape)
         {
             return;
         }

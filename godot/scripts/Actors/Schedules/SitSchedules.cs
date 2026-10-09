@@ -84,7 +84,8 @@ public sealed class EatAtInnSchedule(NpcBrain brain) : Schedule(brain)
             }
         }
 
-        if (FindClosest([FoodShape], 2) is [var food, ..])
+        // Exult: food within 2 tiles, the nearest by object distance.
+        if (FindNearest(Map.FindNearby(Here(Npc), FoodShape, 2)) is { } food)
         {
             if (Rng.Next(5) == 0)
             {
@@ -152,7 +153,7 @@ public sealed class EatSchedule(NpcBrain brain) : Schedule(brain)
         {
             case State.Eat:
                 // Loops back to itself, since the NPC can be pushed out of the chair.
-                if (FindClosest([FoodShape], 2) is [var food, ..] && Rng.Next(5) == 0)
+                if (FindNearest(Map.FindNearby(Here(Npc), FoodShape, 2)) is { } food && Rng.Next(5) == 0)
                 {
                     Map.RemoveObject(food);
                 }

@@ -454,9 +454,14 @@ public sealed class UsecodeValue
             return v1;
         }
 
-        if (v1._type == UsecodeValType.String && v2._type == UsecodeValType.String)
+        if (v1._type == UsecodeValType.String)
         {
-            v1._str += " " + v2._str;
+            // Exult: two strings join with a space; a string and anything else stays the string.
+            if (v2._type == UsecodeValType.String)
+            {
+                v1._str += " " + v2._str;
+            }
+
             return v1;
         }
 

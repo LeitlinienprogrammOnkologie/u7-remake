@@ -28,10 +28,7 @@ public readonly record struct TileCoord(int Tx, int Ty, int Tz)
 
     /// <summary>Exult <c>Tile_coord::get_neighbor</c> (0 north, clockwise).</summary>
     public TileCoord Neighbor(int dir) =>
-        new(U7Constants.WrapTile(Tx + NeighborDx[dir]), U7Constants.WrapTile(Ty + NeighborDy[dir]), Tz);
-
-    static readonly int[] NeighborDx = [0, 1, 1, 1, 0, -1, -1, -1];
-    static readonly int[] NeighborDy = [-1, -1, 0, 1, 1, 1, 0, -1];
+        new(U7Constants.WrapTile(Tx + Directions.Dx[dir]), U7Constants.WrapTile(Ty + Directions.Dy[dir]), Tz);
 
     public override string ToString() => $"({Tx},{Ty},{Tz})";
 }

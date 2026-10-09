@@ -25,6 +25,8 @@ public sealed class MonsterRecord
     public bool NoBody;
     /// <summary>Exult <c>Monster_info::see_invisible</c> (bit 7 of its flags).</summary>
     public bool SeeInvisible;
+    /// <summary>Exult <c>Monster_info</c>'s immunities to the sleep, charm, curse, paralysis and poison flags, and to all of them (power).</summary>
+    public bool SleepSafe, CharmSafe, CurseSafe, ParalysisSafe, PoisonSafe, PowerSafe;
     /// <summary>Exult <c>Monster_actor::create</c>: the fly/walk/swim/ethereal type flags it gets.</summary>
     public int MoveFlags = U7.Data.MoveFlags.Walk;
     /// <summary>
@@ -122,6 +124,12 @@ public sealed class MonsterTable
         var iFlagBits = Col("flags");
         var iMode = Col("attack_mode");
         var iEquip = Col("equip_offset");
+        var iSleepSafe = Col("sleep_safe");
+        var iCharmSafe = Col("charm_safe");
+        var iCurseSafe = Col("curse_safe");
+        var iParalysisSafe = Col("paralysis_safe");
+        var iPoisonSafe = Col("poison_safe");
+        var iPowerSafe = Col("power_safe");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
         int Num(string[] c, int i, int fallback = 0) =>
@@ -155,6 +163,12 @@ public sealed class MonsterTable
                 CantYell = Num(c, iCantYell) != 0,
                 NoBody = Get(c, iFlags).Contains("no_body", StringComparison.OrdinalIgnoreCase),
                 SeeInvisible = (Num(c, iFlagBits) & (1 << 7)) != 0,
+                SleepSafe = Num(c, iSleepSafe) != 0,
+                CharmSafe = Num(c, iCharmSafe) != 0,
+                CurseSafe = Num(c, iCurseSafe) != 0,
+                ParalysisSafe = Num(c, iParalysisSafe) != 0,
+                PoisonSafe = Num(c, iPoisonSafe) != 0,
+                PowerSafe = Num(c, iPowerSafe) != 0,
                 MoveFlags = ParseMoveFlags(Get(c, iFlags)),
                 AttackModeClass = Math.Clamp(Num(c, iMode, 2), 0, 4),
                 EquipOffset = Num(c, iEquip)

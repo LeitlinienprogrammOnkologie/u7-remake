@@ -65,20 +65,16 @@ public sealed class GumpButton
         };
     }
 
+    /// <summary>Exult <c>Gump_widget::on_widget</c>: on the button's own pixels in the frame it shows.</summary>
     public bool Contains(GumpView view, int mx, int my)
     {
         LocalToScreen(out var sx, out var sy);
-        var frame = PaintFrame(view);
-        var fi = view.Shapes.GetGumpFrame(Shape, frame);
-        var tex = view.Shapes.GetGump(Shape, frame) ?? view.Shapes.GetGump(Shape, 0);
-        if (tex is null)
+        if (view.Shapes.GetGump8(Shape, PaintFrame(view)) is not { } frame)
         {
             return Math.Abs(mx - sx) < 8 && Math.Abs(my - sy) < 8;
         }
 
-        var left = sx - fi.XLeft;
-        var top = sy - fi.YAbove;
-        return mx >= left && my >= top && mx < left + tex.GetWidth() && my < top + tex.GetHeight();
+        return frame.Covers(mx - sx, my - sy);
     }
 
     public void Paint(GumpView view)

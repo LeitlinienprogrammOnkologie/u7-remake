@@ -367,6 +367,9 @@ public sealed partial class ConversationPanel : Control
     }
 
     /// <summary>Next page of this text, else let the usecode continue.</summary>
+    /// <summary>For the console: " (page 1 of 2)" while the text takes more than one page, else empty.</summary>
+    public string PageNote => _pages.Count > 1 ? $" (page {_page + 1} of {_pages.Count})" : "";
+
     public void Advance()
     {
         if (Machine is not { Wait: UsecodeWait.ClickToContinue } vm)

@@ -234,16 +234,17 @@ public partial class U7Game
                 break;
             case "setflag":
             {
-                // A test shortcut: an object flag by number or ObjFlag name (invisible, charmed, poisoned, ...).
+                // A test shortcut: an object flag by number or ObjFlag name (invisible, charmed, poisoned, ...),
+                // as usecode sets it (Exult Actor::set_flag: an actor's timers start).
                 var target = AgentTarget(parts[1]) ?? throw new ArgumentException("no such object/npc");
                 var flag = AgentFlag(parts[2]);
                 if (parts.Length > 3 && parts[3] == "0")
                 {
-                    target.ClearFlag(flag);
+                    _timers.ClearFlag(target, flag);
                 }
                 else
                 {
-                    target.SetFlag(flag);
+                    _timers.SetFlag(target, flag);
                 }
 
                 AgentLog($"{AgentDescribe(target)} flag {flag} = {(target.GetFlag(flag) ? 1 : 0)}");
@@ -392,13 +393,16 @@ public partial class U7Game
             }
             case "put":
             {
-                // A drag into a container's gump (also takes a readied item off), with Exult's theft check.
+                // A drag into a container's gump (also takes a readied item off), with Exult's theft check;
+                // into an actor (its paperdoll), Exult's Actor::add readies it in its best free spot.
                 var item = AgentTarget(parts[1]) ?? throw new ArgumentException("no such object");
                 var cont = AgentTarget(parts[2]) ?? throw new ArgumentException("no such container");
                 var from = item.Container;
                 var okayToMove = item.GetFlag(ObjFlag.OkayToTake);
                 var lifted = AgentLiftedFrom(item);
-                if (!Equipment.TryPlace(_map, item, cont, 8, 8, _catalog))
+                if (!(cont.IsActor
+                        ? Equipment.AddToActor(cont, item, _catalog, _map)
+                        : Equipment.TryPlace(_map, item, cont, 8, 8, _catalog)))
                 {
                     AgentLog("it does not fit");
                     break;
@@ -735,13 +739,16 @@ public partial class U7Game
             }
             case "damage":
             {
-                // Damage to the avatar through the normal path (no attacker): the red pulse or the outline.
-                var hp = av.GetProp(ActorProp.Health);
+                // Damage through the normal path (no attacker), to the avatar or the actor given (a test
+                // shortcut): the red pulse or the outline, and a death.
+                var victim = parts.Length > 3 ? AgentTarget(parts[3]) ?? throw new ArgumentException("no such object/npc") : av;
+                var hp = victim.GetProp(ActorProp.Health);
                 var pulses = _screenFx.Pulses;
                 var type = parts.Length > 2 ? int.Parse(parts[2]) : 0;
-                var taken = _combat.ReduceHealth(av, int.Parse(parts[1]), null, type);
-                AgentLog($"damage {parts[1]} type {type}: took {taken}, hp {hp} -> {av.GetProp(ActorProp.Health)} of {av.GetProp(ActorProp.Strength)}, " +
-                         (_screenFx.Pulses > pulses ? "red pulse" : av.HitUntilMsec > Time.GetTicksMsec() ? "red outline" : "nothing"));
+                var taken = _combat.ReduceHealth(victim, int.Parse(parts[1]), null, type);
+                AgentLog($"damage {parts[1]} type {type}: took {taken}, hp {hp} -> {victim.GetProp(ActorProp.Health)} of {victim.GetProp(ActorProp.Strength)}, " +
+                         (_screenFx.Pulses > pulses ? "red pulse" : victim.HitUntilMsec > Time.GetTicksMsec() ? "red outline" : "nothing") +
+                         (victim.IsDead ? ", dead" : ""));
                 break;
             }
             case "sprite":
@@ -1072,7 +1079,7 @@ public partial class U7Game
             .Concat(text == "owned" ? [] : AgentPartyItems().Where(o =>
                 AgentName(o).Contains(text, StringComparison.OrdinalIgnoreCase) || o.Shape.ToString() == text))
             .Distinct()
-            .OrderBy(o => AgentDist(Outermost(o)))
+            .OrderBy(o => AgentDist(Inventory.Outermost(o)))
             .Take(30)
             .ToList();
         foreach (var n in _npcs)
@@ -1101,16 +1108,6 @@ public partial class U7Game
         return all;
     }
 
-    static U7Object Outermost(U7Object obj)
-    {
-        while (obj.Container is { } c)
-        {
-            obj = c;
-        }
-
-        return obj;
-    }
-
     string AgentName(U7Object obj) =>
         obj.NpcNum >= 0 && obj.NpcName.Length > 0 ? obj.NpcName :
         obj.IsMonster ? obj.NpcName :
@@ -1119,6 +1116,13 @@ public partial class U7Game
     /// <summary>"/gold coin//s" → "gold coin" (Exult plural pattern: /singular/plural-suffix).</summary>
     static string Singular(string name) =>
         name.StartsWith('/') && name.IndexOf('/', 1) is var end and > 0 ? name[1..end] : name;
+
+    /// <summary>The status flags <c>look</c> and <c>npc</c> show.</summary>
+    static readonly (int Flag, string Word)[] StatusWords =
+    [
+        (ObjFlag.Asleep, "asleep"), (ObjFlag.Poisoned, "poisoned"), (ObjFlag.Paralyzed, "paralyzed"), (ObjFlag.Invisible, "invisible"),
+        (ObjFlag.Charmed, "charmed"), (ObjFlag.Cursed, "cursed"), (ObjFlag.Protection, "protected"), (ObjFlag.Might, "might")
+    ];
 
     /// <summary>Exult <c>Actor::Attack_mode</c> by number (the combat-mode button's frames).</summary>
     static readonly string[] AlignmentNames = ["neutral", "good", "evil", "chaotic"];
@@ -1154,6 +1158,13 @@ public partial class U7Game
         if (obj.IsActor)
         {
             sb.Append($" {AlignmentNames[obj.Alignment & 3]} faces {"N?E?S?W?"[ActorWalker.FacingOfFrame(obj.Frame)]} hp {obj.GetProp(ActorProp.Health)}");
+            foreach (var (flag, word) in StatusWords)
+            {
+                if (obj.GetFlag(flag))
+                {
+                    sb.Append(' ').Append(word);
+                }
+            }
         }
         else if (obj.Kind == ObjectKind.Ireg && !obj.IsEgg && !obj.GetFlag(ObjFlag.OkayToTake))
         {
@@ -1258,7 +1269,7 @@ public partial class U7Game
 
         if (vm.WaitingForChoice)
         {
-            AgentLog($"WAIT {vm.Wait}" + (vm.Wait == UsecodeWait.ClickToContinue ? $": {vm.Conv.NpcText.Replace('\n', ' ')}" : "") +
+            AgentLog($"WAIT {vm.Wait}" + (vm.Wait == UsecodeWait.ClickToContinue ? $"{_conversation.PageNote}: {vm.Conv.NpcText.Replace('\n', ' ')}" : "") +
                      (vm is { Wait: UsecodeWait.Picture or UsecodeWait.WizardEye, Picture: { } pic }
                          ? $": sprite {pic.Sprite}:{pic.Frame}" + (pic.Mark is { } mark ? $", mark at {mark.X},{mark.Y}" : "") +
                            (pic.Area is { } at ? $", view at {at.Tx},{at.Ty}" : "") +

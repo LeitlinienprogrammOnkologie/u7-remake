@@ -94,7 +94,7 @@ public sealed class DanceSchedule(NpcBrain brain) : LoiterSchedule(brain, 4)
     {
         var dest = new TileCoord(Center.Tx - Dist + Rng.Next(2 * Dist), Center.Ty - Dist + Rng.Next(2 * Dist),
             Center.Tz).Wrapped();
-        var dir = ActorWalker.Direction4(-U7Constants.TileDelta(Npc.Ty, dest.Ty), U7Constants.TileDelta(Npc.Tx, dest.Tx));
+        var dir = Directions.Of4(-U7Constants.TileDelta(Npc.Ty, dest.Ty), U7Constants.TileDelta(Npc.Tx, dest.Tx));
         // Exult's guess; seems quite rare.
         if (TryProximityUsecode(8))
         {

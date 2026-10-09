@@ -85,7 +85,9 @@ public sealed class PaletteSet
         var (oa, fa) = IsDayPalette(from) ? (weather.Overcast, weather.Fog) : (0f, 0f);
         var (ob, fb) = IsDayPalette(to) ? (weather.Overcast, weather.Fog) : (0f, 0f);
         t = Math.Clamp(t, 0f, 1f);
-        var grey = weather.Grey * float.Lerp(oa, ob, t);
+        // Exult's from + (to - from) * t, exact when both ends agree; float.Lerp's
+        // from * (1 - t) + to * t can land just below and truncate a step lower.
+        var grey = weather.Grey * (oa + (ob - oa) * t);
         Span<float> c = stackalloc float[3];
         for (var i = 0; i < 768; i += 3)
         {
@@ -94,7 +96,7 @@ public sealed class PaletteSet
                 var j = i + k;
                 var va = float.Lerp(float.Lerp(a[j], overcast[j], oa), fog[j], fa);
                 var vb = float.Lerp(float.Lerp(b[j], overcast[j], ob), fog[j], fb);
-                c[k] = float.Lerp(va, vb, t);
+                c[k] = va + (vb - va) * t;
             }
 
             if (grey > 0)

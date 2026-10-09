@@ -16,10 +16,9 @@ public static class ActorWalker
     public const int SitFrame = 10;
     public const int BowFrame = 11;
     public const int SleepFrame = 13;
-    static readonly int[] Rotate = [0, 0, 48, 48, 16, 16, 32, 32];
 
     /// <summary>Exult <c>Game_object::get_dir_framenum</c>: a base frame (0-15) turned to face a direction (0-7).</summary>
-    public static int DirFrame(int dir, int frame) => (frame & 0xf) + Rotate[dir & 7];
+    public static int DirFrame(int dir, int frame) => (frame & 0xf) + Directions.FrameRotation[dir & 7];
 
     // By 8-way direction. Exult picks walking frames by Get_direction4, which
     // turns a diagonal step into east or west.
@@ -83,9 +82,6 @@ public static class ActorWalker
         return Math.Abs(to.Tz - actor.Tz) <= 1;
     }
 
-    static readonly int[] DirDx = [0, 1, 1, 1, 0, -1, -1, -1];
-    static readonly int[] DirDy = [-1, -1, 0, 1, 1, 1, 0, -1];
-
     /// <summary>
     /// Exult <c>Actor::is_really_blocked</c>, for a step onto a blocked tile:
     /// it is, if more than a lift up or down or if nothing found is in the
@@ -128,9 +124,9 @@ public static class ActorWalker
     public static U7Object? FindBlocking(GameMap map, U7Object actor, int dir)
     {
         var (x, y, w, h) = ObjectGeometry.Footprint(actor);
-        for (var i = x + DirDx[dir]; i < x + DirDx[dir] + w; i++)
+        for (var i = x + Directions.Dx[dir]; i < x + Directions.Dx[dir] + w; i++)
         {
-            for (var j = y + DirDy[dir]; j < y + DirDy[dir] + h; j++)
+            for (var j = y + Directions.Dy[dir]; j < y + Directions.Dy[dir] + h; j++)
             {
                 if (!ObjectGeometry.InFootprint(actor, i, j) &&
                     map.FindBlocking(new TileCoord(i, j, actor.Tz)) is { } block)
@@ -169,7 +165,7 @@ public static class ActorWalker
         // Try orthogonal directions first, then diagonals.
         foreach (var d in new[] { (dir + 2) % 8, (dir + 6) % 8, 1, 3, 5, 7 })
         {
-            var to = new TileCoord(npc.Tx + DirDx[d], npc.Ty + DirDy[d], npc.Tz).Wrapped();
+            var to = new TileCoord(npc.Tx + Directions.Dx[d], npc.Ty + Directions.Dy[d], npc.Tz).Wrapped();
             if (IsBlocked(map, npc, ref to, moveFlags: npc.TypeFlags))
             {
                 continue;
@@ -243,11 +239,15 @@ public static class ActorWalker
         return !blocked;
     }
 
+    /// <summary>Exult <c>Actor::step</c>'s <c>activate_eggs</c> for the eggs any actor sets off: the fields.</summary>
+    public static Action<U7Object>? Stepped { get; set; }
+
     /// <summary>Move one tile and advance the walk cycle in the given facing.</summary>
     public static void MoveTo(GameMap map, U7Object actor, int tx, int ty, int tz, int facing)
     {
         map.MoveObject(actor, tx, ty, tz);
         AdvanceWalkFrame(actor, facing);
+        Stepped?.Invoke(actor);
     }
 
     public static void Stand(U7Object actor, int facing)
@@ -255,15 +255,6 @@ public static class ActorWalker
         actor.WalkFrameIndex = 0;
         var frames = actor.NpcNum > 0 ? NpcFrames : AvatarFrames;
         actor.Frame = frames[facing][0];
-    }
-
-    public static void Sleep(U7Object actor, ShapeCatalog catalog)
-    {
-        var dir = FrameToDir(actor.Frame);
-        var sleep = 13 + dir * 16;
-        var count = catalog[actor.Shape].FrameCount;
-        actor.Frame = sleep < count ? sleep : (dir * 16);
-        actor.WalkFrameIndex = 0;
     }
 
     /// <summary>Facing (0 N, 2 E, 4 S, 6 W) from a frame's rotation bits.</summary>
@@ -274,50 +265,6 @@ public static class ActorWalker
         2 => 6,
         _ => 2
     };
-
-    /// <summary>Exult <c>Get_direction</c>: <see cref="DirectionNoWrap"/> with the deltas wrapped round the world.</summary>
-    public static int Direction(int dy, int dx) => DirectionNoWrap(WrapDelta(dy), WrapDelta(dx));
-
-    /// <summary>Exult <c>Wrap_Delta</c> (dir.cc), as it is.</summary>
-    static int WrapDelta(int delta) =>
-        delta >= U7Constants.NumTiles / 2 ? U7Constants.NumTiles / 2 - delta
-        : delta <= -U7Constants.NumTiles / 2 ? -U7Constants.NumTiles / 2 - delta
-        : delta;
-
-    /// <summary>
-    /// Exult <c>Get_direction_NoWrap</c>: one of 8 directions (0 north,
-    /// clockwise) for a slope; <paramref name="dy"/> grows northwards.
-    /// </summary>
-    public static int DirectionNoWrap(int dy, int dx)
-    {
-        if (dx == 0)
-        {
-            return dy > 0 ? 0 : 4;
-        }
-
-        var dydx = 1024 * dy / dx;
-        if (dydx >= 0)
-        {
-            return dx >= 0
-                ? dydx <= 424 ? 2 : dydx <= 2472 ? 1 : 0
-                : dydx <= 424 ? 6 : dydx <= 2472 ? 5 : 4;
-        }
-
-        return dx >= 0
-            ? dydx >= -424 ? 2 : dydx >= -2472 ? 3 : 4
-            : dydx >= -424 ? 6 : dydx >= -2472 ? 7 : 0;
-    }
-
-    /// <summary>Exult <c>Get_direction4</c>: north, east, south or west (0, 2, 4, 6); <paramref name="dy"/> grows northwards.</summary>
-    public static int Direction4(int dy, int dx)
-    {
-        if (dx >= 0)
-        {
-            return dy > dx ? 0 : dy < -dx ? 4 : 2;
-        }
-
-        return dy > -dx ? 0 : dy < dx ? 4 : 6;
-    }
 
     public static int DirIndex(int dx, int dy) => (dx, dy) switch
     {
@@ -339,17 +286,5 @@ public static class ActorWalker
         // Exult Frames_sequence::get_next: wrap to 1, past the resting frame.
         actor.WalkFrameIndex = actor.WalkFrameIndex + 1 >= cycle.Length ? 1 : actor.WalkFrameIndex + 1;
         actor.Frame = cycle[actor.WalkFrameIndex];
-    }
-
-    static int FrameToDir(int frame)
-    {
-        var band = (frame >> 4) & 3;
-        return band switch
-        {
-            0 => 0,
-            1 => 1,
-            2 => 2,
-            _ => 3
-        };
     }
 }

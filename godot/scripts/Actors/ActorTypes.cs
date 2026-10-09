@@ -181,6 +181,8 @@ public static class ObjFlag
     public const int Dead = 4;
     public const int Temporary = 18;
     public const int OkayToTake = 11;
+    /// <summary>Exult <c>might</c>: double strength, dexterity and intelligence.</summary>
+    public const int Might = 12;
     public const int InParty = 6;
     public const int Asleep = 1;
     public const int Paralyzed = 7;

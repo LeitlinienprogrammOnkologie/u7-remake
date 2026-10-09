@@ -89,10 +89,11 @@ public class CombatSchedule : Schedule
         var avatar = Runner.Avatar;
         var inParty = IsInParty(Npc);
         var npcAlign = Npc.Alignment;
+        var seeInvisible = Combat.CanSeeInvisible(Npc);
         foreach (var actor in Runner.NearbyNpcs().Append(avatar))
         {
-            // (Exult: invisible ones only for those who can see them; nobody here can.)
-            if (actor.IsDead || actor.GetFlag(ObjFlag.Invisible))
+            // Exult: invisible ones only for those who can see them.
+            if (actor.IsDead || (!seeInvisible && actor.GetFlag(ObjFlag.Invisible)))
             {
                 continue;
             }
@@ -575,7 +576,15 @@ public class CombatSchedule : Schedule
     void BeInvisible()
     {
         Runner.Effects?.AddSprite(12, Npc, 0, 0);
-        Npc.SetFlag(ObjFlag.Invisible);
+        // Exult Actor::set_flag: wears off with its timer, and its foes lose sight of it.
+        if (Combat.Timers is { } timers)
+        {
+            timers.SetFlag(Npc, ObjFlag.Invisible);
+        }
+        else
+        {
+            Npc.SetFlag(ObjFlag.Invisible);
+        }
         Start(Std, Std);
     }
 
@@ -640,7 +649,7 @@ public class CombatSchedule : Schedule
     {
         var opponent = Npc.CombatTarget;
         if (opponent is null || opponent.Removed || (opponent.IsActor && opponent.IsDead) ||
-            (opponent.GetFlag(ObjFlag.Invisible) && Rng.Next(4) == 0))
+            (!Combat.CanSeeInvisible(Npc) && opponent.GetFlag(ObjFlag.Invisible) && Rng.Next(4) == 0))
         {
             return true;
         }

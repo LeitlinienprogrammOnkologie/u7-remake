@@ -35,7 +35,6 @@ public sealed class CombatEngine
     readonly List<U7Object> _spawned = new();
     readonly List<U7Object> _arena = new();
     /// <summary>Exult <c>Game_object::rotate</c>: frame band per direction 0-7 (N, NE, E, ...).</summary>
-    static readonly int[] Rotate = [0, 0, 48, 48, 16, 16, 32, 32];
     /// <summary>
     /// Exult's attack frame sets by <c>Weapon_info::Actor_frames</c> (reach,
     /// raise, fast swing, slow swing): one-handed, then two-handed.
@@ -65,6 +64,8 @@ public sealed class CombatEngine
     /// <summary>Exult <c>Weapon_data::lightning_damage</c>.</summary>
     const int LightningDamage = 3;
     public U7Object Avatar => _avatar;
+    /// <summary>Exult <c>Actor::set_flag</c> with its timers (knocking out, sleep, poison).</summary>
+    public NpcTimers? Timers { get; set; }
     public U7.Audio.MusicPlayer? Music { get; set; }
     // Exult Combat_schedule::battle_time / battle_end_time (ms).
     ulong _battleTime = unchecked((ulong)-30000L);
@@ -205,7 +206,7 @@ public sealed class CombatEngine
         }
 
         var info = _catalog[mshape];
-        if (info.IsNpcClass || _monsters.Contains(mshape))
+        if (info.IsNpcClass)
         {
             if (Armageddon)
             {
@@ -225,28 +226,22 @@ public sealed class CombatEngine
         }
         else
         {
-            var obj = new U7Object
-            {
-                Tx = egg.Tx,
-                Ty = egg.Ty,
-                Tz = egg.Tz,
-                Shape = mshape,
-                Frame = mframe,
-                Kind = ObjectKind.Ireg,
-                DimX = info.DimX,
-                DimY = info.DimY,
-                DimZ = info.DimZ,
-                Solid = info.Solid
-            };
+            // Exult create_ireg_object (a reflected frame's footprint turned too), at the egg.
+            var obj = _map.CreateIregObject(mshape, mframe);
             obj.SetFlag(ObjFlag.OkayToTake);
             obj.SetFlag(ObjFlag.Temporary);
-            _map.AddObject(obj);
+            _map.PlaceInWorld(obj, egg.Tx, egg.Ty, egg.Tz);
         }
     }
 
+    /// <summary>
+    /// Exult <c>Monster_egg::create_monster</c>: a free spot for the shape's
+    /// footprint and height within 5 tiles (frame 0, a drop of 1, starting in
+    /// a random direction), then the monster in its frame.
+    /// </summary>
     public U7Object? SpawnMonster(int shape, int frame, int tx, int ty, int tz, int sched, int align)
     {
-        var spot = _map.FindSpot(tx, ty, tz, 5);
+        var spot = _map.FindSpot(new TileCoord(tx, ty, tz), 5, shape, 0, maxDrop: 1);
         if (spot is null)
         {
             return null;
@@ -285,7 +280,7 @@ public sealed class CombatEngine
         }
 
         var start = new TileCoord(_avatar.Tx, _avatar.Ty, _avatar.Tz);
-        var inside = _map.RoofHeight(_avatar.Tx, _avatar.Ty, _avatar.Tz) < U7Constants.NoRoof;
+        var inside = _map.AvatarInside(_avatar);
         if (_map.FindSpot(start, 5, shape, 0, 1, -1, inside) is not { } dest)
         {
             return null;
@@ -551,13 +546,80 @@ public sealed class CombatEngine
     /// <summary>Exult: a monster's own reach, or the default 3.</summary>
     public int MonsterReach(int shape) => _monsters[shape].Reach;
 
-    /// <summary>Exult <c>Actor::ready_best_shield</c>.</summary>
-    public void ReadyBestShield(U7Object npc) => Equipment.ReadyBestShield(npc, _catalog, _weapons, _armor);
+    /// <summary>
+    /// Exult <c>Actor::ready_best_shield</c>: with a hand free, the strongest
+    /// carried shield (protection, doubled for an immunity; not in a locked
+    /// container) into it. Armour already in the shield hand stays; so does
+    /// anything a party member holds there.
+    /// </summary>
+    public bool ReadyBestShield(U7Object npc)
+    {
+        if (Equipment.IsTwoHanded(npc, _catalog))
+        {
+            return false;
+        }
+
+        var oldRhand = Equipment.GetReadied(npc, ReadySpot.Rhand);
+        if (oldRhand is not null)
+        {
+            var isArmour = _armor[oldRhand.Shape] is { } a && (a.Protection > 0 || a.Immunity != 0);
+            if (npc.GetFlag(ObjFlag.InParty) || isArmour)
+            {
+                return isArmour;
+            }
+
+            _map.TakeFromWorld(oldRhand);
+        }
+
+        var weapon = Equipment.GetReadied(npc, ReadySpot.Lhand);
+        U7Object? best = null;
+        var bestStrength = -20;
+        foreach (var obj in npc.AllInside())
+        {
+            if (ItemQuantity.InsideLocked(obj) || obj == weapon)
+            {
+                continue;
+            }
+
+            var ready = _catalog[obj.Shape].ReadyType;
+            if (ready is not (ReadySpot.Lhand or ReadySpot.Back) || _armor[obj.Shape] is not { } arinf)
+            {
+                continue;
+            }
+
+            // Exult Armor_info::get_base_strength.
+            var strength = arinf.Immunity != 0 ? arinf.Protection * 2 : arinf.Protection;
+            if (strength > bestStrength)
+            {
+                best = obj;
+                bestStrength = strength;
+            }
+        }
+
+        if (best is null)
+        {
+            if (oldRhand is not null)
+            {
+                Equipment.AddToActor(npc, oldRhand, _catalog, _map, dontCheck: true);
+            }
+
+            return false;
+        }
+
+        _map.TakeFromWorld(best);
+        Equipment.AddToActor(npc, best, _catalog, _map, dontCheck: true); // Should go to the right place.
+        if (oldRhand is not null && oldRhand != best)
+        {
+            Equipment.AddToActor(npc, oldRhand, _catalog, _map, dontCheck: true);
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Exult <c>Actor::ready_ammo</c>: whether the weapon in hand can shoot,
-    /// i.e. needs no ammunition (and has charges, if it uses them) or has some.
-    /// (Exult also moves found ammunition to the quiver.)
+    /// i.e. needs no ammunition (and has charges, if it uses them) or has some
+    /// at hand; else the best ammunition carried goes to the quiver.
     /// </summary>
     public bool ReadyAmmo(U7Object actor)
     {
@@ -571,7 +633,72 @@ public sealed class CombatEngine
             return !winf.UsesCharges || !_catalog[weapon.Shape].HasQuality || weapon.Quality > 0;
         }
 
-        return FindWeaponAmmo(actor, weapon.Shape, winf, winf.Ammo, 1) is not null;
+        if (IsWeaponUsable(actor, weapon, winf, recursive: false))
+        {
+            return true;
+        }
+
+        if (FindBestAmmo(actor, winf.Ammo, 1) is not { } found)
+        {
+            return false;
+        }
+
+        SwapAmmo(actor, found);
+        return true;
+    }
+
+    /// <summary>
+    /// Exult <c>Is_weapon_usable</c> (actors.cc): the weapon needs no ammunition
+    /// or has some, ranged first, then (unless it only shoots) in melee.
+    /// </summary>
+    bool IsWeaponUsable(U7Object npc, U7Object weapon, WeaponRecord winf, bool recursive) =>
+        IsWeaponUsable(npc, weapon, winf, recursive, out _);
+
+    /// <inheritdoc cref="IsWeaponUsable(U7Object, U7Object, WeaponRecord, bool)"/>
+    /// <param name="ammo">The ammunition found for it, or null.</param>
+    bool IsWeaponUsable(U7Object npc, U7Object weapon, WeaponRecord winf, bool recursive, out U7Object? ammo)
+    {
+        var need = GetWeaponAmmo(npc, winf, weapon.Shape, winf.Ammo, winf.Projectile, true, out var found, recursive);
+        ammo = null;
+        if (need == 0)
+        {
+            return true;
+        }
+
+        if (found is null && winf.Uses != WeaponRecord.UsesRanged)
+        {
+            need = GetWeaponAmmo(npc, winf, weapon.Shape, winf.Ammo, winf.Projectile, false, out found, recursive);
+        }
+
+        if (need > 0 && found is null)
+        {
+            return false;
+        }
+
+        ammo = found;
+        return true;
+    }
+
+    /// <summary>Exult <c>Actor::swap_ammo</c>: the new ammunition into the quiver, what was there back into the pack.</summary>
+    void SwapAmmo(U7Object actor, U7Object newAmmo)
+    {
+        var old = Equipment.GetReadied(actor, ReadySpot.Ammo);
+        if (old == newAmmo)
+        {
+            return;
+        }
+
+        if (old is not null)
+        {
+            _map.TakeFromWorld(old);
+        }
+
+        _map.TakeFromWorld(newAmmo);
+        Equipment.AddToActor(actor, newAmmo, _catalog, _map, dontCheck: true); // Should go into the quiver.
+        if (old is not null)
+        {
+            Equipment.AddToActor(actor, old, _catalog, _map, dontCheck: true);
+        }
     }
 
     /// <summary>Exult <c>Get_usable_weapon</c>: a weapon at that ready spot it could fight with now.</summary>
@@ -612,8 +739,7 @@ public sealed class CombatEngine
             bobj = UsableWeapon(npc, index);
             if (bobj is null)
             {
-                return npc != _avatar && Party?.IsInParty(npc) != true &&
-                       Equipment.ReadyBestWeapon(npc, _catalog, _weapons, _armor);
+                return npc != _avatar && Party?.IsInParty(npc) != true && ReadyBestWeapon(npc);
             }
         }
 
@@ -673,8 +799,103 @@ public sealed class CombatEngine
         }
     }
 
-    /// <summary>Exult <c>Actor::ready_best_weapon</c>.</summary>
-    public void ReadyBestWeapon(U7Object npc) => Equipment.ReadyBestWeapon(npc, _catalog, _weapons, _armor);
+    /// <summary>
+    /// Exult <c>Actor::ready_best_weapon</c>: keep a weapon in hand that can
+    /// shoot (or a spellbook that can cast its bookmarked spell); else the
+    /// strongest usable weapon carried (its base strength plus its effective
+    /// range; not in a locked container) into the hand, its best ammunition
+    /// into the quiver. A shield follows either way.
+    /// </summary>
+    public bool ReadyBestWeapon(U7Object npc)
+    {
+        var held = Equipment.GetReadied(npc, ReadySpot.Lhand);
+        if ((held is not null && _weapons[held.Shape] is not null && ReadyAmmo(npc)) ||
+            (held is not null && _catalog[held.Shape].ShapeClass == SpellbookClass && held.SpellBookmark >= 0 &&
+             Spellbook.CanDoSpell(held, npc, held.SpellBookmark, Quantities)))
+        {
+            ReadyBestShield(npc);
+            return true;
+        }
+
+        U7Object? best = null;
+        U7Object? bestAmmo = null;
+        var bestStrength = -20;
+        var wtype = ReadySpot.Back;
+        foreach (var obj in npc.AllInside())
+        {
+            if (ItemQuantity.InsideLocked(obj))
+            {
+                continue;
+            }
+
+            // Back and the right hand too, for dragon breath and some spells (Exult).
+            var ready = _catalog[obj.Shape].ReadyType;
+            if (ready is not (ReadySpot.Lhand or ReadySpot.BothHands or ReadySpot.Rhand or ReadySpot.Back) ||
+                _weapons[obj.Shape] is not { } winf || !IsWeaponUsable(npc, obj, winf, true, out var ammo))
+            {
+                continue;
+            }
+
+            var strength = winf.BaseStrength + EffectiveRange(npc, winf, winf.Range);
+            if (strength > bestStrength)
+            {
+                wtype = ready;
+                best = obj;
+                bestAmmo = ammo != obj ? ammo : null;
+                bestStrength = strength;
+            }
+        }
+
+        if (best is null)
+        {
+            ReadyBestShield(npc);
+            return false;
+        }
+
+        var remove1 = Equipment.GetReadied(npc, ReadySpot.Lhand);
+        var remove2 = wtype == ReadySpot.BothHands ? Equipment.GetReadied(npc, ReadySpot.Rhand) : null;
+        if (remove2 == best)
+        {
+            remove2 = null;
+        }
+
+        if (remove1 is not null)
+        {
+            _map.TakeFromWorld(remove1);
+        }
+
+        if (remove2 is not null)
+        {
+            _map.TakeFromWorld(remove2);
+        }
+
+        _map.TakeFromWorld(best);
+        if (wtype != ReadySpot.Rhand || !Equipment.AddReadied(npc, best, ReadySpot.Lhand, _catalog, _map))
+        {
+            Equipment.AddToActor(npc, best, _catalog, _map, dontCheck: true); // Should go to the right place.
+        }
+
+        ReadyBestShield(npc);
+        if (remove1 is not null)
+        {
+            Equipment.AddToActor(npc, remove1, _catalog, _map, dontCheck: true);
+        }
+
+        if (remove2 is not null)
+        {
+            Equipment.AddToActor(npc, remove2, _catalog, _map, dontCheck: true);
+        }
+
+        if (bestAmmo is not null)
+        {
+            SwapAmmo(npc, bestAmmo);
+        }
+
+        return true;
+    }
+
+    /// <summary>Exult <c>Shape_info::spellbook</c>, the spellbooks' shape class.</summary>
+    const int SpellbookClass = 8;
 
     public static bool IsEnemy(int align, int other) =>
         align switch
@@ -804,11 +1025,20 @@ public sealed class CombatEngine
         {
             FlashHit(victim);
         }
-        if (hp <= 0)
+        // Exult: dead below a third of the strength under zero; at zero or below knocked out (asleep),
+        // and the sleep timer mends it.
+        if (hp < -(maxhp / 3))
         {
             Die(victim, attacker);
+            return delta;
         }
-        else if (attacker is not null)
+
+        if (hp <= 0 && !victim.GetFlag(ObjFlag.Asleep))
+        {
+            KnockOut(victim);
+        }
+
+        if (attacker is not null)
         {
             FightBack(victim, attacker);
         }
@@ -818,6 +1048,19 @@ public sealed class CombatEngine
         }
 
         return delta;
+    }
+
+    /// <summary>Exult <c>reduce_health</c>'s knockout: nobody attacks it any more and it falls asleep.</summary>
+    void KnockOut(U7Object victim)
+    {
+        if (Timers is null)
+        {
+            victim.SetFlag(ObjFlag.Asleep);
+            return;
+        }
+
+        Timers.StopAttacking(victim);
+        Timers.SetFlag(victim, ObjFlag.Asleep);
     }
 
     /// <summary>
@@ -975,7 +1218,7 @@ public sealed class CombatEngine
             ? (projectile ? winfo.ActorFrames >> 2 : winfo.ActorFrames) & 3
             : projectile ? 0 : 2;
         var which = (Equipment.IsTwoHanded(actor, catalog) ? AttackFrames2 : AttackFrames1)[kind];
-        var band = Rotate[dir & 7];
+        var band = Directions.FrameRotation[dir & 7];
         var rec = catalog[actor.Shape];
         var frames = new int[which.Length];
         for (var i = 0; i < which.Length; i++)
@@ -1161,6 +1404,16 @@ public sealed class CombatEngine
         return true;
     }
 
+    /// <summary>
+    /// Runs a dying actor's shape usecode (internal exec), then the rest of
+    /// its death once no usecode runs any more: Exult calls it in the middle
+    /// of <c>Actor::die</c> and its conversations hold the game meanwhile.
+    /// </summary>
+    public Action<U7Object, Action>? DeathUsecode { get; set; }
+
+    /// <summary>Exult <c>Usecode_machine::do_speech</c>.</summary>
+    public Action<int>? DoSpeech { get; set; }
+
     /// <summary>Runs a weapon's usecode on what it hit (function, target), with the weapon event.</summary>
     public Action<int, U7Object>? WeaponUsecode { get; set; }
 
@@ -1208,7 +1461,7 @@ public sealed class CombatEngine
             var width = effects.SpriteFrame(e.Sprite, e.Frame).Width;
             var wpn = _weapons[wshape];
             var ainf = projectile >= 0 ? _ammo[projectile] : null;
-            foreach (var obj in _map.FindNearby(e.Pos, U7Constants.AnyShape, width / (2 * U7Constants.TileSize), 0x80))
+            foreach (var obj in _map.FindNearby(e.Pos, U7Constants.AnyShape, width / (2 * U7Constants.TileSize), 0))
             {
                 if (!obj.Removed && !obj.IsDead && obj != exploding)
                 {
@@ -1318,7 +1571,7 @@ public sealed class CombatEngine
 
     /// <summary>Exult <c>Game_object::get_weapon_ammo</c>: how much ammo a shot needs and where it is.</summary>
     public int GetWeaponAmmo(U7Object actor, WeaponRecord? wpn, int weaponShape, int family, int proj, bool ranged,
-        out U7Object? ammo)
+        out U7Object? ammo, bool recursive = true)
     {
         ammo = null;
         if (wpn is null || weaponShape < 0)
@@ -1329,16 +1582,30 @@ public sealed class CombatEngine
         var needAmmo = family == -1 || !ranged
             ? (wpn.Uses == WeaponRecord.UsesMelee && wpn.UsesCharges ? 1 : 0)
             : 1;
+        // BG's triple crossbow fires triple bolts (READY.DAT type 15): three bolts a shot.
+        if (needAmmo > 0 && family >= 0 && proj >= 0 && wpn.Projectile >= 0 &&
+            _catalog[wpn.Projectile].ReadyType == ReadySpot.TripleBolts)
+        {
+            needAmmo = 3;
+        }
+
         if (needAmmo > 0)
         {
-            ammo = FindWeaponAmmo(actor, weaponShape, wpn, family, needAmmo);
+            ammo = FindWeaponAmmo(actor, weaponShape, family, needAmmo, recursive);
         }
 
         return needAmmo;
     }
 
-    /// <summary>Exult <c>Actor::find_weapon_ammo</c> / <c>find_best_ammo</c>.</summary>
-    U7Object? FindWeaponAmmo(U7Object actor, int weaponShape, WeaponRecord wpn, int family, int needed)
+    static readonly int[] WeaponSpots = [ReadySpot.Lhand, ReadySpot.Rhand, ReadySpot.Back2h, ReadySpot.Belt];
+
+    /// <summary>
+    /// Exult <c>Actor::find_weapon_ammo</c>: ammunition in the quiver, else the
+    /// best carried; a weapon that is its own ammunition (thrown, charged) in
+    /// hand or on the belt, else anywhere carried. Not <paramref name="recursive"/>:
+    /// the quiver and the readied spots only.
+    /// </summary>
+    U7Object? FindWeaponAmmo(U7Object actor, int weaponShape, int family, int needed, bool recursive)
     {
         if (family >= 0)
         {
@@ -1349,23 +1616,10 @@ public sealed class CombatEngine
                 return quiver;
             }
 
-            foreach (var obj in AllPossessions(actor))
-            {
-                if (!_ammo.InFamily(obj.Shape, family) || _ammo[obj.Shape] is null)
-                {
-                    continue;
-                }
-
-                if (Inventory.GetQuantity(obj, _catalog) >= needed)
-                {
-                    return obj;
-                }
-            }
-
-            return null;
+            return recursive ? FindBestAmmo(actor, family, needed) : null;
         }
 
-        foreach (var spot in new[] { ReadySpot.Lhand, ReadySpot.Rhand, ReadySpot.Back2h, ReadySpot.Belt })
+        foreach (var spot in WeaponSpots)
         {
             var obj = Equipment.GetReadied(actor, spot);
             if (obj is null || obj.Removed || obj.Shape != weaponShape)
@@ -1386,26 +1640,69 @@ public sealed class CombatEngine
             }
         }
 
+        // Exult Container_game_object::find_weapon_ammo, called with its default of one needed.
+        if (recursive)
+        {
+            foreach (var obj in actor.AllInside())
+            {
+                if (obj.Shape != weaponShape)
+                {
+                    continue;
+                }
+
+                if (family == -2 ? !_catalog[obj.Shape].HasQuality || obj.Quality >= 1 : Inventory.GetQuantity(obj, _catalog) >= 1)
+                {
+                    return obj;
+                }
+            }
+        }
+
         return null;
     }
 
-    static IEnumerable<U7Object> AllPossessions(U7Object container)
+    /// <summary>
+    /// Exult <c>Actor::find_best_ammo</c>: of the carried ammunition of the
+    /// family (not in a locked container, enough of it), the strongest, a
+    /// stack with few shots left counting less; the first of equals.
+    /// </summary>
+    U7Object? FindBestAmmo(U7Object actor, int family, int needed)
     {
-        foreach (var obj in container.Contents)
+        U7Object? best = null;
+        var bestStrength = -20;
+        foreach (var obj in actor.AllInside())
         {
-            if (obj.Removed)
+            if (ItemQuantity.InsideLocked(obj) || !_ammo.InFamily(obj.Shape, family) || _ammo[obj.Shape] is not { } ainf)
             {
                 continue;
             }
 
-            yield return obj;
-            foreach (var inner in AllPossessions(obj))
+            var quantity = Inventory.GetQuantity(obj, _catalog);
+            if (quantity < needed)
             {
-                yield return inner;
+                continue;
+            }
+
+            var strength = ainf.BaseStrength;
+            if (quantity < 5 * needed)
+            {
+                strength /= 3;
+            }
+            else if (quantity < 10 * needed)
+            {
+                strength /= 2;
+            }
+
+            if (strength > bestStrength)
+            {
+                best = obj;
+                bestStrength = strength;
             }
         }
+
+        return best;
     }
 
+    /// <summary>Exult <c>Combat_schedule::attack_target</c>'s use of ammunition and charges (combat.cc).</summary>
     void ConsumeAmmo(U7Object attacker, WeaponRecord wpn, U7Object ammoObj, int needAmmo, bool returns, bool combat)
     {
         var ready = ammoObj.ReadySlot >= 0;
@@ -1425,16 +1722,8 @@ public sealed class CombatEngine
         }
         else
         {
-            var quant = Inventory.GetQuantity(ammoObj, _catalog);
-            if (quant <= needAmmo)
-            {
-                _map.RemoveObject(ammoObj);
-                needNewWeapon = true;
-            }
-            else
-            {
-                ammoObj.Quality = quant - needAmmo;
-            }
+            // Exult modify_quantity: the pile's frame follows what is left.
+            Quantities.Modify(ammoObj, -needAmmo, out needNewWeapon);
         }
 
         if (!attacker.IsActor || !needNewWeapon || !ready)
@@ -1454,7 +1743,7 @@ public sealed class CombatEngine
         else if (!ReadyAmmo(attacker))
         {
             // A new weapon, and tell the schedule.
-            Equipment.ReadyBestWeapon(attacker, _catalog, _weapons, _armor);
+            ReadyBestWeapon(attacker);
             if (Schedules?.BrainOf(attacker)?.Schedule is CombatSchedule schedule)
             {
                 schedule.WeaponRemoved();
@@ -1464,11 +1753,11 @@ public sealed class CombatEngine
 
     // ------------------------------------------------------------------ projectiles
 
-    /// <summary>Exult <c>Projectile_effect::init</c>: path from the attacker's missile tile to the target's centre.</summary>
+    /// <summary>Exult <c>Projectile_effect::init</c>: path from the attacker's missile tile to the target's centre tile.</summary>
     void LaunchProjectile(U7Object attacker, U7Object target, WeaponRecord? wpn, int weaponShape, int ammoShape, int spriteShape, int attval, bool returns)
     {
-        var start = new TileCoord(attacker.Tx, attacker.Ty, attacker.Tz + attacker.DimZ * 3 / 4);
-        var pr = NewMissile(attacker, target, start, Centre(target), wpn, weaponShape, ammoShape, spriteShape, attval);
+        var pr = NewMissile(attacker, target, MissileTile(attacker), ObjectGeometry.CenterTile(target), wpn, weaponShape, ammoShape,
+            spriteShape, attval);
         pr.Returns = returns;
         LastMessage = $"{NameOf(attacker)} fires at {NameOf(target)}";
         GD.Print($"{LastMessage} (weapon {weaponShape}, ammo {ammoShape}, sprite {spriteShape}, {pr.Path.Count} tiles)");
@@ -1489,7 +1778,10 @@ public sealed class CombatEngine
         pr.Speed = 4;
     }
 
-    /// <summary>Exult <c>Game_object::get_missile_tile</c>: the middle of the footprint, three quarters up.</summary>
+    /// <summary>
+    /// Exult <c>Game_object::get_missile_tile</c>: the middle of the footprint,
+    /// three quarters up (in 1.12.1 the same as <see cref="ObjectGeometry.CenterTile"/>).
+    /// </summary>
     static TileCoord MissileTile(U7Object obj) =>
         new(obj.Tx - (Math.Max(1, obj.DimX) - 1) / 2, obj.Ty - (Math.Max(1, obj.DimY) - 1) / 2, obj.Tz + obj.DimZ * 3 / 4);
 
@@ -1522,10 +1814,27 @@ public sealed class CombatEngine
             Interval = _stepInterval / 2
         };
         pr.Path = explodes && ainf is { Homing: true } ? new List<TileCoord>() : LinePath(start, dest);
+        if (attacker is not null && pr.Path.Count > 0)
+        {
+            // Exult: out of the shooter's own volume first; that step is where the missile starts.
+            var skip = 0;
+            while (skip < pr.Path.Count - 1 && InVolume(attacker, pr.Path[skip]))
+            {
+                skip++;
+            }
+
+            pr.Pos = pr.Path[skip];
+            pr.Step = skip + 1;
+        }
+
         pr.Frame = MissileFrame(spriteShape, start, dest);
         _missiles.Add(pr);
         return pr;
     }
+
+    /// <summary>Exult <c>Block::has_world_point</c> on <c>Game_object::get_block</c>: inside the object's footprint and height.</summary>
+    static bool InVolume(U7Object obj, TileCoord t) =>
+        ObjectGeometry.InFootprint(obj, t.Tx, t.Ty) && t.Tz >= obj.Tz && t.Tz < obj.Tz + obj.DimZ;
 
     /// <summary>
     /// Exult <c>Projectile_effect::set_sprite_shape</c>: shapes with 24 frames
@@ -1658,7 +1967,8 @@ public sealed class CombatEngine
             return;
         }
 
-        if (target is { Removed: false, IsDead: false } && target != attacker && Centre(target).Distance2d(pr.Pos) < 3)
+        if (target is { Removed: false, IsDead: false } && target != attacker &&
+            ObjectGeometry.CenterTile(target).Distance(pr.Pos) < 3) // Exult: it aims for the centre tile.
         {
             hit = pr.AutoHit || TryToHit(target, pr.AttVal);
             if (hit)
@@ -1675,7 +1985,7 @@ public sealed class CombatEngine
         if (pr.Returns && attacker is { Removed: false } && new TileCoord(attacker.Tx, attacker.Ty, attacker.Tz).Distance(pr.Pos) < 50)
         {
             // Boomerangs and magic axes fly back to the thrower (Exult's return_path effect).
-            var to = Centre(attacker);
+            var to = ObjectGeometry.CenterTile(attacker);
             var back = new Missile
             {
                 Target = attacker,
@@ -1976,7 +2286,7 @@ public sealed class CombatEngine
         if (l.Dir < 8)
         {
             var adj = src.Neighbor(l.Dir);
-            var start = new TileCoord(egg.Tx, egg.Ty, egg.Tz + egg.DimZ * 3 / 4);
+            var start = MissileTile(egg);
             var dest = new TileCoord(U7Constants.WrapTile(src.Tx + l.Range * U7Constants.TileDelta(src.Tx, adj.Tx)),
                 U7Constants.WrapTile(src.Ty + l.Range * U7Constants.TileDelta(src.Ty, adj.Ty)), start.Tz);
             NewMissile(egg, null, start, dest, wpn, l.Weapon, l.Shape, l.Shape, attval);
@@ -1990,7 +2300,7 @@ public sealed class CombatEngine
             var member = party[i];
             if (Schedules?.IsStraightPath(src, new TileCoord(member.Tx, member.Ty, member.Tz)) == true)
             {
-                NewMissile(null, member, src, Centre(member), wpn, l.Weapon, l.Shape, l.Shape, attval);
+                NewMissile(null, member, src, ObjectGeometry.CenterTile(member), wpn, l.Weapon, l.Shape, l.Shape, attval);
                 return;
             }
         }
@@ -2028,26 +2338,16 @@ public sealed class CombatEngine
         return obj;
     }
 
-    /// <summary>Straight 3D line (Exult's Zombie pathfinder), excluding the start tile.</summary>
+    /// <summary>Exult <c>Zombie</c>'s straight 3D line (<see cref="ZombieSteps"/>), without the start tile; empty when already there.</summary>
     static List<TileCoord> LinePath(TileCoord from, TileCoord to)
     {
-        var dx = U7Constants.TileDelta(from.Tx, to.Tx);
-        var dy = U7Constants.TileDelta(from.Ty, to.Ty);
-        var dz = to.Tz - from.Tz;
-        var steps = Math.Max(Math.Abs(dx), Math.Abs(dy));
-        var path = new List<TileCoord>(Math.Max(1, steps));
-        if (steps == 0)
+        var path = new List<TileCoord>();
+        if (ZombieSteps.Line(from, to) is { } line)
         {
-            path.Add(to);
-            return path;
-        }
-
-        for (var i = 1; i <= steps; i++)
-        {
-            path.Add(new TileCoord(
-                U7Constants.WrapTile(from.Tx + (int)Math.Round(dx * (double)i / steps)),
-                U7Constants.WrapTile(from.Ty + (int)Math.Round(dy * (double)i / steps)),
-                Math.Max(0, from.Tz + (int)Math.Round(dz * (double)i / steps))));
+            while (line.NextStep(out var tile, out _))
+            {
+                path.Add(tile);
+            }
         }
 
         return path;
@@ -2140,8 +2440,36 @@ public sealed class CombatEngine
 
     void Die(U7Object victim, U7Object? attacker)
     {
+        if (victim.IsDead)
+        {
+            return;
+        }
+
         victim.SetFlag(ObjFlag.Dead);
         victim.SetProp(ActorProp.Health, 0);
+        // Exult Actor::die: Hook and Dracothraxus (the dragon carrying the
+        // scroll 797 of quality 241, frame 4) run their usecode first.
+        if (DeathUsecode is not null && (victim.Shape == 0x1FA || victim.Shape == 0x1F8 && IsDraco(victim)))
+        {
+            DeathUsecode(victim, () =>
+            {
+                if (!victim.Removed)
+                {
+                    FinishDeath(victim, attacker);
+                }
+            });
+            return;
+        }
+
+        FinishDeath(victim, attacker);
+    }
+
+    /// <summary>Exult <c>Is_draco</c>.</summary>
+    static bool IsDraco(U7Object dragon) =>
+        dragon.AllInside().Any(o => o.Shape == 797 && o.Quality == 241 && (o.Frame & 31) == 4);
+
+    void FinishDeath(U7Object victim, U7Object? attacker)
+    {
         victim.Bark("slain");
         LastMessage = attacker is null
             ? $"{NameOf(victim)} is slain"
@@ -2155,10 +2483,16 @@ public sealed class CombatEngine
             return;
         }
 
+        var inParty = Party?.IsInParty(victim) == true;
         Party?.RemoveFromParty(victim);
         LeaveBody(victim);
         _map.RemoveObject(victim);
         MonsterDied();
+        // Exult (Black Gate): one dying companion in four has the Guardian speak (speech 22).
+        if (inParty && _rng.Next(4) == 0)
+        {
+            DoSpeech?.Invoke(22);
+        }
     }
 
     /// <summary>
@@ -2195,8 +2529,12 @@ public sealed class CombatEngine
             }
         }
 
+        // Exult deletes spells (READY.DAT's spell bit: dragon breath, death bolts, ...) with the
+        // rest of the inventory instead of handing them on; in a body also those inside containers.
+        RemoveSpells(victim, inside: body is not null);
         var items = victim.Contents.ToList();
         victim.Contents.Clear();
+
         foreach (var item in items)
         {
             item.Container = null;
@@ -2213,24 +2551,30 @@ public sealed class CombatEngine
             var spot = _map.FindSpot(victim.Tx, victim.Ty, victim.Tz, 5);
             if (spot is { } s)
             {
-                SetOkayToTake(item);
+                item.SetFlagWithContents(ObjFlag.OkayToTake);
                 _map.PlaceInWorld(item, s.Tx, s.Ty, s.Tz);
             }
         }
 
         if (body is not null)
         {
-            SetOkayToTake(body);
+            body.SetFlagWithContents(ObjFlag.OkayToTake);
             _map.AddObject(body);
         }
     }
 
-    static void SetOkayToTake(U7Object obj)
+    void RemoveSpells(U7Object container, bool inside)
     {
-        obj.SetFlag(ObjFlag.OkayToTake);
-        foreach (var c in obj.Contents)
+        foreach (var obj in container.Contents.ToList())
         {
-            SetOkayToTake(c);
+            if (_catalog[obj.Shape].IsSpell)
+            {
+                _map.RemoveObject(obj);
+            }
+            else if (inside)
+            {
+                RemoveSpells(obj, inside);
+            }
         }
     }
 
