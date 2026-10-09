@@ -23,7 +23,14 @@ public sealed class GumpManager
     public int ScreenW = 320;
     public int ScreenH = 200;
     public Action<U7Object>? ActivateUsecode { get; set; }
-    public Action<U7Object>? DroppedInWorld { get; set; }
+    /// <summary>
+    /// Exult <c>Dragging_info::drop_on_map</c>: the thing dragged onto the map
+    /// lands, is taken by what it was dropped on (a party member, a stack it
+    /// joins), or is refused (with the cursor's flash) and goes back.
+    /// </summary>
+    public Func<U7Object, DragState, MapDrop>? DropOnMap { get; set; }
+    /// <summary>Exult <c>Dragging_info::drop</c>, a thing from the world dropped: the eggs where it was, and what stood on it falls.</summary>
+    public Action<U7Object, DragState>? LiftedFromWorld { get; set; }
     /// <summary>
     /// Exult <c>Dragging_info::drop</c>'s theft check: something not okay to
     /// take was put into another gump than it came from, or moved more than
@@ -38,6 +45,8 @@ public sealed class GumpManager
     public VgaShapeFile? GumpsVga { get; set; }
     /// <summary>Runs a spell's usecode (function, caster) as a double-click.</summary>
     public Action<int, U7Object>? CastSpell { get; set; }
+    /// <summary>Exult <c>failed_copy_protection</c>: the stats say "Oink!".</summary>
+    public Func<bool> FailedCopyProtection { get; set; } = () => false;
     ItemQuantity? _quantities;
     public ItemQuantity Quantities => _quantities ??= new ItemQuantity(Catalog, Map, null, null);
 
@@ -197,50 +206,61 @@ public sealed class GumpManager
         }
     }
 
-    public void ShowInventory()
+    /// <summary>Exult <c>Actor::show_inventory</c>: the actor's paperdoll, the avatar's by default.</summary>
+    public void ShowInventory(U7Object? actor = null)
     {
-        var gumpShape = Catalog[Avatar.Shape].GumpShape;
-        if (gumpShape < 0)
-        {
-            gumpShape = U7Constants.GumpActorMale;
-        }
-
-        Add(Avatar, gumpShape, actorGump: true);
+        actor ??= Avatar;
+        Add(actor, InventoryGump(actor), actorGump: true);
     }
 
+    /// <summary>
+    /// Exult <c>Actor::inventory_shapenum</c> with Black Gate's gumps: the
+    /// paperdoll of the actor's shape, else the avatar's of its sex, else the
+    /// generic man's.
+    /// </summary>
+    int InventoryGump(U7Object actor)
+    {
+        var gump = Catalog[actor.Shape].GumpShape;
+        if (gump < 0)
+        {
+            gump = Catalog[AvatarLook.Shape(AvatarLook.IsFemale(actor))].GumpShape;
+        }
+
+        return gump >= 0 ? gump : U7Constants.GumpActorMale;
+    }
+
+    /// <summary>
+    /// A double-click's gump: the spellbook's (Exult <c>Spellbook_object::activate</c>),
+    /// an actor's paperdoll, or a container's if its shape has a gump (Exult
+    /// <c>Container_game_object::show_gump</c>); false if none opens.
+    /// </summary>
     public bool ShowGump(U7Object obj)
     {
-        if (Catalog[obj.Shape].IsSpellbookClass)
+        var info = Catalog[obj.Shape];
+        if (info.IsSpellbookClass)
         {
-            // Exult Spellbook_object::activate.
             Add(obj, SpellbookGump.BookShape);
             return true;
         }
 
-        var gumpShape = Catalog[obj.Shape].GumpShape;
-        if (gumpShape < 0)
+        if (obj.IsActor)
+        {
+            ShowInventory(obj);
+            return true;
+        }
+
+        if (!info.IsContainerClass || info.GumpShape < 0)
         {
             return false;
         }
 
-        Add(obj, gumpShape, obj.IsActor);
+        Add(obj, info.GumpShape);
         return true;
     }
 
-    public bool OnMouseDown(GumpView view, int mx, int my, bool right, bool doubleClick)
+    public bool OnMouseDown(GumpView view, int mx, int my, bool doubleClick)
     {
         var gump = FindGump(mx, my, view);
-        if (right)
-        {
-            if (gump is not null)
-            {
-                gump.Close();
-                return true;
-            }
-
-            return false;
-        }
-
         if (doubleClick)
         {
             if (gump is not null)
@@ -284,14 +304,16 @@ public sealed class GumpManager
         var obj = gump.FindObject(view, mx, my);
         if (obj is not null)
         {
+            // Exult Dragging_info: painted where it is shown, moved along with the mouse.
+            gump.GetShapeLocation(obj, out var paintX, out var paintY);
             Drag = new DragState
             {
                 Object = obj,
                 SourceGump = gump,
                 MouseX = mx,
                 MouseY = my,
-                PaintX = mx,
-                PaintY = my,
+                PaintX = paintX,
+                PaintY = paintY,
                 OldTx = obj.Tx,
                 OldTy = obj.Ty,
                 OldTz = obj.Tz,
@@ -314,16 +336,16 @@ public sealed class GumpManager
         return true;
     }
 
-    public bool OnWorldMouseDown(GumpView view, U7Object obj, int mx, int my)
+    /// <summary>A press on a thing in the world, painted with its hot spot at (<paramref name="paintX"/>, <paramref name="paintY"/>).</summary>
+    public bool OnWorldMouseDown(U7Object obj, int mx, int my, int paintX, int paintY)
     {
-        _ = view;
         Drag = new DragState
         {
             Object = obj,
             MouseX = mx,
             MouseY = my,
-            PaintX = mx,
-            PaintY = my,
+            PaintX = paintX,
+            PaintY = paintY,
             OldTx = obj.Tx,
             OldTy = obj.Ty,
             OldTz = obj.Tz,
@@ -357,18 +379,9 @@ public sealed class GumpManager
             }
 
             drag.Moved = true;
-            if (drag.Object is { } obj && drag.Button is null)
+            if (drag.Button is null)
             {
-                if (drag.FromWorld)
-                {
-                    Map.TakeFromWorld(obj);
-                }
-                else if (drag.SourceGump is not null && obj.Container is not null)
-                {
-                    obj.Container.Contents.Remove(obj);
-                    obj.Container = null;
-                    obj.ReadySlot = -1;
-                }
+                LiftUp(drag);
             }
         }
 
@@ -383,14 +396,14 @@ public sealed class GumpManager
         }
         else if (drag.Object is not null)
         {
-            drag.PaintX = mx;
-            drag.PaintY = my;
+            drag.PaintX += dx;
+            drag.PaintY += dy;
         }
 
         return true;
     }
 
-    public bool OnMouseUp(GumpView view, int mx, int my, int worldTx, int worldTy, int worldTz)
+    public bool OnMouseUp(GumpView view, int mx, int my)
     {
         var drag = Drag;
         if (drag is null)
@@ -435,23 +448,75 @@ public sealed class GumpManager
                 FlashMouse?.Invoke(MouseShape.WontFit);
                 PutBack(drag);
             }
-            else if (dest != drag.SourceGump && !okayToMove)
+            else
             {
-                PossibleTheft?.Invoke();
+                if (dest != drag.SourceGump && !okayToMove)
+                {
+                    PossibleTheft?.Invoke();
+                }
+
+                Dropped(obj, drag);
             }
 
             return true;
         }
 
-        Map.PlaceInWorld(obj, worldTx, worldTy, worldTz);
-        DroppedInWorld?.Invoke(obj);
-        if (drag.FromWorld && !okayToMove &&
-            new TileCoord(obj.Tx, obj.Ty, obj.Tz).Distance(new TileCoord(drag.OldTx, drag.OldTy, drag.OldTz)) > 2)
+        DropInWorld(drag);
+        return true;
+    }
+
+    /// <summary>The dragged thing leaves the world or its container (the drag's first move).</summary>
+    public void LiftUp(DragState drag)
+    {
+        if (drag.Object is not { } obj)
+        {
+            return;
+        }
+
+        if (drag.FromWorld)
+        {
+            Map.TakeFromWorld(obj);
+        }
+        else if (obj.Container is { } container)
+        {
+            container.Contents.Remove(obj);
+            obj.Container = null;
+            obj.ReadySlot = -1;
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Dragging_info::drop</c> onto the map: refused, it goes back;
+    /// taken by what it was dropped on, or moved more than 2 tiles in the
+    /// world, it may be a theft.
+    /// </summary>
+    public MapDrop DropInWorld(DragState drag)
+    {
+        var obj = drag.Object!;
+        var result = DropOnMap?.Invoke(obj, drag) ?? MapDrop.Refused;
+        if (result == MapDrop.Refused)
+        {
+            PutBack(drag);
+            return result;
+        }
+
+        var theft = result == MapDrop.Taken || (drag.FromWorld &&
+            new TileCoord(obj.Tx, obj.Ty, obj.Tz).Distance(new TileCoord(drag.OldTx, drag.OldTy, drag.OldTz)) > 2);
+        if (theft && !obj.GetFlag(ObjFlag.OkayToTake))
         {
             PossibleTheft?.Invoke();
         }
 
-        return true;
+        Dropped(obj, drag);
+        return result;
+    }
+
+    void Dropped(U7Object obj, DragState drag)
+    {
+        if (drag.FromWorld)
+        {
+            LiftedFromWorld?.Invoke(obj, drag);
+        }
     }
 
     /// <summary>
@@ -579,4 +644,12 @@ public sealed class GumpManager
         });
         return "gumps: " + string.Join(" | ", parts);
     }
+}
+
+/// <summary>What became of a thing dropped onto the map.</summary>
+public enum MapDrop
+{
+    Refused,
+    Placed,
+    Taken
 }

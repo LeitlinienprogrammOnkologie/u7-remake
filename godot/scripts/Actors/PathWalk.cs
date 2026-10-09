@@ -467,28 +467,29 @@ public sealed class PathWalk : IActorAction
 
         _handlingDoor = true;
         _door = door;
-        var footX = door.Tx - door.DimX + 1;
-        var footY = door.Ty - door.DimY + 1;
+        // The footprint of the closed door (opening it changes its shape, a horizontal door's to a vertical one).
+        var (footX, footY, footW, footH) = (door.Tx - door.DimX + 1, door.Ty - door.DimY + 1, door.DimX, door.DimY);
         ActivateWithoutQuality(door);
         int px;
         int py;
         int dir;
-        if (door.DimX > door.DimY)
+        if (footW > footH)
         {
-            px = footX + door.DimX / 2;
-            (py, dir) = U7Constants.TileDelta(footY, actor.Ty) <= 0 ? (footY + door.DimY, 0) : (footY - 1, 4);
+            px = footX + footW / 2;
+            (py, dir) = U7Constants.TileDelta(footY, actor.Ty) <= 0 ? (footY + footH, 0) : (footY - 1, 4);
         }
         else
         {
-            py = footY + door.DimY / 2;
-            (px, dir) = U7Constants.TileDelta(footX, actor.Tx) <= 0 ? (footX + door.DimX, 6) : (footX - 1, 2);
+            py = footY + footH / 2;
+            (px, dir) = U7Constants.TileDelta(footX, actor.Tx) <= 0 ? (footX + footW, 6) : (footX - 1, 2);
         }
 
         // (Exult's find_spot here has no effect: its result is discarded.)
         var past = new TileCoord(U7Constants.WrapTile(px), U7Constants.WrapTile(py), actor.Tz);
         _doorSequenceComplete = false;
+        // Its steps are this walk's: the eggs on them hatch (Exult's actor steps through it).
         _subseq = SequenceAction.WalkThen(_map, actor, past,
-            new FramesAction([ActorWalker.DirFrame(dir, 0)], 100));
+            new FramesAction([ActorWalker.DirFrame(dir, 0)], 100), stepped: Stepped);
         return true;
     }
 }

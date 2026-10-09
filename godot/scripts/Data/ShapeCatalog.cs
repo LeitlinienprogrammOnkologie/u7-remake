@@ -137,8 +137,7 @@ public sealed class ShapeCatalog
         LoadTypeFlags();
         LoadMountainTops();
         LoadFrames();
-        LoadContainerDat();
-        ApplyContainerFallbacks();
+        ApplyContainerGumps();
         LoadReadyDat();
         LoadPaperdollInfo();
         Shapes[644].Lightweight = true;
@@ -331,126 +330,49 @@ public sealed class ShapeCatalog
         int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : fallback;
 
     /// <summary>
-    /// Exult <c>Gump_reader_functor</c>: version byte, count, then
-    /// (u16 shape, u16 gump_shape[, u16 gump_font]).
-    /// Original BG has no CONTAINER.DAT; Exult ships it in exult_bg.flx.
+    /// Exult's <c>data/bg/container.dat</c> (in exult_bg.flx; the original
+    /// has none), by gump: each shape's gump. The avatar, the companions and
+    /// the generic NPCs have their own paperdolls; the locked chest and the
+    /// sealed box have none, so their usecode runs (Exult
+    /// <c>Container_game_object::show_gump</c>), as for the unicorn and the
+    /// hydra, which Exult lists without one.
     /// </summary>
-    void LoadContainerDat()
+    static readonly Dictionary<int, int[]> ContainerGumps = new()
     {
-        var path = Path.Combine(U7Paths.StaticDir, "CONTAINER.DAT");
-        if (!File.Exists(path))
-        {
-            path = Path.Combine(U7Paths.StaticDir, "container.dat");
-        }
+        [0] = [799],
+        [1] = [804],
+        [8] = [819],
+        [9] = [802],
+        [10] = [801],
+        [11] = [803],
+        [22] = [800],
+        [26] = [405],
+        [27] = [283, 406, 407, 416, 679],
+        [32] = [642],
+        [43] = [761],
+        [53] = [400, 414, 507, 762, 778, 892],
+        [55] = [797],
+        [57] = [721],
+        [58] = [989],
+        [59] = [465],
+        [60] = [489],
+        [61] = [487],
+        [62] = [488],
+        [63] = [490],
+        [65] = [154, 155, 226, 227, 228, 247, 259, 265, 274, 304, 317, 318, 319, 337, 354, 380, 394, 401, 403, 445, 449, 450, 451, 455, 457, 458, 462, 464, 466, 467, 468, 471, 472, 473, 475, 479, 480, 482, 484, 485, 501, 506, 519, 528, 533, 720, 805, 806, 861, 882, 883, 884, 946, 952, 957, 965],
+        [66] = [229, 299, 382, 446, 448, 454, 456, 459, 461, 463, 469, 532, 753, 881, 929],
+        [67] = [452],
+        [68] = [460],
+    };
 
-        if (!File.Exists(path))
+    void ApplyContainerGumps()
+    {
+        foreach (var (gump, shapes) in ContainerGumps)
         {
-            return;
-        }
-
-        var data = File.ReadAllBytes(path);
-        if (data.Length < 2)
-        {
-            return;
-        }
-
-        var i = 0;
-        var version = data[i++];
-        var count = (int)data[i++];
-        if (count == 255)
-        {
-            if (i + 2 > data.Length)
-            {
-                return;
-            }
-
-            count = BitConverter.ToUInt16(data, i);
-            i += 2;
-        }
-
-        var recSize = version >= 2 ? 6 : 4;
-        for (var n = 0; n < count && i + recSize <= data.Length; n++)
-        {
-            var shape = BitConverter.ToUInt16(data, i);
-            var gump = (short)BitConverter.ToUInt16(data, i + 2);
-            i += recSize;
-            if (shape < Shapes.Length)
+            foreach (var shape in shapes)
             {
                 Shapes[shape].GumpShape = gump;
             }
-        }
-    }
-
-    /// <summary>
-    /// Map named BG containers (and the avatar) when CONTAINER.DAT is missing.
-    /// </summary>
-    void ApplyContainerFallbacks()
-    {
-        ApplyGumpIfUnset(U7Constants.AvatarShape, U7Constants.GumpActorMale);
-        foreach (var rec in Shapes)
-        {
-            if (rec.GumpShape >= 0)
-            {
-                continue;
-            }
-
-            var name = rec.Name;
-            if (string.IsNullOrEmpty(name))
-            {
-                continue;
-            }
-
-            if (name.Contains("chest", StringComparison.OrdinalIgnoreCase))
-            {
-                rec.GumpShape = U7Constants.GumpChest;
-            }
-            else if (name.Contains("crate", StringComparison.OrdinalIgnoreCase))
-            {
-                rec.GumpShape = U7Constants.GumpCrate;
-            }
-            else if (name.Contains("barrel", StringComparison.OrdinalIgnoreCase))
-            {
-                rec.GumpShape = U7Constants.GumpBarrel;
-            }
-            else if (name.Contains("backpack", StringComparison.OrdinalIgnoreCase))
-            {
-                rec.GumpShape = U7Constants.GumpBackpack;
-            }
-            else if (name.Equals("bag", StringComparison.OrdinalIgnoreCase) ||
-                     name.Contains(" pouch", StringComparison.OrdinalIgnoreCase))
-            {
-                rec.GumpShape = U7Constants.GumpBag;
-            }
-            else if (name.Contains("basket", StringComparison.OrdinalIgnoreCase))
-            {
-                rec.GumpShape = U7Constants.GumpBasket;
-            }
-            else if (name.Contains("drawer", StringComparison.OrdinalIgnoreCase) ||
-                     name.Equals("desk", StringComparison.OrdinalIgnoreCase))
-            {
-                rec.GumpShape = U7Constants.GumpDrawer;
-            }
-            else if (name.Equals("body", StringComparison.OrdinalIgnoreCase) ||
-                     name.Contains("corpse", StringComparison.OrdinalIgnoreCase))
-            {
-                rec.GumpShape = U7Constants.GumpBody;
-            }
-            else if (name.Equals("box", StringComparison.OrdinalIgnoreCase))
-            {
-                rec.GumpShape = U7Constants.GumpBox;
-            }
-            else if (rec.IsContainerClass)
-            {
-                rec.GumpShape = U7Constants.GumpBackpack;
-            }
-        }
-    }
-
-    void ApplyGumpIfUnset(int shape, int gump)
-    {
-        if ((uint)shape < (uint)Shapes.Length && Shapes[shape].GumpShape < 0)
-        {
-            Shapes[shape].GumpShape = gump;
         }
     }
 

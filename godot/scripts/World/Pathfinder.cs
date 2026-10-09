@@ -399,6 +399,10 @@ public class FastPathClient : PathClient
         return false;
     }
 
+    /// <summary>Exult <c>Fast_pathfinder_client::is_grabable</c> to a spot: a 1×1×1 block there.</summary>
+    public static bool IsGrabable(GameMap map, U7Object from, TileCoord to) =>
+        IsGrabable(map, from, new U7Object { Tx = to.Tx, Ty = to.Ty, Tz = to.Tz, DimX = 1, DimY = 1, DimZ = 1 });
+
     // Exult is_grabable_internal.
     static bool IsGrabable(GameMap map, U7Object from, U7Object to, FastPathClient client)
     {

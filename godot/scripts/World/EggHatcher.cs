@@ -31,6 +31,8 @@ public sealed class EggHatcher
     public MusicPlayer? Music { get; set; }
     public PartyManager? Party { get; set; }
     public EffectsManager? Effects { get; set; }
+    /// <summary>Exult <c>Game_window::teleport_party</c>, for the teleport eggs.</summary>
+    public Action<TileCoord>? TeleportParty { get; set; }
     public string LastMessage { get; private set; } = "";
     public int JukeboxTrack => Music is { } m ? m.CurrentTrack : _jukeboxTrack;
 
@@ -56,17 +58,7 @@ public sealed class EggHatcher
         var tx = actor.Tx;
         var ty = actor.Ty;
         var tz = actor.Tz;
-        var leaving = _map.EggsAt(fromTx, fromTy);
-        if (leaving is not null)
-        {
-            foreach (var egg in leaving)
-            {
-                if (!egg.Removed && TestUnhatch(egg, actor, tx, ty, tz, fromTx, fromTy))
-                {
-                    Unhatch(egg);
-                }
-            }
-        }
+        UnhatchLeaving(actor, new TileCoord(tx, ty, tz), fromTx, fromTy);
 
         var entering = _map.EggsAt(tx, ty);
         if (entering is null)
@@ -85,6 +77,26 @@ public sealed class EggHatcher
             if (actor.Tx != tx || actor.Ty != ty || actor.Tz != tz)
             {
                 return; // teleported; the destination scan already ran
+            }
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Map_chunk::unhatch_eggs</c>: the eggs on the tile left that let
+    /// go of <paramref name="actor"/> going to <paramref name="to"/> (jukeboxes) unhatch.
+    /// </summary>
+    public void UnhatchLeaving(U7Object actor, TileCoord to, int fromTx, int fromTy)
+    {
+        if (_map.EggsAt(fromTx, fromTy) is not { } leaving)
+        {
+            return;
+        }
+
+        foreach (var egg in leaving)
+        {
+            if (!egg.Removed && TestUnhatch(egg, actor, to.Tx, to.Ty, to.Tz, fromTx, fromTy))
+            {
+                Unhatch(egg);
             }
         }
     }
@@ -290,8 +302,7 @@ public sealed class EggHatcher
                 return;
             }
 
-            // Once-only eggs go now; Exult's usecode egg defers this until its
-            // script has run, which our synchronous usecode call has already done.
+            // Once-only eggs go now (a usecode egg's script removes it after its usecode).
             if (!CanUnhatch(egg) && (egg.EggFlags & EggFlag.Once) != 0)
             {
                 _map.RemoveObject(egg);
@@ -363,6 +374,20 @@ public sealed class EggHatcher
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Exult <c>Egg_object::reset</c>, its chunk out of the avatar's reach
+    /// (<c>emulate_cache</c>): a hatched jukebox lets go, and the egg can hatch again.
+    /// </summary>
+    public void Reset(U7Object egg)
+    {
+        if ((egg.EggFlags & EggFlag.Hatched) != 0 && CanUnhatch(egg))
+        {
+            UnhatchNow(egg);
+        }
+
+        egg.EggFlags &= ~EggFlag.Hatched;
     }
 
     /// <summary>Exult <c>Egg_object::unhatch</c>.</summary>
@@ -517,7 +542,7 @@ public sealed class EggHatcher
         }
         else
         {
-            var path = _map.FindPathEgg(eggnum);
+            var path = _map.FindPathEgg(eggnum, new TileCoord(egg.Tx, egg.Ty, egg.Tz));
             if (path is null)
             {
                 GD.Print($"teleport egg {eggnum}: no path egg");
@@ -529,6 +554,12 @@ public sealed class EggHatcher
 
         LastMessage = $"teleport {obj.Tx},{obj.Ty} → {pos.Tx},{pos.Ty} lift {pos.Tz}";
         GD.Print(LastMessage);
+        if (TeleportParty is { } teleport)
+        {
+            teleport(pos);
+            return;
+        }
+
         _map.MoveObject(obj, pos.Tx, pos.Ty, pos.Tz);
         Party?.FollowTeleport();
         // Exult Game_window::teleport_party → Map_chunk::try_all_eggs (dice roll, no must).
@@ -545,10 +576,30 @@ public sealed class EggHatcher
 
         LastMessage = $"egg usecode 0x{fun:X3} at {egg.Tx},{egg.Ty}";
         GD.Print(LastMessage);
-        // Exult runs this on the next frame unless must; our VM has no script queue.
-        _ = must;
-        Usecode.Call(fun, egg, UsecodeEvent.EggProximity);
+        if (must)
+        {
+            Usecode.Call(fun, egg, UsecodeEvent.EggProximity);
+            return;
+        }
+
+        // Exult Usecode_egg::hatch_now: otherwise on a later frame, as a script (which calls an egg's
+        // function with egg_proximity), so the usecode of two eggs hatched by one step runs one
+        // after the other. A once-only egg is removed by the script after its usecode.
+        var once = (egg.EggFlags & EggFlag.Once) != 0;
+        var code = UsecodeValue.FromArray(once ? 3 : 2);
+        code.PutElem(0, UsecodeValue.FromInt(ScriptUsecode));
+        code.PutElem(1, UsecodeValue.FromInt(fun));
+        if (once)
+        {
+            code.PutElem(2, UsecodeValue.FromInt(ScriptRemove));
+            egg.EggFlags &= ~EggFlag.Once;
+        }
+
+        Usecode.StartScript(egg, code, UsecodeMachine.StdDelaySeconds);
     }
+
+    /// <summary>Exult <c>Ucscript::usecode</c> and <c>Ucscript::remove</c>.</summary>
+    const int ScriptUsecode = 0x55, ScriptRemove = 0x2d;
 
     void HatchButton(U7Object egg, U7Object obj)
     {

@@ -620,22 +620,43 @@ public sealed class GameMap
         return result;
     }
 
-    public U7Object? FindPathEgg(int quality)
+    /// <summary>
+    /// Exult <c>Teleport_egg::hatch_now</c>'s <c>find_nearby_eggs(vec, 275, 256, eggnum, 6)</c>:
+    /// the first path egg of this quality within 256 tiles each way of
+    /// <paramref name="near"/>, in <c>find_nearby</c>'s order (the box's
+    /// chunks row by row from its north-west corner, wrapping round the world).
+    /// </summary>
+    public U7Object? FindPathEgg(int quality, TileCoord near)
     {
-        if (!_pathEggs.TryGetValue(quality, out var list) || list.Count == 0)
+        if (!_pathEggs.TryGetValue(quality, out var list))
         {
             return null;
         }
 
+        const int delta = 256;
+        const int n = U7Constants.NumTiles;
+        var x0 = (near.Tx - delta + n) % n;
+        var y0 = (near.Ty - delta + n) % n;
+        U7Object? best = null;
+        var bestOrder = int.MaxValue;
         foreach (var e in list)
         {
-            if (!e.Removed)
+            var rx = (e.Tx - x0 + n) % n;
+            var ry = (e.Ty - y0 + n) % n;
+            if (e.Removed || rx > 2 * delta || ry > 2 * delta)
             {
-                return e;
+                continue;
+            }
+
+            var order = (ry / U7Constants.TilesPerChunk) * 1000 + rx / U7Constants.TilesPerChunk;
+            if (order < bestOrder)
+            {
+                bestOrder = order;
+                best = e;
             }
         }
 
-        return null;
+        return best;
     }
 
     /// <summary>
@@ -847,6 +868,54 @@ public sealed class GameMap
             ? (new TileCoord(door.Tx - door.DimX, door.Ty, door.Tz), new TileCoord(door.Tx + 1, door.Ty, door.Tz))
             : (new TileCoord(door.Tx, door.Ty - door.DimY, door.Tz), new TileCoord(door.Tx, door.Ty + 1, door.Tz));
         return Blocking.Test(before.Tx, before.Ty, before.Tz) && Blocking.Test(after.Tx, after.Ty, after.Tz);
+    }
+
+    /// <summary>
+    /// Exult <c>Map_chunk::gravity</c>: once the tiles of an area are free
+    /// from <paramref name="lift"/> up, the movable things and NPCs over it
+    /// that nothing holds up any more fall as far as they can, and what stood
+    /// on them in turn.
+    /// </summary>
+    public void Gravity(int x, int y, int w, int h, int lift)
+    {
+        var dropped = new List<U7Object>();
+        for (var cy = y / U7Constants.TilesPerChunk; cy <= (y + h - 1) / U7Constants.TilesPerChunk; cy++)
+        {
+            for (var cx = x / U7Constants.TilesPerChunk; cx <= (x + w - 1) / U7Constants.TilesPerChunk; cx++)
+            {
+                foreach (var obj in ObjectsInChunk(U7Constants.WrapChunk(cx), U7Constants.WrapChunk(cy)))
+                {
+                    var info = Catalog[obj.Shape];
+                    // Exult is_dragable (an IREG thing with weight), or an NPC.
+                    if (obj.Removed || obj.Container is not null ||
+                        !((obj.Kind == ObjectKind.Ireg && info.Weight > 0) || info.IsNpcClass))
+                    {
+                        continue;
+                    }
+
+                    var fx = obj.Tx - obj.DimX + 1;
+                    var fy = obj.Ty - obj.DimY + 1;
+                    if (obj.Tz >= lift && fx < x + w && x < fx + obj.DimX && fy < y + h && y < fy + obj.DimY &&
+                        !Blocking.IsBlockedArea(1, obj.Tz - 1, fx, fy, obj.DimX, obj.DimY, out var newLift,
+                            MoveFlags.Walk | MoveFlags.Swim, 0) && newLift < obj.Tz)
+                    {
+                        dropped.Add(obj);
+                    }
+                }
+            }
+        }
+
+        foreach (var obj in dropped)
+        {
+            var fx = obj.Tx - obj.DimX + 1;
+            var fy = obj.Ty - obj.DimY + 1;
+            if (!Blocking.IsBlockedArea(1, obj.Tz - 1, fx, fy, obj.DimX, obj.DimY, out var newLift,
+                    MoveFlags.Walk | MoveFlags.Swim, 100) && newLift < obj.Tz)
+            {
+                MoveObject(obj, obj.Tx, obj.Ty, newLift);
+                Gravity(fx, fy, obj.DimX, obj.DimY, obj.Tz + Catalog[obj.Shape].DimZ);
+            }
+        }
     }
 
     /// <summary>
@@ -1704,6 +1773,10 @@ public sealed class GameMap
     /// temporary objects (spawned monsters, their corpses, temporary items)
     /// outside the surrounding 3×3 superchunks are deleted. Returns the count.
     /// </summary>
+    /// <summary>Exult <c>is_temporary</c>: a monster, or a thing flagged temporary (made by usecode or an egg).</summary>
+    public static bool IsTemporary(U7Object obj) =>
+        obj.IsActor ? obj.NpcNum < 0 : obj.Kind == ObjectKind.Ireg && obj.GetFlag(U7.Actors.ObjFlag.Temporary);
+
     public int CacheOut(int avatarTx, int avatarTy)
     {
         const int T = U7Constants.TilesPerSuperchunk;
@@ -1734,8 +1807,7 @@ public sealed class GameMap
                 for (var i = list.Count - 1; i >= 0; i--)
                 {
                     var obj = list[i];
-                    var temp = obj.IsActor ? obj.NpcNum < 0 : obj.Kind == ObjectKind.Ireg && obj.GetFlag(U7.Actors.ObjFlag.Temporary);
-                    if (temp && !obj.Removed)
+                    if (IsTemporary(obj) && !obj.Removed)
                     {
                         RemoveObject(obj);
                         removed++;

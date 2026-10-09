@@ -10,6 +10,7 @@ public sealed class StatsGump : Gump
 {
     static readonly int[] TextY = [17, 26, 35, 46, 55, 67, 76, 86, 95, 104];
     const int TextX = 123;
+    const int OinkX = 96;
 
     public StatsGump(U7Object owner, int x, int y)
         : base(owner, x, y, U7Constants.GumpStats)
@@ -18,6 +19,8 @@ public sealed class StatsGump : Gump
     }
 
     public override U7Object? FindObject(GumpView view, int mx, int my) => null;
+
+    public override bool ShowsContents => false;
 
     public override bool Add(GumpView view, U7Object obj, int mx, int my) => false;
 
@@ -63,7 +66,15 @@ public sealed class StatsGump : Gump
         }
         for (var i = 0; i < stats.Length && i < TextY.Length; i++)
         {
-            view.DrawFontNumRight(U7Constants.StatsFont, stats[i], X + TextX, Y + TextY[i]);
+            if (Manager.FailedCopyProtection())
+            {
+                // Exult Stats_gump::paint after the failed copy protection.
+                view.DrawFontString(U7Constants.StatsFont, U7.Usecode.UsecodeMachine.Oink, X + OinkX, Y + TextY[i]);
+            }
+            else
+            {
+                view.DrawFontNumRight(U7Constants.StatsFont, stats[i], X + TextX, Y + TextY[i]);
+            }
         }
     }
 }

@@ -49,6 +49,8 @@ public partial class U7Game : Node2D
     MouseCursor _cursor = null!;
     /// <summary>Exult <c>run_endgame</c>: once it runs, the game is over.</summary>
     Endgame? _endgame;
+    /// <summary>Exult <c>BG_Game::new_game</c>'s screen while it is shown: the game waits for the avatar's name.</summary>
+    NewGameView? _newGame;
     MusicPlayer _music = null!;
     PartyManager _party = null!;
     CombatEngine _combat = null!;
@@ -64,6 +66,16 @@ public partial class U7Game : Node2D
     /// <summary>The left button went down on open ground: holding it walks the avatar.</summary>
     bool _walkPress;
     ulong _walkPressMsec;
+    /// <summary>The right button went down to walk: holding it steers (Exult's main loop calls <c>start_actor</c>).</summary>
+    bool _rightWalk;
+    /// <summary>Exult <c>right_on_gump</c>: the right button went down on a gump in gump mode, which closes it when let go.</summary>
+    bool _rightOnGump;
+    /// <summary>Exult <c>last_b3_click</c>: when the right button was last let go.</summary>
+    ulong _lastRightUpMsec;
+    /// <summary>Exult <c>show_items_time</c>: when a left click names what it hit, 0 if none waits.</summary>
+    ulong _showItemsMsec;
+    Vector2I _showItemsVirt;
+    Vector2 _showItemsWorld;
     /// <summary>A walking key is held.</summary>
     bool _keyWalking;
     int _lastSchunk = -1;
@@ -120,7 +132,7 @@ public partial class U7Game : Node2D
             }
 
             var schedTable = ScheduleTable.Load();
-            _schedules = new ScheduleRunner(_map, avatar, _npcs, schedTable, _clock, restore: U7Paths.GameDatOverride is not null);
+            _schedules = new ScheduleRunner(_map, avatar, _npcs, schedTable, _clock);
             var usecodeDat = UsecodeDat.Read();
             _party = new PartyManager(_map, avatar, _npcs) { Schedules = _schedules };
             _party.LinkParty(usecodeDat?.Party);
@@ -188,7 +200,14 @@ public partial class U7Game : Node2D
 
             _gumps = new GumpManager(_map, avatar);
             _gumps.ActivateUsecode = obj => RunUsecode(obj);
-            _gumps.DroppedInWorld = obj => _eggs.ActivateSomethingOn(obj);
+            _gumps.DropOnMap = DropOnMap;
+            _gumps.LiftedFromWorld = (obj, drag) =>
+            {
+                // Exult Dragging_info::drop: the eggs where it was, and what stood on it falls.
+                var old = new TileCoord(drag.OldTx, drag.OldTy, drag.OldTz);
+                _eggs.ActivateAt(obj, old, old.Tx, old.Ty);
+                _map.Gravity(old.Tx - obj.DimX + 1, old.Ty - obj.DimY + 1, obj.DimX, obj.DimY, old.Tz + _catalog[obj.Shape].DimZ);
+            };
             _combat.Guards = new Guards(_map, avatar, _combat, _schedules, _party)
             {
                 InDungeon = () => _lighting.InDungeon,
@@ -233,7 +252,7 @@ public partial class U7Game : Node2D
 
             var layer = new CanvasLayer { Name = "HUD", Layer = 20 };
             AddChild(layer);
-            layer.AddChild(new BarkOverlay { Name = "Barks", World = _world });
+            layer.AddChild(new BarkOverlay { Name = "Barks", World = _world, Gumps = _gumpView });
             _conversation = new ConversationPanel { Name = "Conversation", Shapes = _shapes };
             layer.AddChild(_conversation);
             // Over the game's picture (world, gumps, barks, conversation); the debug lines stay on top.
@@ -308,6 +327,16 @@ public partial class U7Game : Node2D
             }
 
             _map.PendingScripts.Clear();
+            _usecode.TeleportParty = t => TeleportParty(t);
+            _eggs.TeleportParty = t => TeleportParty(t);
+            _usecode.AvatarTeleported = (fromTx, fromTy) =>
+            {
+                // Exult move_object of the avatar: set_action(nullptr), center_view, try_all_eggs.
+                _avatar.ClearPath();
+                _cameraTile = null;
+                _viewTile = null;
+                _eggs.Activate(_avatar.Avatar, -1, -1);
+            };
             _usecode.AvatarMovedByScript = actor =>
             {
                 _eggs.Activate(actor, actor.Tx, actor.Ty);
@@ -381,6 +410,7 @@ public partial class U7Game : Node2D
                 _usecode.Call(fun, caster, UsecodeEvent.DoubleClick);
                 _conversation.Refresh();
             };
+            _gumps.FailedCopyProtection = () => _usecode.FailedCopyProtection;
             UsecodeAction.Call = (fun, item, eventId) =>
             {
                 if (!_usecode.InUsecode && !_usecode.WaitingForChoice)
@@ -439,6 +469,7 @@ public partial class U7Game : Node2D
             SitAction.Say = _usecode.Bark;
             _schedules.CanSpeak = _combat.CanSpeak;
             _schedules.InUsecodeControl = _usecode.InUsecodeControl;
+            _schedules.Start(restore: U7Paths.GameDatOverride is not null);
             _conversation.Machine = _usecode;
             _gumpView.ShownBook = () => _usecode is { Wait: UsecodeWait.BookPage } vm ? vm.Book : null;
             _gumpView.ShownPicture = () => _usecode is { Wait: UsecodeWait.Picture or UsecodeWait.WizardEye } vm ? vm.Picture : null;
@@ -505,7 +536,17 @@ public partial class U7Game : Node2D
             }
 
             GD.Print($"eggs within 80 tiles of avatar: {eggNear} (map total {_map.Eggs.Count})");
-            _eggs.Activate(avatar, -1, -1);
+            // Exult BG_Game::new_game: a new game asks for the avatar's name and sex first, and the
+            // opening (the eggs round the avatar) waits for them. The console names it itself (avatar).
+            if (U7Paths.GameDatOverride is null && string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("U7_AGENT")))
+            {
+                ShowNewGame();
+            }
+            else
+            {
+                _eggs.Activate(avatar, -1, -1);
+            }
+
             AgentInit();
 
             _ready = true;
@@ -535,6 +576,14 @@ public partial class U7Game : Node2D
         // Also skip the last frame of a scene being replaced by a load.
         if (!_ready || !IsInsideTree())
         {
+            return;
+        }
+
+        // Exult BG_Game::new_game: nothing else runs until the avatar is named.
+        if (_newGame is not null)
+        {
+            Vector2I? noWalk = null;
+            AgentUpdate(delta, ref noWalk);
             return;
         }
 
@@ -585,6 +634,7 @@ public partial class U7Game : Node2D
             if (_lastChunk.Cx >= 0)
             {
                 _effects.RemoveWeather(new TileCoord(avPos.Tx, avPos.Ty, avPos.Tz), 120);
+                EmulateCache(_lastChunk, chunk);
             }
 
             _lastChunk = chunk;
@@ -613,24 +663,24 @@ public partial class U7Game : Node2D
             {
                 if (tile.Tx != _avatar.Avatar.Tx || tile.Ty != _avatar.Avatar.Ty)
                 {
-                    var fromTx = _avatar.Avatar.Tx;
-                    var fromTy = _avatar.Avatar.Ty;
-                    _map.MoveObject(_avatar.Avatar, tile.Tx, tile.Ty, _avatar.Avatar.Tz);
-                    _party.FollowTeleport();
-                    _eggs.Activate(_avatar.Avatar, fromTx, fromTy);
+                    // Exult's cheat teleport.
+                    TeleportParty(tile);
                 }
-            }
-            else if (_walkPress && _barges.Moving is { } steered)
-            {
-                // Exult start_actor in barge mode: the barge heads for the cursor instead.
-                SteerBarge(steered, tile, MouseWalkSpeed(world));
-                _bargeMouse = true;
             }
             else if (_walkPress)
             {
-                // Exult start_actor: holding the button steers toward the cursor.
-                _avatar.Steer(world, MouseWalkSpeed(world));
+                StartActor(world);
             }
+        }
+        else if (canWalk && _rightWalk && !_rightOnGump && RightHeld)
+        {
+            StartActor(MouseWorld());
+        }
+
+        if (_showItemsMsec != 0 && Time.GetTicksMsec() > _showItemsMsec)
+        {
+            _showItemsMsec = 0;
+            ShowItems(_showItemsVirt, _showItemsWorld);
         }
 
         KeyboardWalk(canWalk);
@@ -649,7 +699,7 @@ public partial class U7Game : Node2D
         if (!Input.IsMouseButtonPressed(MouseButton.Left))
         {
             _suppressWalk = false;
-            if (_bargeMouse)
+            if (_bargeMouse && !_rightWalk)
             {
                 // Exult stop_actor.
                 _bargeMouse = false;
@@ -761,7 +811,7 @@ public partial class U7Game : Node2D
         var extra = _usecode is { HudMessage.Length: > 0 } ? "" : _statusExtra;
         hud.Text =
             $"Ultima VII  {_clock.HudText()}  tile {av.Tx},{av.Ty}  lift {av.Tz}  zoom {_zoom:0.#}×\n" +
-            $"WASD/arrows walk · I inventory · C combat · F4 invincible · [ ] hour · click walk · double-click / E · F2 debug · F3 arena · PgUp/PgDn lift · M music · F5/F9 save/load · F6 die · Home Trinsic\n" +
+            $"WASD/arrows walk · I inventory · C combat · F4 invincible · [ ] hour · right or left button walk · click name · double-click / E · F2 debug · F3 arena · PgUp/PgDn lift · M music · F5/F9 save/load · F6 die · Home Trinsic\n" +
             $"hp {av.GetProp(ActorProp.Health)}  {(_combat.InCombat ? "combat" : "peace")}{_party.HudText()}" +
             (av.IsDead ? "  dead" : "") +
             (_combat.AvatarInvincible ? "  invincible" : "") +
@@ -783,7 +833,7 @@ public partial class U7Game : Node2D
     public override void _UnhandledInput(InputEvent @event)
     {
         // Exult's flash_shape holds the game (SDL_Delay): nothing answers the mouse or keys meanwhile.
-        if (!_ready || _cursor.Holding)
+        if (!_ready || _cursor.Holding || _newGame is not null)
         {
             return;
         }
@@ -796,13 +846,26 @@ public partial class U7Game : Node2D
 
         if (@event is InputEventMouseButton mb)
         {
+            if (mb is { ButtonIndex: MouseButton.Right, Pressed: false })
+            {
+                // Letting go ends a right-button walk or gump click, whatever came up meanwhile.
+                RightButtonUp(_gumpView.MouseVirtual(), MouseWorld());
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             if (HandleBookClick(mb))
             {
                 return;
             }
 
             var virt = _gumpView.MouseVirtual();
-            if (mb.ButtonIndex == MouseButton.WheelUp && mb.Pressed)
+            if (mb is { ButtonIndex: MouseButton.Right, Pressed: true })
+            {
+                RightButtonDown(virt, MouseWorld());
+                GetViewport().SetInputAsHandled();
+            }
+            else if (mb.ButtonIndex == MouseButton.WheelUp && mb.Pressed)
             {
                 _zoom = Mathf.Clamp(_zoom + 0.5f, 1f, 8f);
                 _camera.Zoom = new Vector2(_zoom, _zoom);
@@ -814,14 +877,16 @@ public partial class U7Game : Node2D
                 _camera.Zoom = new Vector2(_zoom, _zoom);
                 _gumpView.Zoom = _zoom;
             }
-            else if (mb.Pressed && mb.ButtonIndex is MouseButton.Left or MouseButton.Right)
+            else if (mb is { ButtonIndex: MouseButton.Left, Pressed: true })
             {
-                if (mb.ButtonIndex == MouseButton.Left)
+                _walkPress = false;
+                if (mb.DoubleClick)
                 {
-                    _walkPress = false;
+                    // Exult: a double-click names nothing.
+                    _showItemsMsec = 0;
                 }
 
-                if (HandleClickOnItem(virt.X, virt.Y, mb.ButtonIndex == MouseButton.Right))
+                if (HandleClickOnItem(virt.X, virt.Y))
                 {
                     _suppressWalk = true;
                     GetViewport().SetInputAsHandled();
@@ -836,15 +901,14 @@ public partial class U7Game : Node2D
                     return;
                 }
 
-                if (_gumps.OnMouseDown(_gumpView, virt.X, virt.Y,
-                        mb.ButtonIndex == MouseButton.Right, mb.DoubleClick))
+                if (_gumps.OnMouseDown(_gumpView, virt.X, virt.Y, mb.DoubleClick))
                 {
                     _suppressWalk = true;
                     GetViewport().SetInputAsHandled();
                     return;
                 }
 
-                if (mb.ButtonIndex == MouseButton.Left && mb.DoubleClick)
+                if (mb.DoubleClick)
                 {
                     _suppressWalk = true;
                     ActivateUnderMouse();
@@ -852,30 +916,37 @@ public partial class U7Game : Node2D
                     return;
                 }
 
-                if (mb.ButtonIndex == MouseButton.Left && !mb.DoubleClick)
+                var worldObj = _world.PickObject(_camera.GetGlobalMousePosition());
+                if (worldObj is not null)
                 {
-                    var worldObj = _world.PickObject(_camera.GetGlobalMousePosition());
-                    if (worldObj is not null)
-                    {
-                        _gumps.OnWorldMouseDown(_gumpView, worldObj, virt.X, virt.Y);
-                        _suppressWalk = true;
-                        GetViewport().SetInputAsHandled();
-                    }
-                    else
-                    {
-                        _walkPress = true;
-                        _walkPressMsec = Time.GetTicksMsec();
-                    }
+                    WorldView.ShapeLocation(worldObj.Tx, worldObj.Ty, worldObj.Tz, out var hx, out var hy);
+                    var hot = WorldToVirtual(new Vector2(hx, hy));
+                    _gumps.OnWorldMouseDown(worldObj, virt.X, virt.Y, hot.X, hot.Y);
+                    _suppressWalk = true;
+                    GetViewport().SetInputAsHandled();
+                }
+                else
+                {
+                    _walkPress = true;
+                    _walkPressMsec = Time.GetTicksMsec();
                 }
             }
             else if (!mb.Pressed && mb.ButtonIndex == MouseButton.Left)
             {
-                if (_gumps.Drag is not null)
+                if (_gumps.Drag is { } drag)
                 {
-                    var tile = WorldView.WorldToTile(_camera.GetGlobalMousePosition(), _avatar.Avatar.Tz);
-                    _gumps.OnMouseUp(_gumpView, virt.X, virt.Y, tile.Tx, tile.Ty, _avatar.Avatar.Tz);
+                    var world = _camera.GetGlobalMousePosition();
+                    _gumps.OnMouseUp(_gumpView, virt.X, virt.Y);
                     _suppressWalk = true;
                     GetViewport().SetInputAsHandled();
+                    // Exult Dragging_info::drop: a thing or gump clicked, not moved, leaves the click to name it,
+                    // half a second later unless it was the first of a double-click.
+                    if (drag is { Moved: false, Button: null } && CombatSchedule.CanAct(_avatar.Avatar) && !UsecodeRunning)
+                    {
+                        _showItemsMsec = Time.GetTicksMsec() + 500;
+                        _showItemsVirt = virt;
+                        _showItemsWorld = world;
+                    }
                 }
                 else if (_walkPress)
                 {
@@ -885,9 +956,14 @@ public partial class U7Game : Node2D
         }
         else if (@event is InputEventMouseMotion)
         {
+            var virt = _gumpView.MouseVirtual();
+            if (_rightOnGump && _gumps.FindGump(virt.X, virt.Y, _gumpView) is null)
+            {
+                _rightOnGump = false;
+            }
+
             if (_gumps.Drag is not null)
             {
-                var virt = _gumpView.MouseVirtual();
                 _gumps.OnMouseMove(_gumpView, virt.X, virt.Y);
                 GetViewport().SetInputAsHandled();
             }
@@ -1027,6 +1103,244 @@ public partial class U7Game : Node2D
     }
 
     /// <summary>
+    /// Exult <c>Game_window::emulate_cache</c> when the avatar enters another
+    /// chunk: the scripts not yet started more than 4 chunks off are purged,
+    /// and in the chunks of the old 5×5 round it that are not round it any
+    /// more the eggs reset (they can hatch again) and temporary things go.
+    /// </summary>
+    void EmulateCache((int Cx, int Cy) old, (int Cx, int Cy) now)
+    {
+        _usecode?.PurgeScripts(new TileCoord(now.Cx * U7Constants.TilesPerChunk, now.Cy * U7Constants.TilesPerChunk, 0),
+            4 * U7Constants.TilesPerChunk);
+        for (var y = -2; y <= 2; y++)
+        {
+            for (var x = -2; x <= 2; x++)
+            {
+                var cx = U7Constants.WrapChunk(old.Cx + x);
+                var cy = U7Constants.WrapChunk(old.Cy + y);
+                if (ChunkDistance(cx, now.Cx) <= 2 && ChunkDistance(cy, now.Cy) <= 2)
+                {
+                    continue;
+                }
+
+                foreach (var obj in _map.ObjectsInChunk(cx, cy).ToList())
+                {
+                    if (obj.IsEgg)
+                    {
+                        _eggs.Reset(obj);
+                    }
+                    else if (GameMap.IsTemporary(obj) && !obj.Removed)
+                    {
+                        _map.RemoveObject(obj);
+                    }
+                }
+            }
+        }
+    }
+
+    static int ChunkDistance(int a, int b)
+    {
+        var d = Math.Abs(a - b) % U7Constants.NumChunks;
+        return Math.Min(d, U7Constants.NumChunks - d);
+    }
+
+    /// <summary>The gumps' virtual pixels (the screen at the world's zoom) for a world pixel, and back.</summary>
+    Vector2I WorldToVirtual(Vector2 world) =>
+        (Vector2I)(world - _camera.GlobalPosition + GetViewport().GetVisibleRect().Size / (2 * _zoom)).Floor();
+
+    Vector2 VirtualToWorld(Vector2 virt) => virt + _camera.GlobalPosition - GetViewport().GetVisibleRect().Size / (2 * _zoom);
+
+    /// <summary>
+    /// Exult <c>Dragging_info::drop_on_map</c>: a thing let go on the map.
+    /// Off the screen it is refused. Dropped on something, that may take it
+    /// (<see cref="DropOn"/>), else it is set on top if that is no higher than
+    /// 5 lifts over the avatar (the red X if the thing is taller than that,
+    /// "blocked" if only too high). Otherwise it goes down where it is shown
+    /// (<see cref="DropAtLift"/>), from the lift it was picked up at upwards,
+    /// up to 5 over the avatar and under the roof hidden over it.
+    /// </summary>
+    MapDrop DropOnMap(U7Object obj, DragState drag)
+    {
+        var screen = GetViewport().GetVisibleRect().Size / _zoom;
+        if (drag.MouseX < 0 || drag.MouseY < 0 || drag.MouseX >= screen.X || drag.MouseY >= screen.Y)
+        {
+            _cursor.Flash(MouseShape.RedX);
+            return MapDrop.Refused;
+        }
+
+        var av = _avatar.Avatar;
+        var maxLift = Math.Min(av.Tz + 5, _world.SkipAboveLift - 1);
+        var paint = VirtualToWorld(new Vector2(drag.PaintX, drag.PaintY));
+        var dropped = 0;
+        if (_world.PickObject(VirtualToWorld(new Vector2(drag.MouseX, drag.MouseY))) is { } found && found != obj)
+        {
+            if (!CheckWeight(obj, found))
+            {
+                return MapDrop.Refused;
+            }
+
+            if (DropOn(found, obj))
+            {
+                return MapDrop.Taken;
+            }
+
+            var height = _catalog[found.Shape].DimZ;
+            if (found.Tz + height <= maxLift)
+            {
+                dropped = DropAtLift(obj, paint, found.Tz + height);
+            }
+            else
+            {
+                _cursor.Flash(height > maxLift ? MouseShape.RedX : MouseShape.Blocked);
+                return MapDrop.Refused;
+            }
+        }
+
+        var oldLift = drag.FromWorld ? drag.OldTz : Inventory.Outermost(drag.OldContainer ?? av).Tz;
+        for (var lift = oldLift; dropped == 0 && lift <= maxLift; lift++)
+        {
+            dropped = DropAtLift(obj, paint, lift);
+        }
+
+        if (dropped <= 0)
+        {
+            _cursor.Flash(MouseShape.RedX);
+            return MapDrop.Refused;
+        }
+
+        return MapDrop.Placed;
+    }
+
+    /// <summary>
+    /// Exult <c>Game_window::drop_at_lift</c>: the tile under the thing's
+    /// painted spot at that lift, where it would rest (it falls up to 5
+    /// lifts, Exult <c>is_blocked</c> over its footprint) if the avatar can
+    /// reach it; it lands there and the eggs under it hatch. 1 if dropped.
+    /// (Exult also refuses a spot hidden behind a wall, judged by what is
+    /// painted over it; here only the reach decides.)
+    /// </summary>
+    int DropAtLift(U7Object obj, Vector2 paint, int atLift)
+    {
+        var tx = U7Constants.WrapTile(Mathf.FloorToInt((paint.X + atLift * 4 - 1) / U7Constants.TileSize));
+        var ty = U7Constants.WrapTile(Mathf.FloorToInt((paint.Y + atLift * 4 - 1) / U7Constants.TileSize));
+        if (_map.Blocking.IsBlockedArea(_catalog[obj.Shape].DimZ, atLift, tx - obj.DimX + 1, ty - obj.DimY + 1,
+                obj.DimX, obj.DimY, out var lift, MoveFlags.Walk, maxDrop: 5) ||
+            !FastPathClient.IsGrabable(_map, _avatar.Avatar, new TileCoord(tx, ty, lift)))
+        {
+            return 0;
+        }
+
+        _map.PlaceInWorld(obj, tx, ty, lift);
+        _eggs.ActivateSomethingOn(obj);
+        return 1;
+    }
+
+    /// <summary>
+    /// Exult <c>Game_object::drop</c> (and <c>Actor::drop</c>): a party member
+    /// takes what is dropped on it; a stack of the same kind (any frame, for
+    /// the shapes with pile frames) takes it in if they make no more than 100.
+    /// </summary>
+    bool DropOn(U7Object found, U7Object obj)
+    {
+        if (found.IsActor)
+        {
+            return found.GetFlag(ObjFlag.InParty) && Equipment.AddToActor(found, obj, _catalog, _map);
+        }
+
+        var info = _catalog[found.Shape];
+        if (found.Shape != obj.Shape || !info.HasQuantity ||
+            (!ItemQuantity.HasQuantityFrames(found.Shape) && found.Frame != obj.Frame))
+        {
+            return false;
+        }
+
+        var quantity = Inventory.GetQuantity(obj, _catalog);
+        if (Inventory.GetQuantity(found, _catalog) + quantity > U7Constants.MaxQuantity)
+        {
+            return false;
+        }
+
+        _combat.Quantities.Modify(found, quantity, out _);
+        _map.RemoveObject(obj);
+        return true;
+    }
+
+    /// <summary>Exult <c>Check_weight</c>: a party member (or what one carries) takes no more than it can carry.</summary>
+    bool CheckWeight(U7Object obj, U7Object onto)
+    {
+        var owner = Inventory.Outermost(onto);
+        if (!owner.GetFlag(ObjFlag.InParty) ||
+            (Inventory.GetWeight(owner, _catalog) + Inventory.GetWeight(obj, _catalog)) / 10 <= Inventory.GetMaxWeight(owner))
+        {
+            return true;
+        }
+
+        _cursor.Flash(MouseShape.TooHeavy);
+        return false;
+    }
+
+    /// <summary>
+    /// Exult <c>Game_window::teleport_party</c>: the avatar's walk and barge
+    /// mode end, the eggs on the tile left let go, the avatar moves and the
+    /// palette is set at once, the party (not those waiting or dead) stands
+    /// on free spots round it, and every egg round the new spot is tried
+    /// (<c>try_all_eggs</c>) unless <paramref name="skipEggs"/>.
+    /// </summary>
+    void TeleportParty(TileCoord t, bool skipEggs = false)
+    {
+        var av = _avatar.Avatar;
+        var (fromTx, fromTy) = (av.Tx, av.Ty);
+        _avatar.ClearPath();
+        _barges.SetMoving(null, av);
+        if (!skipEggs)
+        {
+            _eggs.UnhatchLeaving(av, t, fromTx, fromTy);
+        }
+
+        _map.MoveObject(av, t.Tx, t.Ty, t.Tz);
+        _cameraTile = null;
+        _viewTile = null;
+        _lighting.ResetPalette();
+        _party.FollowTeleport();
+        if (!skipEggs)
+        {
+            _eggs.Activate(av, -1, -1);
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>BG_Game::new_game</c>: the avatar's name and sex are chosen on a
+    /// screen over everything, the hand for the cursor; then the opening begins.
+    /// </summary>
+    void ShowNewGame()
+    {
+        var layer = new CanvasLayer { Name = "NewGame", Layer = 25 };
+        AddChild(layer);
+        _newGame = new NewGameView(_shapes) { Name = "NewGameView" };
+        _newGame.Finished = (name, female) =>
+        {
+            SetAvatar(name, female);
+            layer.QueueFree();
+            _newGame = null;
+            _eggs.Activate(_avatar.Avatar, -1, -1);
+        };
+        layer.AddChild(_newGame);
+        _cursor.Shape = MouseShape.Hand;
+    }
+
+    /// <summary>
+    /// The new game's choice, as Exult's <c>Actor::read</c> applies it to NPC 0
+    /// (<c>set_avname</c>, <c>set_avsex</c>) and <c>read_npcs</c> its shape.
+    /// </summary>
+    void SetAvatar(string name, bool female)
+    {
+        var av = _avatar.Avatar;
+        av.NpcName = name;
+        AvatarLook.SetFemale(av, female);
+        AvatarLook.SetActorShape(_map, av);
+    }
+
+    /// <summary>
     /// Exult <c>UI_run_endgame</c>: the game stops, and the endgame plays on a
     /// screen over everything, without the mouse cursor (Exult paints none).
     /// </summary>
@@ -1085,17 +1399,16 @@ public partial class U7Game : Node2D
     }
 
     /// <summary>
-    /// Letting go of the walking button. Exult walks with the right button:
-    /// holding it steers and letting go stops, and a double right-click finds
-    /// a path to the spot. Here the left button does both: a quick click
-    /// finds a path (Exult <c>start_actor_along_path</c>), letting go after
-    /// holding stops (<c>stop_actor</c>).
+    /// Letting go of the left button after it went down on open ground. The
+    /// left button walks too, the user's pick (2026-10-09) besides Exult's
+    /// right button: a quick click finds a path (Exult
+    /// <c>start_actor_along_path</c>), letting go after holding stops
+    /// (<c>stop_actor</c>). Exult's left click on open ground names nothing.
     /// </summary>
     void EndWalkPress()
     {
         _walkPress = false;
-        var canWalk = _usecode is not ({ InUsecode: true } or { WaitingForChoice: true }) && !_gumps.GumpMode &&
-                      !_avatar.Avatar.IsDead && !ObjFlag.DontMoveMode(_avatar.Avatar);
+        var canWalk = !UsecodeRunning && !_gumps.GumpMode && !_avatar.Avatar.IsDead && !ObjFlag.DontMoveMode(_avatar.Avatar);
         if (!canWalk || Input.IsKeyPressed(Key.Shift))
         {
             return;
@@ -1103,13 +1416,64 @@ public partial class U7Game : Node2D
 
         if (Time.GetTicksMsec() - _walkPressMsec < QuickClickMsec)
         {
-            if (_barges.Moving is not null)
-            {
-                return; // Exult start_actor_along_path: "For now, don't do barges."
-            }
+            StartActorAlongPath(_camera.GetGlobalMousePosition());
+        }
+        else
+        {
+            StopActor();
+        }
+    }
 
-            var world = _camera.GetGlobalMousePosition();
+    const ulong QuickClickMsec = 300;
+
+    /// <summary>Exult: two right clicks let go within half a second are a double-click.</summary>
+    const ulong DoubleRightMsec = 500;
+
+    /// <summary>Usecode runs or waits for an answer (Exult's conversations hold its event loop).</summary>
+    bool UsecodeRunning => _usecode is { InUsecode: true } or { WaitingForChoice: true };
+
+    /// <summary>The console's mouse: the view's centre plus this, in world pixels (a held mouse stays put as the view moves).</summary>
+    Vector2? _agentMouse;
+    /// <summary>The console holds the right button.</summary>
+    bool _agentRightHeld;
+
+    Vector2 MouseWorld() => _agentMouse is { } m ? _camera.GlobalPosition + m : _camera.GetGlobalMousePosition();
+
+    bool RightHeld => _agentRightHeld || Input.IsMouseButtonPressed(MouseButton.Right);
+
+    /// <summary>
+    /// Exult <c>start_actor</c>: the avatar heads for the cursor, aiming a few
+    /// tiles ahead; in barge mode the barge does.
+    /// </summary>
+    void StartActor(Vector2 world)
+    {
+        if (_barges.Moving is { } barge)
+        {
+            SteerBarge(barge, WorldView.WorldToTile(world, _avatar.Avatar.Tz), MouseWalkSpeed(world));
+            _bargeMouse = true;
+        }
+        else
+        {
+            _avatar.Steer(world, MouseWalkSpeed(world));
+        }
+    }
+
+    /// <summary>Exult <c>start_actor_along_path</c>: an A* walk to the tile under the cursor ("For now, don't do barges").</summary>
+    void StartActorAlongPath(Vector2 world)
+    {
+        if (_barges.Moving is null)
+        {
             _avatar.PathTo(WorldView.WorldToTile(world, _avatar.Avatar.Tz), MouseWalkSpeed(world));
+        }
+    }
+
+    /// <summary>Exult <c>stop_actor</c>: the barge in barge mode, else the avatar.</summary>
+    void StopActor()
+    {
+        _bargeMouse = false;
+        if (_barges.Moving is { } barge)
+        {
+            barge.Stop();
         }
         else
         {
@@ -1117,7 +1481,113 @@ public partial class U7Game : Node2D
         }
     }
 
-    const ulong QuickClickMsec = 300;
+    /// <summary>
+    /// Exult's right button going down: on a gump in gump mode it marks the
+    /// gump to close when let go (<c>right_on_gump</c>, Exult's default
+    /// <c>right_click_closes_gumps</c>); elsewhere the avatar heads for the
+    /// cursor (<c>start_actor</c>), and holding the button keeps it going.
+    /// </summary>
+    void RightButtonDown(Vector2I virt, Vector2 world)
+    {
+        if (ObjFlag.DontMoveMode(_avatar.Avatar) || UsecodeRunning)
+        {
+            return;
+        }
+
+        if (_gumps.Drag is null && _gumps.GumpMode && _gumps.FindGump(virt.X, virt.Y, _gumpView) is not null)
+        {
+            _rightOnGump = true;
+        }
+        else if (CombatSchedule.CanAct(_avatar.Avatar) && !_gumps.GumpMode && _gumps.Drag is null)
+        {
+            _rightWalk = true;
+            StartActor(world);
+        }
+    }
+
+    /// <summary>
+    /// Exult's right button let go: in gump mode the gump it went down on
+    /// closes, if the mouse is still on it; otherwise the avatar stops
+    /// (<c>stop_actor</c>), or, let go a second time within half a second,
+    /// walks a path to the spot (Exult's default <c>allow_right_pathfind</c>,
+    /// "double": <c>start_actor_along_path</c>).
+    /// </summary>
+    void RightButtonUp(Vector2I virt, Vector2 world)
+    {
+        var now = Time.GetTicksMsec();
+        var walking = _rightWalk;
+        _rightWalk = false;
+        if (_gumps.GumpMode)
+        {
+            if (_rightOnGump && !UsecodeRunning && _gumps.FindGump(virt.X, virt.Y, _gumpView) is { } gump)
+            {
+                gump.Close();
+            }
+        }
+        else if (!ObjFlag.DontMoveMode(_avatar.Avatar) && !UsecodeRunning && CombatSchedule.CanAct(_avatar.Avatar))
+        {
+            if (now - _lastRightUpMsec < DoubleRightMsec)
+            {
+                StartActorAlongPath(world);
+            }
+            else
+            {
+                StopActor();
+            }
+        }
+        else if (walking)
+        {
+            StopActor();
+        }
+
+        _rightOnGump = false;
+        _lastRightUpMsec = now;
+    }
+
+    /// <summary>
+    /// Exult <c>Game_window::show_items</c>: a left click names what it hit;
+    /// in a gump the thing under the mouse, else the gump's container or
+    /// actor; in the world the thing on top. Nothing on open ground.
+    /// </summary>
+    U7Object? ShowItems(Vector2I virt, Vector2 world)
+    {
+        if (UsecodeRunning)
+        {
+            return null;
+        }
+
+        var gump = _gumps.FindGump(virt.X, virt.Y, _gumpView);
+        var obj = gump is not null ? gump.FindObject(_gumpView, virt.X, virt.Y) ?? gump.ContOrActor : _world.PickObject(world);
+        if (obj is not null)
+        {
+            ShowName(obj);
+        }
+
+        return obj;
+    }
+
+    /// <summary>
+    /// Exult <c>show_items</c>' text over a thing: its name (Exult
+    /// <c>Get_object_name</c>: the avatar is "yourself"), "Oink!" for the avatar
+    /// and things after the failed copy protection. As Exult's
+    /// <c>add_text</c>, a thing already showing a text keeps it.
+    /// </summary>
+    string ShowName(U7Object obj)
+    {
+        var av = _avatar.Avatar;
+        var name = obj == av ? TextMessages.MiscName(TextMessages.Yourself) : ObjectNames.Get(obj, _catalog);
+        if (_usecode is { FailedCopyProtection: true } && (obj == av || !obj.IsActor))
+        {
+            name = UsecodeMachine.Oink;
+        }
+
+        if (name.Length > 0 && (obj.BarkText.Length == 0 || obj.BarkUntilMsec < Time.GetTicksMsec()))
+        {
+            obj.Bark(name);
+        }
+
+        return name;
+    }
 
     /// <summary>Exult <c>Mouse::set_speed_cursor</c>'s speed for the cursor at this world point.</summary>
     int MouseWalkSpeed(Vector2 world) => SpeedCursor(world).Speed;
@@ -1330,9 +1800,9 @@ public partial class U7Game : Node2D
         return true;
     }
 
-    bool HandleClickOnItem(int mx, int my, bool right)
+    bool HandleClickOnItem(int mx, int my)
     {
-        if (_usecode is not { Wait: UsecodeWait.ClickOnItem } || right)
+        if (_usecode is not { Wait: UsecodeWait.ClickOnItem })
         {
             return false;
         }
@@ -1407,10 +1877,14 @@ public partial class U7Game : Node2D
             return;
         }
 
-        // Exult Actor::activate: only the avatar shows its inventory; NPCs and monsters run their usecode.
+        // Exult Actor::activate: the avatar shows its inventory, NPCs and monsters run their usecode.
         if (obj.IsActor && obj.NpcNum != 0)
         {
-            RunUsecode(obj);
+            if (!ShowPartyInventory(obj))
+            {
+                RunUsecode(obj);
+            }
+
             return;
         }
 
@@ -1446,6 +1920,21 @@ public partial class U7Game : Node2D
         return true;
     }
 
+    /// <summary>
+    /// Exult <c>Actor::activate</c>'s <c>show_party_inv</c>: with gumps open or
+    /// in combat, a party member shows its inventory instead of talking.
+    /// </summary>
+    bool ShowPartyInventory(U7Object npc)
+    {
+        if (!_party.IsInParty(npc) || !(_gumps.ShowingGumps || _combat.InCombat))
+        {
+            return false;
+        }
+
+        _gumps.ShowInventory(npc);
+        return true;
+    }
+
     void RunUsecode(U7Object obj)
     {
         if (_usecode is null)
@@ -1471,6 +1960,11 @@ public partial class U7Game : Node2D
         if (fun < 0)
         {
             fun = UsecodeMachine.GetShapeFun(obj.Shape);
+        }
+
+        if (obj.IsActor && obj != _avatar.Avatar && _usecode.FailedCopyProtection)
+        {
+            fun = UsecodeMachine.FailCopyProtectionUsecode;
         }
 
         _statusExtra = obj.NpcNum >= 0

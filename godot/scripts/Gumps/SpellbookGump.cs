@@ -41,6 +41,11 @@ public sealed class SpellbookGump : Gump
 
     public U7Object Book => Owner!;
 
+    /// <summary>Exult's <c>Spelltype_gump</c> has no container: a click on the book names nothing.</summary>
+    public override U7Object? ContOrActor => null;
+
+    public override bool ShowsContents => false;
+
     public SpellbookGump(U7Object book, int x, int y, VgaShapeFile gumpsVga, int[] avail)
         : base(book, x, y, BookShape)
     {

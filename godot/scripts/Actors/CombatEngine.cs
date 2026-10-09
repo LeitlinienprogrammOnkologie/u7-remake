@@ -24,6 +24,9 @@ public sealed class CombatEngine
     readonly AmmoTable _ammo = AmmoTable.Load();
     readonly MonsterEquipment _equipment = MonsterEquipment.Load();
     ItemQuantity? _quantities;
+
+    /// <summary>Quantities with the weapon and ammo tables (pile frames).</summary>
+    public ItemQuantity Quantities => _quantities ??= new ItemQuantity(_catalog, _map, _weapons, _ammo);
     readonly List<Missile> _missiles = new();
     readonly List<HomingMissile> _homing = new();
     readonly Dictionary<U7Object, MissileLauncher> _launchers = new();
@@ -381,7 +384,7 @@ public sealed class CombatEngine
             return;
         }
 
-        var quantities = _quantities ??= new ItemQuantity(_catalog, _map, _weapons, _ammo);
+        var quantities = Quantities;
         foreach (var elem in rec)
         {
             if (elem.Shape <= 0 || 1 + _rng.Next(100) > elem.Probability)

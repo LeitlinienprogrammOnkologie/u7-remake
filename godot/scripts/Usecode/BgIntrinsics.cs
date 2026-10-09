@@ -142,7 +142,7 @@ public sealed class BgIntrinsics
             0x4b => SetAttackMode(p),
             0x4c => SetOppressor(p),
             0x4d => Clone(p),
-            0x5a => UsecodeValue.FromInt(0), // is_pc_female: male default
+            0x5a => UsecodeValue.FromInt(AvatarLook.IsFemale(_vm.Avatar) ? 1 : 0), // is_pc_female
             0x5e => GetArraySize(p),
             0x61 => ApplyDamage(p),
             0x68 => UsecodeValue.FromInt(1), // mouse_exists
@@ -289,6 +289,12 @@ public sealed class BgIntrinsics
         if (shape < 0)
         {
             return Zero();
+        }
+
+        if (shape == AvatarLook.FaceShape)
+        {
+            // Exult get_face_shape: face 0 is the avatar's, in its sex's frame (the NPC's if one was given).
+            frame = AvatarLook.FaceFrame(AvatarLook.IsFemale(item is { IsActor: true } ? item : _vm.Avatar));
         }
 
         // The panel names a speaker the player already knows (Exult sets met here,
@@ -526,22 +532,16 @@ public sealed class BgIntrinsics
         return UsecodeValue.FromInt(new TileCoord(a.Tx, a.Ty, a.Tz).Distance2d(new TileCoord(b.Tx, b.Ty, b.Tz)));
     }
 
+    /// <summary>
+    /// Exult <c>Usecode_internal::find_direction</c> (<c>find_direction</c>,
+    /// <c>direction_from</c>): 0 north, clockwise, from one place to the other,
+    /// "treated as cartesian": <c>Get_direction(t1.ty - t2.ty, t2.tx - t1.tx)</c>.
+    /// </summary>
     UsecodeValue FindDirection(UsecodeValue[] p)
     {
         var from = PositionOf(p[0]);
         var to = PositionOf(p[1]);
-        var dy = from.Ty - to.Ty;
-        var dx = to.Tx - from.Tx;
-        // Exult Get_direction(deltay, deltax): 0 N … clockwise? Actually
-        // "Treat as cartesian" Get_direction(t1.ty - t2.ty, t2.tx - t1.tx).
-        var angle = Math.Atan2(dx, -dy); // 0 = north
-        var dir = (int)Math.Round(angle / (Math.PI / 4));
-        if (dir < 0)
-        {
-            dir += 8;
-        }
-
-        return UsecodeValue.FromInt(dir & 7);
+        return UsecodeValue.FromInt(U7.Actors.ActorWalker.Direction(from.Ty - to.Ty, to.Tx - from.Tx));
     }
 
     TileCoord PositionOf(UsecodeValue v)
@@ -871,6 +871,7 @@ public sealed class BgIntrinsics
         return UsecodeValue.FromInt(1);
     }
 
+    /// <summary>Exult <c>UI_get_npc_name</c>: names of an object or an array of them (the missing left out).</summary>
     UsecodeValue GetNpcName(UsecodeValue[] p)
     {
         if (p[0].IsArray)
@@ -878,10 +879,9 @@ public sealed class BgIntrinsics
             var names = new List<UsecodeValue>();
             for (var i = 0; i < p[0].ArraySize; i++)
             {
-                var n = NpcNameOf(_vm.GetItem(p[0].GetElem(i)));
-                if (n.Length > 0)
+                if (_vm.GetItem(p[0].GetElem(i)) is { } item)
                 {
-                    names.Add(UsecodeValue.FromString(n));
+                    names.Add(UsecodeValue.FromString(NpcNameOf(item)));
                 }
             }
 
@@ -894,28 +894,27 @@ public sealed class BgIntrinsics
             return arr;
         }
 
-        return UsecodeValue.FromString(NpcNameOf(_vm.GetItem(p[0])));
+        return UsecodeValue.FromString(_vm.GetItem(p[0]) is { } one ? NpcNameOf(one) : UnknownName);
     }
 
-    string NpcNameOf(U7Object? item)
+    const string UnknownName = "??name??";
+
+    /// <summary>
+    /// Exult <c>get_npc_name</c>'s name: an actor's own (Exult
+    /// <c>get_npc_name</c>; the avatar, who is given no name at a new game,
+    /// is "Avatar"), or its shape's; a thing's as a click shows it
+    /// (<c>get_name</c>).
+    /// </summary>
+    string NpcNameOf(U7Object item)
     {
-        if (item is null)
+        if (!item.IsActor)
         {
-            return "";
+            return ObjectNames.OfThing(item, _vm.Catalog);
         }
 
-        if (!string.IsNullOrEmpty(item.NpcName))
-        {
-            return item.NpcName;
-        }
-
-        if (item.NpcNum == 0 || item == _vm.Avatar)
-        {
-            return "Avatar";
-        }
-
-        var name = _vm.Catalog[item.Shape].Name;
-        return string.IsNullOrEmpty(name) ? $"shape {item.Shape}" : name;
+        return (item.NpcNum == 0 || item == _vm.Avatar) && item.NpcName.Length == 0
+            ? "Avatar"
+            : ObjectNames.NpcName(item, _vm.Catalog);
     }
 
     /// <summary>Exult <c>UI_is_npc</c>: any actor, monsters included.</summary>
@@ -1098,10 +1097,7 @@ public sealed class BgIntrinsics
         var t = stone.VirtueTarget;
         if (t.Tx > 0 || t.Ty > 0)
         {
-            _vm.Map.MoveObject(av, t.Tx, t.Ty, t.Tz);
-            _vm.Party?.FollowTeleport();
-            _vm.Lighting?.ResetPalette();
-            _vm.Eggs?.Activate(av, -1, -1);
+            _vm.TeleportParty?.Invoke(t);
         }
 
         return Zero();
@@ -1193,7 +1189,7 @@ public sealed class BgIntrinsics
 
         if (barks && view.HasPoint(new Godot.Vector2I(npc.Tx, npc.Ty)))
         {
-            npc.Bark(ArmageddonCries[_vm.Random(ArmageddonCries.Length) - 1]);
+            _vm.Bark(npc, ArmageddonCries[_vm.Random(ArmageddonCries.Length) - 1]);
         }
 
         var layDown = UsecodeValue.FromArray(6);
@@ -1572,14 +1568,33 @@ public sealed class BgIntrinsics
         var tz = loc.IsArray && loc.ArraySize > 2 ? (int)loc.GetElem(2).IntValue : 0;
         if (p[0].IntValue == -357)
         {
-            _vm.Map.MoveObject(_vm.Avatar, tx, ty, tz);
+            // Exult move_object: the whole party (teleport_party).
+            if (_vm.TeleportParty is { } teleport)
+            {
+                teleport(new TileCoord(tx, ty, tz));
+            }
+            else
+            {
+                _vm.Map.MoveObject(_vm.Avatar, tx, ty, tz);
+            }
+
             return Zero();
         }
 
-        var obj = _vm.GetItem(p[0]);
-        if (obj is not null)
+        if (_vm.GetItem(p[0]) is not { } obj)
         {
-            _vm.Map.MoveObject(obj, tx, ty, tz);
+            return Zero();
+        }
+
+        var (fromTx, fromTy) = (obj.Tx, obj.Ty);
+        _vm.Map.MoveObject(obj, tx, ty, tz);
+        if (obj == _vm.Avatar)
+        {
+            _vm.AvatarTeleported?.Invoke(fromTx, fromTy);
+        }
+        else if (obj.IsActor)
+        {
+            _vm.Schedules?.ClearAction(obj);
         }
 
         return Zero();

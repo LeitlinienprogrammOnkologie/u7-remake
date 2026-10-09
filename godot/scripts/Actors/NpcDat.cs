@@ -13,8 +13,6 @@ public static class NpcDat
 {
     /// <summary>Count of fixed NPCs from the npc.dat header (needed when writing).</summary>
     public static int NumFixed { get; private set; }
-    /// <summary>Exult <c>Actor::tf_sex</c>.</summary>
-    const int TypeFlagSex = 9;
     /// <summary>Record number <see cref="LoadMonsters"/> reads spawned monsters with.</summary>
     const int MonsterNum = 1000;
 
@@ -100,6 +98,23 @@ public static class NpcDat
         }
 
         GD.Print($"npc.dat: {count} records ({num1} type1 + {num2}), spawned {spawned}, leftover {data.Length - r.I}");
+        // Saves written before 2026-10-07 hold npc.dat's raw sex flags, which a new
+        // game inverts (Exult fix_first). Iolo is a man: if his says otherwise, flip them back.
+        if (!fixFirst && npcs.Count > 1 && npcs[1] is { } iolo && AvatarLook.IsFemale(iolo))
+        {
+            foreach (var n in npcs)
+            {
+                if (n is not null)
+                {
+                    AvatarLook.SetFemale(n, !AvatarLook.IsFemale(n));
+                }
+            }
+
+            GD.Print("npc.dat: sex flags from before fix_first, flipped");
+        }
+
+        // Exult read_npcs: the avatar takes its sex's shape.
+        AvatarLook.SetActorShape(map, avatar);
         foreach (var id in new[] { 0, 1, 2, 11, 13, 14 })
         {
             if ((uint)id >= (uint)npcs.Count || npcs[id] is not { } n)
@@ -247,7 +262,7 @@ public static class NpcDat
         var tflags = r.U2();
         // Exult Actor::read: the first time round these are garbage; everyone walks.
         npc.TypeFlags = fixFirst
-            ? MoveFlags.Walk | ((tflags & (1 << TypeFlagSex)) != 0 ? 0 : 1 << TypeFlagSex)
+            ? MoveFlags.Walk | ((tflags & (1 << AvatarLook.TypeFlagSex)) != 0 ? 0 : 1 << AvatarLook.TypeFlagSex)
             : tflags;
         if (num < MonsterNum && (npc.TypeFlags & MoveFlags.All) == 0)
         {

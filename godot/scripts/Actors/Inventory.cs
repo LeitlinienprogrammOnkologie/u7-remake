@@ -9,11 +9,9 @@ namespace U7.Actors;
 /// </summary>
 public static class Inventory
 {
-    public static bool IsContainer(U7Object obj, ShapeCatalog catalog)
-    {
-        var rec = catalog[obj.Shape];
-        return rec.GumpShape >= 0 || rec.IsContainerClass || obj.IsActor;
-    }
+    /// <summary>Exult's <c>Container_game_object</c>s: container-class shapes (bodies among them) and actors.</summary>
+    public static bool IsContainer(U7Object obj, ShapeCatalog catalog) =>
+        catalog[obj.Shape].IsContainerClass || obj.IsActor;
 
     public static int GetQuantity(U7Object obj, ShapeCatalog catalog) =>
         catalog[obj.Shape].HasQuantity ? Math.Max(1, obj.Quality & 0x7f) : 1;

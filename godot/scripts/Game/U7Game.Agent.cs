@@ -23,7 +23,7 @@ public partial class U7Game
         "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | quit | die [restart] | " +
-        "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] | damage <n> [type] | arena | combat [off] | attack <id> | drag <id> | cursor <x> <y> | endgame [won|lost] | close";
+        "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] | damage <n> [type] | arena | combat [off] | attack <id> | drag <id> | cursor <x> <y> | avatar <name> [male|female] | name <id>|gump | rmouse <x> <y> <sec>|double | rclose | endgame [won|lost] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
     static bool _agentStarted;
@@ -260,20 +260,17 @@ public partial class U7Game
                 break;
             case "walkto":
             {
+                // To a free tile next to it (an actor's own tile is blocked).
                 var target = AgentTarget(arg) ?? throw new ArgumentException("no such object/npc");
-                AgentWalk(target.Tx + 1, target.Ty + 1);
+                var spot = _map.FindSpot(new TileCoord(target.Tx, target.Ty, target.Tz), 2, av) ??
+                           new TileCoord(target.Tx + 1, target.Ty + 1, target.Tz);
+                AgentWalk(spot.Tx, spot.Ty);
                 break;
             }
             case "tp":
-            {
-                var fromTx = av.Tx;
-                var fromTy = av.Ty;
-                var tz = parts.Length > 3 ? int.Parse(parts[3]) : av.Tz;
-                _map.MoveObject(av, int.Parse(parts[1]), int.Parse(parts[2]), tz);
-                _party.FollowTeleport();
-                _eggs.Activate(av, fromTx, fromTy);
+                // Exult's cheat teleport: teleport_party, every egg round the spot tried.
+                TeleportParty(new TileCoord(int.Parse(parts[1]), int.Parse(parts[2]), parts.Length > 3 ? int.Parse(parts[3]) : av.Tz));
                 break;
-            }
             case "talk":
             case "use":
             {
@@ -285,16 +282,62 @@ public partial class U7Game
                 }
 
                 var target = AgentTarget(arg) ?? throw new ArgumentException("no such object/npc");
+                if (verb == "talk")
+                {
+                    // With gumps open a party member would show its inventory (Exult Actor::activate).
+                    _gumps.CloseAll();
+                }
+
                 AgentUse(target);
                 break;
             }
             case "drop":
             {
-                // A drag out of a gump onto a tile (the whole stack): it lands there and sets off eggs under it.
+                // A drag onto the map (Exult drop_on_map), the whole stack: let go with the thing painted
+                // standing on tile x,y at lift z and the mouse over that spot. Without z, on top of what
+                // is at the tile (where it comes to rest let fall from the highest open lift up to 5 over
+                // the avatar).
                 var item = AgentTarget(parts[1]) ?? throw new ArgumentException("no such object");
-                _map.PlaceInWorld(item, int.Parse(parts[2]), int.Parse(parts[3]), parts.Length > 4 ? int.Parse(parts[4]) : 0);
-                _gumps.DroppedInWorld?.Invoke(item);
-                AgentLog($"dropped {AgentDescribe(item)}");
+                var (dx, dy) = (int.Parse(parts[2]), int.Parse(parts[3]));
+                var tz = av.Tz;
+                if (parts.Length > 4)
+                {
+                    tz = int.Parse(parts[4]);
+                }
+                else
+                {
+                    for (var from = Math.Min(av.Tz + 5, 15); from >= 0; from--)
+                    {
+                        if (!_map.Blocking.IsBlocked(Math.Max(1, _catalog[item.Shape].DimZ), from, dx, dy, out var rest,
+                                MoveFlags.Walk, maxDrop: 16, maxRise: 0))
+                        {
+                            tz = rest;
+                            break;
+                        }
+                    }
+                }
+
+                U7.Rendering.WorldView.ShapeLocation(dx, dy, tz, out var hx, out var hy);
+                var hot = WorldToVirtual(new Vector2(hx, hy));
+                var mouse = WorldToVirtual(new Vector2(hx - U7Constants.TileSize / 2f, hy - U7Constants.TileSize / 2f));
+                var drag = new DragState
+                {
+                    Object = item,
+                    Moved = true,
+                    FromWorld = item.Container is null,
+                    OldTx = item.Tx,
+                    OldTy = item.Ty,
+                    OldTz = item.Tz,
+                    OldContainer = item.Container,
+                    OldReadySlot = item.ReadySlot,
+                    PaintX = hot.X,
+                    PaintY = hot.Y,
+                    MouseX = mouse.X,
+                    MouseY = mouse.Y
+                };
+                _gumps.LiftUp(drag);
+                var result = _gumps.DropInWorld(drag);
+                AgentLog($"{result.ToString().ToLowerInvariant()} (aimed at {dx},{dy} lift {tz}): {AgentDescribe(item)}");
                 break;
             }
             case "eye":
@@ -331,12 +374,14 @@ public partial class U7Game
                 // A drag into the avatar's gump, with Exult's theft check.
                 var target = AgentTarget(arg) ?? throw new ArgumentException("no such object");
                 var okayToMove = target.GetFlag(ObjFlag.OkayToTake);
+                var lifted = AgentLiftedFrom(target);
                 if (!Equipment.AddToActor(av, target, _catalog, _map))
                 {
                     AgentLog("cannot take it (too heavy or no room)");
                     break;
                 }
 
+                lifted();
                 AgentLog($"took {AgentDescribe(target)}");
                 if (!okayToMove)
                 {
@@ -352,11 +397,14 @@ public partial class U7Game
                 var cont = AgentTarget(parts[2]) ?? throw new ArgumentException("no such container");
                 var from = item.Container;
                 var okayToMove = item.GetFlag(ObjFlag.OkayToTake);
+                var lifted = AgentLiftedFrom(item);
                 if (!Equipment.TryPlace(_map, item, cont, 8, 8, _catalog))
                 {
                     AgentLog("it does not fit");
                     break;
                 }
+
+                lifted();
 
                 AgentLog($"put {AgentDescribe(item)} into {AgentName(cont)}");
                 if (cont != from && !okayToMove)
@@ -433,7 +481,12 @@ public partial class U7Game
             }
             case "choose":
             {
-                var conv = _usecode!.Conv;
+                if (_usecode!.Wait is not (UsecodeWait.Converse or UsecodeWait.SelectMenu or UsecodeWait.SelectMenuIndex))
+                {
+                    throw new ArgumentException($"no answers wait now ({_usecode.Wait}): cont first");
+                }
+
+                var conv = _usecode.Conv;
                 var answer = arg.StartsWith('#') ? conv.Answers[int.Parse(arg[1..]) - 1]
                     : conv.Answers.FirstOrDefault(a => a.Equals(arg, StringComparison.OrdinalIgnoreCase))
                       ?? throw new ArgumentException($"no answer '{arg}'");
@@ -442,7 +495,12 @@ public partial class U7Game
                 break;
             }
             case "num":
-                _usecode!.ResumeWait(UsecodeValue.FromInt(int.Parse(arg)));
+                if (_usecode!.Wait != UsecodeWait.NumericInput)
+                {
+                    throw new ArgumentException($"no number is asked for now ({_usecode.Wait})");
+                }
+
+                _usecode.ResumeWait(UsecodeValue.FromInt(int.Parse(arg)));
                 _conversation.Refresh();
                 break;
             case "click":
@@ -541,11 +599,89 @@ public partial class U7Game
                     : "cursor unchanged");
                 break;
             }
+            case "avatar":
+            {
+                // The new game screen's choice (headless games skip it): avatar <name> [male|female].
+                var female = parts[^1] is "female";
+                var words = parts[1..].Where(w => w is not ("male" or "female")).ToArray();
+                SetAvatar(words.Length > 0 ? string.Join(' ', words) : av.NpcName, female);
+                AgentLog($"{AgentDescribe(av)}: {(AvatarLook.IsFemale(av) ? "female" : "male")}");
+                break;
+            }
+            case "name":
+            {
+                // A left click (Exult show_items): on a thing, or on the topmost gump.
+                if (arg == "gump")
+                {
+                    var gump = _gumps.Open.LastOrDefault() ?? throw new ArgumentException("no gump open");
+                    var p = AgentPointOn(gump) ?? throw new ArgumentException("no point on the gump");
+                    var named = ShowItems(p, MouseWorld());
+                    AgentLog(named is null ? "NAME nothing" : $"NAME {AgentDescribe(named)}: {named.BarkText}");
+                    break;
+                }
+
+                var target = AgentTarget(arg) ?? throw new ArgumentException("no such object");
+                AgentLog($"NAME {AgentDescribe(target)}: {ShowName(target)}");
+                break;
+            }
+            case "rmouse":
+            {
+                // The right button over a tile: held for a while (the mouse stays put on the screen as the
+                // view follows the avatar), then let go; or a double-click, a path there.
+                var tx = int.Parse(parts[1]);
+                var ty = int.Parse(parts[2]);
+                U7.Rendering.WorldView.ShapeLocation(tx, ty, av.Tz, out var px, out var py);
+                _gumps.CloseAll();
+                _agentMouse = new Vector2(px - U7Constants.TileSize / 2f, py - U7Constants.TileSize / 2f) - _camera.GlobalPosition;
+                _lastRightUpMsec = 0;
+                if (parts[3] == "double")
+                {
+                    for (var i = 0; i < 2; i++)
+                    {
+                        RightButtonDown(AgentVirt(), MouseWorld());
+                        RightButtonUp(AgentVirt(), MouseWorld());
+                    }
+
+                    _agentMouse = null;
+                    AgentAwaitArrival(tx, ty);
+                    break;
+                }
+
+                var secs = double.Parse(parts[3], System.Globalization.CultureInfo.InvariantCulture);
+                _agentRightHeld = true;
+                RightButtonDown(AgentVirt(), MouseWorld());
+                Engine.TimeScale = 4;
+                _agentElapsed = 0;
+                _agentLimit = secs + 1;
+                _agentBusy = () =>
+                {
+                    if (_agentElapsed < secs)
+                    {
+                        return true;
+                    }
+
+                    _agentRightHeld = false;
+                    RightButtonUp(AgentVirt(), MouseWorld());
+                    _agentMouse = null;
+                    return false;
+                };
+                break;
+            }
+            case "rclose":
+            {
+                // A right-click on the topmost gump (Exult right_click_closes_gumps): it closes when let go.
+                var gump = _gumps.Open.LastOrDefault() ?? throw new ArgumentException("no gump open");
+                var p = AgentPointOn(gump) ?? throw new ArgumentException("no point on the gump");
+                RightButtonDown(p, MouseWorld());
+                RightButtonUp(p, MouseWorld());
+                AgentLog(_gumps.Open.Contains(gump) ? "the gump is still open" : "the gump closed");
+                break;
+            }
             case "drag":
             {
                 // The start of a mouse drag of a thing in the world (Exult Dragging_info::start), then put back.
                 var target = AgentTarget(arg) ?? throw new ArgumentException("no such object");
-                _gumps.OnWorldMouseDown(_gumpView, target, 0, 0);
+                _gumps.OnWorldMouseDown(target, 0, 0, 0, 0);
                 _gumps.OnMouseMove(_gumpView, 10, 10);
                 if (_gumps.Drag is { Moved: true })
                 {
@@ -737,6 +873,48 @@ public partial class U7Game
         // Open containers put the game in gump mode, which stops walking (Exult default).
         _gumps.CloseAll();
         _agentClick = new Vector2I(tx, ty);
+        AgentAwaitArrival(tx, ty);
+    }
+
+    /// <summary>What a drag of a thing in the world does once it was dropped elsewhere (its eggs, gravity), for later.</summary>
+    Action AgentLiftedFrom(U7Object item)
+    {
+        if (item.Container is not null)
+        {
+            return () => { };
+        }
+
+        var drag = new DragState { Object = item, FromWorld = true, OldTx = item.Tx, OldTy = item.Ty, OldTz = item.Tz };
+        return () => _gumps.LiftedFromWorld?.Invoke(item, drag);
+    }
+
+    /// <summary>The console's mouse in the gumps' virtual pixels.</summary>
+    Vector2I AgentVirt()
+    {
+        var screen = (MouseWorld() - _camera.GlobalPosition) * _zoom + GetViewport().GetVisibleRect().Size / 2;
+        return new Vector2I(Mathf.FloorToInt(screen.X / _zoom), Mathf.FloorToInt(screen.Y / _zoom));
+    }
+
+    /// <summary>A point (virtual pixels) where the mouse would be on this gump, not under another.</summary>
+    Vector2I? AgentPointOn(Gump gump)
+    {
+        for (var dy = -100; dy <= 160; dy += 2)
+        {
+            for (var dx = -100; dx <= 200; dx += 2)
+            {
+                if (_gumps.FindGump(gump.X + dx, gump.Y + dy, _gumpView) == gump)
+                {
+                    return new Vector2I(gump.X + dx, gump.Y + dy);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The command goes on until the avatar arrives, is blocked for two seconds or a conversation starts.</summary>
+    void AgentAwaitArrival(int tx, int ty)
+    {
         Engine.TimeScale = 6;
         _agentElapsed = 0;
         _agentLimit = 90;
@@ -761,6 +939,13 @@ public partial class U7Game
             if (arrived || _agentElapsed - lastMove > 2.0)
             {
                 _avatar.ClearPath();
+                if (!arrived)
+                {
+                    AgentLog(lastMove == 0
+                        ? $"no way to {tx},{ty} (no path, or blocked at once)"
+                        : $"stopped at {av.Tx},{av.Ty}, short of {tx},{ty} (blocked)");
+                }
+
                 return false;
             }
 
@@ -778,8 +963,9 @@ public partial class U7Game
             return;
         }
 
-        // As ActivateUnderMouse: the avatar opens its paperdoll, other NPCs run their usecode.
-        if ((!obj.IsActor || obj.NpcNum == 0) && _gumps.ShowGump(obj))
+        // As ActivateUnderMouse: the avatar opens its paperdoll, so does a party member with gumps open
+        // or in combat; other NPCs run their usecode.
+        if (((!obj.IsActor || obj.NpcNum == 0) && _gumps.ShowGump(obj)) || (obj.IsActor && obj.NpcNum > 0 && ShowPartyInventory(obj)))
         {
             AgentLog($"opened {AgentDescribe(obj)}:");
             AgentInventory(obj, 1);
@@ -883,6 +1069,9 @@ public partial class U7Game
                               _catalog[o.Shape].Weight > 0)
                 : AgentObjectsAround(120).Where(o =>
                     AgentName(o).Contains(text, StringComparison.OrdinalIgnoreCase) || o.Shape.ToString() == text))
+            .Concat(text == "owned" ? [] : AgentPartyItems().Where(o =>
+                AgentName(o).Contains(text, StringComparison.OrdinalIgnoreCase) || o.Shape.ToString() == text))
+            .Distinct()
             .OrderBy(o => AgentDist(Outermost(o)))
             .Take(30)
             .ToList();
@@ -898,6 +1087,18 @@ public partial class U7Game
         {
             AgentLog("  " + AgentDescribe(obj) + (obj.Container is { } c ? $" in #{c.Id} {AgentName(c)}" : ""));
         }
+    }
+
+    /// <summary>What the party carries, in its packs too.</summary>
+    IEnumerable<U7Object> AgentPartyItems()
+    {
+        var all = new List<U7Object>();
+        foreach (var member in _party.Members.Prepend(_avatar.Avatar))
+        {
+            member.CollectContents(all);
+        }
+
+        return all;
     }
 
     static U7Object Outermost(U7Object obj)
@@ -952,7 +1153,7 @@ public partial class U7Game
 
         if (obj.IsActor)
         {
-            sb.Append($" {AlignmentNames[obj.Alignment & 3]} faces {"N?E?S?W?"[ActorWalker.FacingOfFrame(obj.Frame)]}");
+            sb.Append($" {AlignmentNames[obj.Alignment & 3]} faces {"N?E?S?W?"[ActorWalker.FacingOfFrame(obj.Frame)]} hp {obj.GetProp(ActorProp.Health)}");
         }
         else if (obj.Kind == ObjectKind.Ireg && !obj.IsEgg && !obj.GetFlag(ObjFlag.OkayToTake))
         {

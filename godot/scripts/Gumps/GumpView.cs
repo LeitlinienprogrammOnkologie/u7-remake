@@ -45,6 +45,36 @@ public partial class GumpView : Node2D
         return new Vector2I(Mathf.FloorToInt(m.X / Zoom), Mathf.FloorToInt(m.Y / Zoom));
     }
 
+    /// <summary>
+    /// Exult <c>Text_effect::Figure_text_pos</c> in a gump: the texts over
+    /// things shown in the open gumps (in the first gump showing their
+    /// container), at the top centre of their sprites, in screen pixels.
+    /// </summary>
+    public IEnumerable<(string Text, Vector2 Top)> Texts()
+    {
+        var now = Time.GetTicksMsec();
+        var seen = new HashSet<U7Object>();
+        foreach (var gump in Gumps.Open)
+        {
+            if (gump.Owner is not { } owner || !gump.ShowsContents || !seen.Add(owner))
+            {
+                continue;
+            }
+
+            foreach (var obj in owner.Contents)
+            {
+                if (obj.Removed || obj.BarkText.Length == 0 || obj.BarkUntilMsec < now || obj == Gumps.Drag?.Object)
+                {
+                    continue;
+                }
+
+                gump.GetShapeLocation(obj, out var ox, out var oy);
+                var top = WorldView.SpriteTop(Catalog[obj.Shape].GetFrame(obj.Frame), ox, oy);
+                yield return (WorldView.ShownText(obj.BarkText), top * Zoom);
+            }
+        }
+    }
+
     public override void _Draw()
     {
         DrawSetTransform(Vector2.Zero, 0, new Vector2(Zoom, Zoom));

@@ -60,7 +60,7 @@ public sealed class UsecodeScript
             }
             else if (op == Finish)
             {
-                // must_finish: Exult finishes such scripts when purged; we never purge.
+                _mustFinish = true;
             }
             else
             {
@@ -83,6 +83,18 @@ public sealed class UsecodeScript
         {
             _i = _cnt;
         }
+    }
+
+    /// <summary>Exult <c>must_finish</c>: a purged script runs to its end first.</summary>
+    public bool MustFinish => _mustFinish;
+
+    bool _mustFinish;
+
+    /// <summary>Exult <c>Usecode_script::purge</c>'s halt: no_halt cleared, then stopped.</summary>
+    public void ForceHalt()
+    {
+        _noHalt = false;
+        Halt();
     }
 
     int Int(int index) => index < _cnt ? (int)_code.GetElem(index).IntValue : 0;

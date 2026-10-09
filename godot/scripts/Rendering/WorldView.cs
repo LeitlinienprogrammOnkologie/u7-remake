@@ -560,7 +560,14 @@ public partial class WorldView : Node2D
     /// </summary>
     BarkInfo MakeBark(U7Object obj)
     {
-        var text = obj.BarkText;
+        var fi = Catalog[obj.Shape].GetFrame(obj.Frame);
+        ShapeLocation(obj.Tx, obj.Ty, obj.Tz, out var hx, out var hy);
+        return new BarkInfo(ShownText(obj.BarkText), SpriteTop(fi, hx, hy));
+    }
+
+    /// <summary>Exult <c>Text_effect::init</c>: '@' quote marks at either end are shown as '"'.</summary>
+    public static string ShownText(string text)
+    {
         if (text.StartsWith('@'))
         {
             text = '"' + text[1..];
@@ -571,12 +578,12 @@ public partial class WorldView : Node2D
             text = text[..^1] + '"';
         }
 
-        var fi = Catalog[obj.Shape].GetFrame(obj.Frame);
-        ShapeLocation(obj.Tx, obj.Ty, obj.Tz, out var hx, out var hy);
-        var left = hx - fi.XLeft;
-        var width = fi.XLeft + fi.XRight + 1;
-        return new BarkInfo(text, new Vector2(left + width / 2f, hy - fi.YAbove));
+        return text;
     }
+
+    /// <summary>The top centre of a frame painted with its hot spot at (<paramref name="hx"/>, <paramref name="hy"/>).</summary>
+    public static Vector2 SpriteTop(FrameInfo fi, int hx, int hy) =>
+        new(hx - fi.XLeft + (fi.XLeft + fi.XRight + 1) / 2f, hy - fi.YAbove);
 
     /// <summary>Exult <c>Game_render::paint_object</c>: dependencies first, then the object.</summary>
     void PaintObject(U7Object obj, ulong ticks)
@@ -961,11 +968,16 @@ public partial class WorldView : Node2D
         y = (ty + 1) * U7Constants.TileSize - 1 - lift;
     }
 
+    /// <summary>
+    /// The tile under a world pixel at a lift, the inverse of
+    /// <see cref="ShapeLocation"/> (whose point is the tile's last pixel):
+    /// Exult <c>start_actor_along_path</c>'s <c>(winx + liftpixels) / c_tilesize</c>.
+    /// </summary>
     public static TileCoord WorldToTile(Vector2 world, int lift = 0)
     {
         var liftPx = 4 * lift;
-        var tx = Mathf.FloorToInt((world.X + 1 + liftPx) / (float)U7Constants.TileSize) - 1;
-        var ty = Mathf.FloorToInt((world.Y + 1 + liftPx) / (float)U7Constants.TileSize) - 1;
+        var tx = Mathf.FloorToInt((world.X + liftPx) / U7Constants.TileSize);
+        var ty = Mathf.FloorToInt((world.Y + liftPx) / U7Constants.TileSize);
         return new TileCoord(U7Constants.WrapTile(tx), U7Constants.WrapTile(ty), lift);
     }
 

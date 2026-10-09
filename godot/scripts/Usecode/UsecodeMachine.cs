@@ -60,6 +60,19 @@ public sealed class UsecodeMachine
     public ShapeCatalog Catalog { get; }
     public Conversation Conv { get; } = new();
     public byte[] GFlags { get; } = new byte[LastGflag + 1];
+
+    /// <summary>
+    /// Exult <c>Game_window::failed_copy_protection</c>: Black Gate's global
+    /// flag 56, set by 0x852 when the avatar answers Lord British's questions
+    /// wrong (and cleared by a right answer). The world then says "Oink!".
+    /// </summary>
+    public bool FailedCopyProtection => GFlags[FailedCopyProtectionFlag] != 0;
+
+    const int FailedCopyProtectionFlag = 56;
+    public const string Oink = "Oink!";
+    /// <summary>Exult <c>FailCopyProtectionUsecode</c>: what a double-clicked NPC runs then ("@Oink@").</summary>
+    public const int FailCopyProtectionUsecode = 0x63D;
+
     public bool InUsecode => _callStack.Count > 0;
     public UsecodeWait Wait { get; private set; }
     public bool WaitingForChoice => Wait != UsecodeWait.None;
@@ -98,6 +111,14 @@ public sealed class UsecodeMachine
     public int TelekenesisFun { get; set; } = -1;
     /// <summary>Called when a script steps the avatar, so eggs and followers react.</summary>
     public Action<U7Object>? AvatarMovedByScript { get; set; }
+    /// <summary>Exult <c>Game_window::teleport_party</c>: the avatar and the party to a tile, the eggs there tried.</summary>
+    public Action<TileCoord>? TeleportParty { get; set; }
+    /// <summary>
+    /// Exult <c>move_object</c> of the avatar, after the move (from the tile
+    /// given): its walk ends, the view goes there, and every egg round it is
+    /// tried (<c>try_all_eggs</c>).
+    /// </summary>
+    public Action<int, int>? AvatarTeleported { get; set; }
     /// <summary>Exult <c>set_camera</c>: the view follows this actor, or centres on this object.</summary>
     public Action<U7Object>? SetCamera { get; set; }
     /// <summary>Exult <c>Palette::fade_in</c>/<c>fade_out</c>: milliseconds between two steps of a fade.</summary>
@@ -140,6 +161,30 @@ public sealed class UsecodeMachine
         }
 
         _scripts.Add(script);
+    }
+
+    /// <summary>
+    /// Exult <c>Usecode_script::purge</c>: the scripts not yet started on
+    /// things more than <paramref name="dist"/> tiles from the spot stop; one
+    /// that must finish runs to its end first.
+    /// </summary>
+    public void PurgeScripts(TileCoord spot, int dist)
+    {
+        foreach (var s in _scripts.ToList())
+        {
+            var outer = U7.Actors.Inventory.Outermost(s.Obj);
+            if (s.Activated || s.Done || new TileCoord(outer.Tx, outer.Ty, outer.Tz).Distance2d(spot) <= dist)
+            {
+                continue;
+            }
+
+            if (s.MustFinish)
+            {
+                s.Exec(true);
+            }
+
+            s.ForceHalt();
+        }
     }
 
     /// <summary>Exult <c>Usecode_script::terminate</c>.</summary>
@@ -1433,6 +1478,12 @@ public sealed class UsecodeMachine
         if (obj is null || string.IsNullOrEmpty(text))
         {
             return;
+        }
+
+        // Exult Game_object::say and item_say after the failed copy protection.
+        if (FailedCopyProtection)
+        {
+            text = Oink;
         }
 
         obj.BarkText = text;

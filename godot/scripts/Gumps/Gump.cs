@@ -65,6 +65,12 @@ public class Gump
 
     public virtual void Close() => Manager.Close(this);
 
+    /// <summary>Exult <c>Gump::get_cont_or_actor</c>: what a click on the gump itself names.</summary>
+    public virtual U7Object? ContOrActor => Owner;
+
+    /// <summary>The things in the owner are shown in the gump (not the stats or the spellbook).</summary>
+    public virtual bool ShowsContents => true;
+
     public virtual bool HasPoint(GumpView view, int mx, int my)
     {
         var fi = view.Shapes.GetGumpFrame(GumpShape, 0);

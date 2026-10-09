@@ -189,6 +189,9 @@ public static class TextMessages
     /// <summary>Exult <c>get_misc_name</c>: TEXT.FLX entries from 0x500 on (reagents, "Circle", ...).</summary>
     public static string MiscName(int num) => Entry(0x500 + num);
 
+    /// <summary>The misc name a click on the avatar shows ("yourself", Exult <c>Get_object_name</c>).</summary>
+    public const int Yourself = 0x42;
+
     public static string Get(int msg)
     {
         if (msg >= 0x100)

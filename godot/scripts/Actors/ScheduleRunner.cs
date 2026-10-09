@@ -71,13 +71,8 @@ public sealed class ScheduleRunner
     /// <summary>The game window's size in tiles (Exult <c>get_win_tile_rect</c>), centred on the avatar.</summary>
     public (int W, int H) ScreenTiles { get; set; } = (40, 25);
 
-    /// <param name="restore">
-    /// A saved game: NPCs keep the schedules and places they were saved with
-    /// (Exult <c>restore_schedule</c>); a new game sets everyone to the
-    /// schedule of the hour (Exult <c>schedule_npcs</c>).
-    /// </param>
     public ScheduleRunner(GameMap map, U7Object avatar, List<U7Object?> npcs,
-        ScheduleTable table, GameClock clock, bool restore = false)
+        ScheduleTable table, GameClock clock)
     {
         Map = map;
         Avatar = avatar;
@@ -92,6 +87,17 @@ public sealed class ScheduleRunner
         }
 
         clock.SlotChanged += _ => ApplySlot(pathIfNearby: true);
+    }
+
+    /// <summary>
+    /// The schedules at the start, once the party and the combat engine are
+    /// wired (a fight or a duel is the combat engine's): a saved game's NPCs
+    /// keep the schedules and places they were saved with (Exult
+    /// <c>restore_schedule</c>), a new game's take the schedule of the hour
+    /// (Exult <c>schedule_npcs</c>).
+    /// </summary>
+    public void Start(bool restore)
+    {
         if (restore)
         {
             RestoreSchedules();
@@ -1007,6 +1013,15 @@ public sealed class ScheduleRunner
         else
         {
             BeginWalkTo(b, entry.Type, dest);
+        }
+    }
+
+    /// <summary>Exult <c>Actor::set_action(nullptr)</c>: the NPC's action under way is dropped.</summary>
+    public void ClearAction(U7Object npc)
+    {
+        if (npc.NpcNum > 0 && _brains.TryGetValue(npc.NpcNum, out var b))
+        {
+            b.StopAction();
         }
     }
 

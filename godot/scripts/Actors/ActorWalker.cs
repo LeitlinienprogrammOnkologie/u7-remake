@@ -275,6 +275,15 @@ public static class ActorWalker
         _ => 2
     };
 
+    /// <summary>Exult <c>Get_direction</c>: <see cref="DirectionNoWrap"/> with the deltas wrapped round the world.</summary>
+    public static int Direction(int dy, int dx) => DirectionNoWrap(WrapDelta(dy), WrapDelta(dx));
+
+    /// <summary>Exult <c>Wrap_Delta</c> (dir.cc), as it is.</summary>
+    static int WrapDelta(int delta) =>
+        delta >= U7Constants.NumTiles / 2 ? U7Constants.NumTiles / 2 - delta
+        : delta <= -U7Constants.NumTiles / 2 ? -U7Constants.NumTiles / 2 - delta
+        : delta;
+
     /// <summary>
     /// Exult <c>Get_direction_NoWrap</c>: one of 8 directions (0 north,
     /// clockwise) for a slope; <paramref name="dy"/> grows northwards.

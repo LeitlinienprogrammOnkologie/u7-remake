@@ -66,6 +66,11 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
   - **Crystal ball and Wizard Eye:** Exult's frame (SPRITES.VGA sprite 10)
     at the world's zoom over the original 320x200 screen, black outside it
     (not redrawn smooth, not the view filling the window).
+  - **New game** (`UI/NewGameView`): the original title from MAINSHP.FLX
+    over a dark wood & gold panel (name, Male / Female with the portrait,
+    Journey Onward).
+  - **Mouse:** Exult's right-button walking, and the left button walks on
+    open ground too (hold to steer, a quick click for a path).
   - **Cursors** (`UI/MouseCursor`): Exult's POINTERS.SHP frames at the
     world's zoom (crisp, the day palette) as the system cursor; the flashed
     words (Too heavy, Out of range, Out of ammo, Won't fit, Blocked) in
@@ -99,7 +104,8 @@ godot/scripts/
               ShapeCatalog, FlexFile, VgaShapeFile + ShapeFrame (Exult Shape_frame:
               SHAPES/SPRITES/GUMPS/FONTS/FACES.VGA frames by palette index),
               U7Palette (PALETTES.FLX, Get_color8), XformTables (XFORM.TBL),
-              VgaFont (FONTS.VGA metrics, Exult paint_text_box), ChunkBlocking
+              VgaFont (FONTS.VGA metrics, Exult paint_text_box), ObjectNames
+              (Exult get_name: what a click shows), ChunkBlocking
               (Exult Chunk_cache blocked flags + is_blocked), IffFile and
               FlicFile (ENDGAME.DAT and its movies, Exult playfli)
   Gumps/      GumpManager, GumpView (paints gumps and the open book), container,
@@ -113,7 +119,8 @@ godot/scripts/
               CombatEngine (also missile eggs), Guards (Exult's theft,
               call_guards, attack_avatar; the arrest), Missile (Exult
               Projectile_effect, painted after the map), HomingMissile
-              (Homing_projectile), PartyManager, Equipment, Inventory,
+              (Homing_projectile), PartyManager, Equipment, Inventory, AvatarLook
+              (the avatar's shape and face by sex),
               ItemQuantity, ActorWalker (steps, Actor::is_blocked), tables
   World/      GameClock, EggHatcher, Pathfinder (Exult Find_path + clients),
               LightSources (Exult light rules: brightness, strength, carried
@@ -139,7 +146,8 @@ godot/scripts/
               frames)
   UI/         ConversationPanel, BarkOverlay, UiTheme, MouseCursor (Exult
               Mouse: POINTERS.SHP cursors and their flashes), EndgameView
-              (the endgame's 320x200 picture and words)
+              (the endgame's 320x200 picture and words), NewGameView (Exult
+              BG_Game::new_game: the avatar's name and sex)
   Core/       U7Paths (data paths, ReadGameDat), U7Constants, TileCoord
 scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers)
 ```
@@ -171,8 +179,11 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
      steps (`UsecodeWait.Fade`, as Exult's fade loop holds the game), a
      flash holds the game 600 ms (`UsecodeWait.Flash`); a command ends once
      they are over. `die` is F6 (the death flow, waking in Paws). There is
-     no mouse headless: `cursor <x> <y>` tells the cursor over a tile, and
-     `drag <id>` starts a real drag (Exult's checks) and puts it back.
+     no mouse headless: `cursor <x> <y>` tells the cursor over a tile,
+     `drag <id>` starts a real drag (Exult's checks) and puts it back,
+     `name <id>` is a left click naming a thing, `rmouse <x> <y> <sec>|double`
+     holds or double-clicks the right button over a tile, `rclose`
+     right-clicks the top gump.
    - Object ids (`#231108`) are only usable after `look` or `find` has listed them;
      pass them without the `#` (`use 231108`). A load renumbers them.
    - `save <slot>` / `load <slot>` keep progress across restarts; `timer`
@@ -289,8 +300,13 @@ Done and play-tested: the whole Trinsic murder chapter.
 Also played: Britain's first visit (Lord British's leads, Clint, Patterson,
 Batlin's examination and package, the storeroom key, the Orb of the Moons),
 Cove (Rudyom's notebook and wand, the blackrock explosion) and Elynor taking
-the package in Minoc. Paws, Moonglow, Yew and Buccaneer's Den were explored
-from `quick` (all NPCs, their quests; PROGRESS.md "Story exploration").
+the package in Minoc. Every other town was explored from `quick` (all NPCs,
+their quests; PROGRESS.md "Story exploration"): Paws, Moonglow, Yew,
+Buccaneer's Den, Vesper, Terfin, Jhelom, Skara Brae (its whole quest),
+Serpent's Hold, Spektran and New Magincia, the main thread through Xorinia,
+Alagner and the Time Lord's mission, and the Black Gate confrontation.
+`quick` carries a stray invisible flag on the avatar (NPCs won't come to talk:
+`setflag npc:0 invisible 0`) and has no barges (`scripts/repair_barges.py`).
 
 Also done: the conversation panel with Exult paging, screen-space barks,
 party item and object-creation intrinsics, books and scrolls (`book_mode`),
@@ -304,7 +320,9 @@ NPC proximity remarks and woken sleepers, all of Black Gate's schedules
 `Combat_schedule` for monsters, NPCs, the party and the avatar, thefts, guards
 and the arrest (usecode 0x625: pay, prison or fight), Exult's mouse cursors
 (speed arrows, the hand, the crosshair, flashes that hold the game, the drag
-checks behind them), the endgame (movies, texts, credits; every intrinsic is
+checks behind them) and its buttons (right-button walking, a left click
+naming things, a right-click closing a gump), the failed copy protection
+("Oink!"), the endgame (movies, texts, credits; every intrinsic is
 now ported), and the agent console.
 
 The visual overhaul is done: the world painted as Exult's 8-bit buffer
@@ -319,14 +337,13 @@ shows through its windows.
 
 Next, in priority order:
 
-1. **Walking follow-ups:** right-button walking (asked for); Exult's
-   dormancy and `Actor::follow` if the 32-tile activity range or the
-   follow schedule ever show their seams.
-2. **Story:** the main thread past Minoc in order (Paws, Moonglow, the Wisps
-   via Alagner's notebook, Hook and the Isle of the Avatar), the towns not
-   yet explored (Vesper, Jhelom, Skara Brae, New Magincia, Serpent's Hold,
-   Terfin), and a name for the avatar at a new game (usecode's "Avatar"
-   answers collide with the default name).
+1. **Story:** every town has been explored (PROGRESS.md, "Story
+   exploration"); next the dungeons and the main thread's late parts played
+   in order (the Time Lord's mission: Dungeon Despise and the generators,
+   the Ethereal Ring and Dracothraxus, Hook's death), and Alagner's notebook
+   by the user's route (the storeroom maze, crates stacked on the table).
+2. **Walking follow-ups:** Exult's dormancy and `Actor::follow` if the
+   32-tile activity range or the follow schedule ever show their seams.
 
 Known small gaps:
 - Exult shows the avatar's portrait next to the answers.

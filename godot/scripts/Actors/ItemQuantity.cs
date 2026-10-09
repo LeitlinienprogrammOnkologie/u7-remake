@@ -14,6 +14,9 @@ public sealed class ItemQuantity
     /// <summary>Exult <c>shape_info.txt</c> quantity_frames (BG): bolts, arrows, musket ammo, lockpicks, money.</summary>
     static readonly HashSet<int> QuantityFrameShapes = [417, 723, 948, 554, 556, 558, 560, 568, 722, 581, 627, 644];
 
+    /// <summary>Exult <c>Shape_info::has_quantity_frames</c>.</summary>
+    public static bool HasQuantityFrames(int shape) => QuantityFrameShapes.Contains(shape);
+
     /// <summary>Exult <c>shape_info.txt</c> locked_containers (BG).</summary>
     static readonly HashSet<int> LockedContainers = [522, 798];
 

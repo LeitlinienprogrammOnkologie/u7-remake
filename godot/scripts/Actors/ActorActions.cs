@@ -91,16 +91,22 @@ public sealed class SequenceAction(int speed, params IActorAction[] actions) : I
     /// gives up), then do <paramref name="whenThere"/>. A persistent walk
     /// keeps finding its way round NPCs (<see cref="PathWalk.Astar"/>).
     /// </summary>
+    /// <param name="stepped">Called after each step of the walk (the avatar's eggs and followers).</param>
     public static IActorAction WalkThen(GameMap map, U7Object actor, TileCoord dest, IActorAction whenThere,
-        bool persistent = false)
+        bool persistent = false, Action<U7Object, int, int>? stepped = null)
     {
         if (actor.Tx == dest.Tx && actor.Ty == dest.Ty && actor.Tz == dest.Tz)
         {
             return whenThere;
         }
 
-        IActorAction walk = (IActorAction?)PathWalk.Astar(map, actor, dest, persistent: persistent) ??
-                            new MoveAction(map, dest);
+        var path = PathWalk.Astar(map, actor, dest, persistent: persistent);
+        if (path is not null)
+        {
+            path.Stepped = stepped;
+        }
+
+        IActorAction walk = (IActorAction?)path ?? new MoveAction(map, dest);
         return new SequenceAction(0, walk, new MoveAction(map, dest), whenThere);
     }
 }

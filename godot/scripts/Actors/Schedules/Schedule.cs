@@ -428,6 +428,15 @@ public abstract class Schedule(NpcBrain brain)
 /// </summary>
 public sealed class IdleSchedule(NpcBrain brain) : Schedule(brain)
 {
+    /// <summary>
+    /// Exult's <c>Wait_schedule</c> does nothing and <c>set_schedule_type</c>
+    /// changes no frame: an NPC put to wait keeps its pose (the Skara Brae
+    /// ghosts and Horance lie on their slabs, Exult <c>Sleep_schedule::ending</c>).
+    /// </summary>
+    public override void Begin()
+    {
+    }
+
     public override void NowWhat()
     {
     }
