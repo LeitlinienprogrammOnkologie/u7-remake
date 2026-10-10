@@ -73,6 +73,12 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
   - **New game** (`UI/NewGameView`): the original title from MAINSHP.FLX
     over a dark wood & gold panel (name, Male / Female with the portrait,
     Journey Onward).
+  - **Save/load screen** (`UI/SaveLoadView`, Exult's `Newfile_gump`):
+    layout A of the mock-ups (2026-10-10): the list of names on the left,
+    the chosen game's picture, details and party faces on the right, Save /
+    Load / Delete / Cancel and Quit below, dark wood & gold. Opened by Esc
+    when no gumps are open (Exult's Esc opens its menu) and by the
+    paperdoll's disk; F5/F9 stay the quick save and load.
   - **Mouse:** Exult's right-button walking, and the left button walks on
     open ground too (hold to steer, a quick click for a path).
   - **Cursors** (`UI/MouseCursor`): Exult's POINTERS.SHP frames at the
@@ -108,7 +114,8 @@ godot/scripts/
   Game/       U7Game (scene root, wiring), U7Game.Input (keys, mouse buttons,
               cursor, drops on the map), U7Game.Agent (agent console),
               AvatarController (player walking), SaveGame (Exult GAMEDAT layout;
-              GwinState: gamewin.dat),
+              GwinState: gamewin.dat; SaveInfo: saveinfo.dat), U7Game.SaveLoad
+              (quick save, the save/load screen, the world's picture),
               Endgame (Exult end_game and the credits)
   Data/       GameMap (chunks, IREG, eggs index, paint order), U7Object,
               ShapeCatalog, FlexFile, VgaShapeFile + ShapeFrame (Exult Shape_frame:
@@ -158,7 +165,8 @@ godot/scripts/
   UI/         ConversationPanel, BarkOverlay, UiTheme, MouseCursor (Exult
               Mouse: POINTERS.SHP cursors and their flashes), EndgameView
               (the endgame's 320x200 picture and words), NewGameView (Exult
-              BG_Game::new_game: the avatar's name and sex)
+              BG_Game::new_game: the avatar's name and sex), SaveLoadView
+              (Exult Newfile_gump: the save/load screen)
   Core/       U7Paths (data paths, ReadGameDat), U7Constants, TileCoord,
               Directions (Exult dir.cc: the 8 directions, steps, frame rotation)
 scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers)
@@ -324,7 +332,8 @@ Also done: Exult's NPC timers (poison, sleep, invisibility and the other
 flags wear off), knockouts (dead only below -strength/3), fields (fire,
 sleep, poison, caltrops, campfires) and voice eggs; Hook's and
 Dracothraxus's death usecode. Saves from the dungeon play-tests are local
-(`sphere_*`, `tetra_*`, `cube_*`, `gate_*`, `sweep_*`, `fire_*`, listed in
+(`sphere_*`, `tetra_*`, `cube_*`, `gate_*`, `sweep_*`, `fire_*`, `isle_*`,
+`wrong_*`, `covetous_e`, listed in
 PROGRESS.md).
 
 Also done: the conversation panel with Exult paging, screen-space barks,
@@ -356,15 +365,15 @@ shows through its windows.
 
 Next, in priority order:
 
-1. **Story:** every town and the main thread have been played (PROGRESS.md,
-   "Story exploration" and "Dungeons and the main thread": the Sphere,
-   Tetrahedron and Cube, the finale to both endgames, the Isle of Fire up
-   to the Black Sword, Destard, Despise, Shame, the mines, Hythloth's
-   edge). Left: Dracothraxus's end by the Black Sword, the Talisman of
-   Courage, the Dark Core and Erethian's end; the Isle of the Avatar's way
-   from the lower ring room up; Dungeon Wrong and Covetous proper; and
-   Alagner's notebook by the user's route (the storeroom maze, crates
-   stacked on the table).
+1. **Story:** every town, the main thread and every dungeon have been
+   played (PROGRESS.md, "Story exploration" and "Dungeons and the main
+   thread": the Sphere, Tetrahedron and Cube, the finale to both endgames,
+   the whole Isle of Fire to Exodus's exile, the Isle of the Avatar's
+   thrones to the Black Gate, Destard, Despise, Shame, Wrong, Covetous
+   and the mines, Hythloth's edge, Alagner's notebook by the user's
+   route). Nothing known is left; much of it was reached with shortcuts
+   (`tp`, `create`, flags), so a new game played through would be the
+   next test.
 2. **Walking follow-ups:** Exult's dormancy and `Actor::follow` if the
    32-tile activity range or the follow schedule ever show their seams.
 

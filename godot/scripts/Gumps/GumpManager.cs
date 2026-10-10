@@ -40,6 +40,8 @@ public sealed class GumpManager
     /// <summary>Exult <c>Mouse::flash_shape</c>: a drag refused says why on the cursor.</summary>
     public Action<int>? FlashMouse { get; set; }
     public Action? ToggleCombat { get; set; }
+    /// <summary>The disk button: Exult opens its game menu, the original its save/load screen.</summary>
+    public Action? OpenFileMenu { get; set; }
     public Func<bool>? IsCombatOn { get; set; }
     /// <summary>GUMPS.VGA, for gumps laid out from their art's sizes (the spellbook).</summary>
     public VgaShapeFile? GumpsVga { get; set; }

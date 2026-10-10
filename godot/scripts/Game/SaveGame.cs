@@ -9,13 +9,22 @@ namespace U7.Game;
 
 /// <summary>
 /// Saved games in Exult's GAMEDAT layout: a directory with U7IREGxx, NPC.DAT,
-/// MONSNPCS.DAT, FLAGINIT, GAMEWIN.DAT, USECODE.DAT and USECODE.VAR. Loading
-/// points <see cref="U7Paths.GameDatOverride"/> at the directory and restarts
-/// the scene, so the normal loaders read it.
+/// MONSNPCS.DAT, FLAGINIT, GAMEWIN.DAT, USECODE.DAT and USECODE.VAR, and what
+/// the save/load screen shows: Exult's SAVEINFO.DAT, the game's name (Exult
+/// keeps it in its save file) and a picture of the world (Exult's
+/// scrnshot.shp, here a PNG of the world as it was drawn). Loading points
+/// <see cref="U7Paths.GameDatOverride"/> at the directory and restarts the
+/// scene, so the normal loaders read it.
 /// </summary>
 public static class SaveGame
 {
     public const string QuickSlot = "quick";
+    /// <summary>Exult <c>MAX_SAVEGAME_NAME_LEN</c>: a name is shorter than this.</summary>
+    public const int MaxNameLength = 0x50;
+    const string NameFile = "SAVENAME.TXT";
+    const string ShotFile = "SCRNSHOT.PNG";
+    /// <summary>The slots the save/load screen makes, numbered as Exult's exultNNbg.sav are.</summary>
+    const string NumberedPrefix = "save";
     const string TmpSuffix = ".tmp";
     const string OldSuffix = ".old";
 
@@ -38,8 +47,10 @@ public static class SaveGame
     /// replaces the slot only once every file is written, so a failure
     /// part-way leaves the old save whole.
     /// </summary>
+    /// <param name="name">The game's name, or null to keep the slot's.</param>
+    /// <param name="shot">The world's picture; without one the slot keeps none (Exult removes the old one).</param>
     public static void Write(string slot, GameMap map, List<U7Object?> npcs, UsecodeMachine? usecode,
-        IEnumerable<U7Object> monsters, GwinState gwin)
+        IEnumerable<U7Object> monsters, GwinState gwin, SaveInfo info, string? name = null, Image? shot = null)
     {
         var dir = SlotDir(slot);
         var tmp = dir + TmpSuffix;
@@ -63,13 +74,24 @@ public static class SaveGame
             gwin.Write(w);
         }
 
+        using (var w = new BinaryWriter(File.Create(Path.Combine(tmp, SaveInfo.FileName))))
+        {
+            info.Write(w);
+        }
+
+        if (name is not null)
+        {
+            File.WriteAllText(Path.Combine(tmp, NameFile), name);
+        }
+
+        shot?.SavePng(Path.Combine(tmp, ShotFile));
         var identity = Path.Combine(U7Paths.RepoRoot, "u7", "GAMEDAT", "IDENTITY");
         if (File.Exists(identity))
         {
             File.Copy(identity, Path.Combine(tmp, "IDENTITY"));
         }
 
-        KeepUnwritten(dir, tmp);
+        KeepUnwritten(dir, tmp, keepShot: false);
         Swap(dir, tmp);
         GD.Print($"saved to {dir}");
     }
@@ -79,7 +101,7 @@ public static class SaveGame
     /// the slot used to keep: FLAGINIT and USECODE.* without usecode, IDENTITY
     /// without the GOG copy. Not GWIN.DAT, which GAMEWIN.DAT replaces.
     /// </summary>
-    static void KeepUnwritten(string dir, string tmp)
+    static void KeepUnwritten(string dir, string tmp, bool keepShot)
     {
         if (!Directory.Exists(dir))
         {
@@ -90,7 +112,8 @@ public static class SaveGame
         {
             var name = Path.GetFileName(file);
             var dest = Path.Combine(tmp, name);
-            if (!name.Equals(OldGwinName, StringComparison.OrdinalIgnoreCase) && !File.Exists(dest))
+            if (!name.Equals(OldGwinName, StringComparison.OrdinalIgnoreCase) && !File.Exists(dest) &&
+                (keepShot || !name.Equals(ShotFile, StringComparison.OrdinalIgnoreCase)))
             {
                 File.Copy(file, dest);
             }
@@ -152,6 +175,73 @@ public static class SaveGame
         {
             GD.Print($"{GwinName} unreadable: {ex.Message}");
             return null;
+        }
+    }
+
+    /// <summary>The loaded game's SAVEINFO.DAT (Exult reads GAMEDAT's for the save count); null for a new game.</summary>
+    public static SaveInfo? ReadCurrentInfo() => SaveInfo.Read(U7Paths.ReadGameDat(SaveInfo.FileName));
+
+    /// <summary>A saved game as the save/load screen lists it (Exult <c>Newfile_gump::SaveInfo</c>).</summary>
+    /// <param name="Readable">Whether it can be loaded (Exult: its file could be read).</param>
+    public sealed record Entry(string Slot, string Name, SaveInfo? Info, string? ShotPath, bool Readable);
+
+    /// <summary>The slot as an entry: its name (else the slot's), details and picture.</summary>
+    public static Entry Describe(string slot)
+    {
+        var dir = SlotDir(slot);
+        var namePath = Path.Combine(dir, NameFile);
+        var name = File.Exists(namePath) ? File.ReadAllText(namePath).Trim() : slot;
+        var infoPath = Path.Combine(dir, SaveInfo.FileName);
+        var info = File.Exists(infoPath) ? SaveInfo.Read(File.ReadAllBytes(infoPath)) : null;
+        var shot = Path.Combine(dir, ShotFile);
+        return new Entry(slot, name.Length > 0 ? name : slot, info, File.Exists(shot) ? shot : null, Exists(slot));
+    }
+
+    /// <summary>
+    /// Exult <c>Newfile_gump::LoadSaveGameDetails</c>: every saved game but
+    /// the quick one, newest first by the computer's clock, those without a
+    /// date last (Exult <c>SaveInfo::CompareThis</c>; then by name here, where
+    /// Exult goes by number).
+    /// </summary>
+    public static List<Entry> List()
+    {
+        if (!Directory.Exists(U7Paths.SavesDir))
+        {
+            return [];
+        }
+
+        return Directory.GetDirectories(U7Paths.SavesDir)
+            .Select(Path.GetFileName)
+            .OfType<string>()
+            .Where(s => !s.EndsWith(TmpSuffix) && !s.EndsWith(OldSuffix) && s != QuickSlot)
+            .Select(Describe)
+            .Where(e => e.Readable || e.Info is not null)
+            .OrderBy(e => e.Info is null)
+            .ThenByDescending(e => e.Info?.Details.Real)
+            .ThenBy(e => e.Slot, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>Exult's <c>first_free</c>: the lowest numbered slot not taken.</summary>
+    public static string FirstFreeSlot()
+    {
+        for (var n = 0; ; n++)
+        {
+            var slot = $"{NumberedPrefix}{n:00}";
+            if (!Directory.Exists(SlotDir(slot)) && !Directory.Exists(SlotDir(slot) + OldSuffix))
+            {
+                return slot;
+            }
+        }
+    }
+
+    /// <summary>Exult <c>Newfile_gump::delete_file</c>: the saved game is removed.</summary>
+    public static void Delete(string slot)
+    {
+        var dir = SlotDir(slot);
+        if (Directory.Exists(dir))
+        {
+            Directory.Delete(dir, recursive: true);
         }
     }
 }

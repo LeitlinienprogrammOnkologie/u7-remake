@@ -20,7 +20,7 @@ namespace U7.Game;
 public partial class U7Game
 {
     const string AgentHelp =
-        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
+        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | create <shape> [frame] [qual] | esc | saveload [choose <row>|name <text>|save|load|delete|cancel|quit|yes|no] | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | quit | die [restart] | " +
         "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] | damage <n> [type] | arena | combat [off] | attack <id> | drag <id> | cursor <x> <y> | avatar <name> [male|female] | name <id>|gump | rmouse <x> <y> <sec>|double | rclose | endgame [won|lost] | close";
@@ -338,7 +338,8 @@ public partial class U7Game
                 };
                 _gumps.LiftUp(drag);
                 var result = _gumps.DropInWorld(drag);
-                AgentLog($"{result.ToString().ToLowerInvariant()} (aimed at {dx},{dy} lift {tz}): {AgentDescribe(item)}");
+                var takenBy = result == MapDrop.Taken && item.Container is { } holder ? $" by {AgentName(Inventory.Outermost(holder))}" : "";
+                AgentLog($"{result.ToString().ToLowerInvariant()}{takenBy} (aimed at {dx},{dy} lift {tz}): {AgentDescribe(item)}");
                 break;
             }
             case "eye":
@@ -368,6 +369,22 @@ public partial class U7Game
                 _usecode!.Call(fun, target, (UsecodeEvent)ev);
                 _conversation.Refresh();
                 AgentLog($"called 0x{fun:X3} on {AgentName(target)}, event {ev}");
+                break;
+            }
+            case "create":
+            {
+                // A test shortcut: a new thing of the shape (frame, quality) in the avatar's hands or pack,
+                // as usecode's create_new_object and give_last_created would (okay to take, Exult add(obj, true)).
+                var made = _map.CreateIregObject(int.Parse(parts[1]), parts.Length > 2 ? int.Parse(parts[2]) : 0);
+                made.Quality = parts.Length > 3 ? int.Parse(parts[3]) : 0;
+                made.SetFlag(ObjFlag.OkayToTake);
+                if (!Equipment.AddToActor(av, made, _catalog, _map, dontCheck: true))
+                {
+                    AgentLog("no room on the avatar");
+                    break;
+                }
+
+                AgentLog($"created {AgentDescribe(made)}");
                 break;
             }
             case "take":
@@ -832,6 +849,33 @@ public partial class U7Game
 
                 _gumps.CloseAll();
                 break;
+            case "esc":
+                // The Esc key: the save/load screen's (its question's No, else it closes), or Exult ActionCloseOrMenu.
+                if (_saveLoad is { } open)
+                {
+                    if (open.Question is not null)
+                    {
+                        open.Answer(false);
+                    }
+                    else
+                    {
+                        open.Close();
+                    }
+                }
+                else if (_gumps.GumpMode)
+                {
+                    _gumps.CloseAll();
+                }
+                else if (!UsecodeRunning)
+                {
+                    OpenSaveLoad();
+                }
+
+                AgentLog(_saveLoad?.Describe() ?? (_gumps.GumpMode ? "gumps open" : "no gumps, no screen"));
+                break;
+            case "saveload":
+                AgentSaveLoad(parts);
+                break;
             case "save":
                 if (UsecodeRunning)
                 {
@@ -849,6 +893,56 @@ public partial class U7Game
                 AgentLog($"unknown command; {AgentHelp}");
                 break;
         }
+    }
+
+    /// <summary>
+    /// The save/load screen as the mouse and keys would use it: opened as the
+    /// disk button opens it, a row chosen (0 the empty slot, 1 the quick
+    /// save, then the games), a name typed, a button pressed, a question answered.
+    /// </summary>
+    void AgentSaveLoad(string[] parts)
+    {
+        if (_saveLoad is null)
+        {
+            _gumps.OpenFileMenu?.Invoke();
+        }
+
+        if (_saveLoad is not { } view)
+        {
+            AgentLog("the screen did not open");
+            return;
+        }
+
+        switch (parts.Length > 1 ? parts[1] : "")
+        {
+            case "choose":
+                view.Choose(int.Parse(parts[2]) - 2);
+                break;
+            case "name":
+                view.TypeName(string.Join(' ', parts.Skip(2)));
+                break;
+            case "save":
+                view.SavePressed();
+                break;
+            case "load":
+                view.LoadPressed();
+                break;
+            case "delete":
+                view.DeletePressed();
+                break;
+            case "cancel":
+                view.Close();
+                break;
+            case "quit":
+                view.QuitPressed();
+                break;
+            case "yes":
+            case "no":
+                view.Answer(parts[1] == "yes");
+                break;
+        }
+
+        AgentLog(_saveLoad?.Describe() ?? "screen closed");
     }
 
     /// <summary>In barge mode, steer the barge's centre to the tile (a held click there) until it stops.</summary>

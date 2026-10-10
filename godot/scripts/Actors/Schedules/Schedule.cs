@@ -74,6 +74,7 @@ public abstract class Schedule(NpcBrain brain)
     {
         Npc.FrameTime = speedMs;
         Brain.StepTimer = delayMs / 1000.0;
+        Brain.Queued = true;
     }
 
     protected bool CanSpeak => Runner.CanSpeak?.Invoke(Npc) ?? true;
@@ -504,6 +505,12 @@ public sealed class NpcBrain(ScheduleRunner runner, U7Object npc)
     public Action<IActorAction>? ActionDone;
     /// <summary>Seconds until the action's next step, or until <see cref="Schedule.NowWhat"/>.</summary>
     public double StepTimer;
+    /// <summary>
+    /// Exult <c>in_queue()</c>, kept for the avatar only: its time event is
+    /// pending, so it will step or ask its schedule what now. NPCs are still
+    /// asked at every idle step.
+    /// </summary>
+    public bool Queued = true;
     public double Pause;
     public bool WasNearby;
     /// <summary>Exult <c>Npc_actor::nearby</c>: in the proximity handler, with its next look.</summary>
@@ -516,6 +523,7 @@ public sealed class NpcBrain(ScheduleRunner runner, U7Object npc)
         ActionDone = done;
         Npc.FrameTime = action is null ? 0 : speedMs;
         StepTimer = delayMs / 1000.0;
+        Queued = true;
     }
 
     /// <summary>Drop the action (Exult <c>set_action(nullptr)</c>): not moving any more.</summary>

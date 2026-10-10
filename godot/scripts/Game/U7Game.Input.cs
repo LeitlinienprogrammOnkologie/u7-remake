@@ -51,7 +51,8 @@ public partial class U7Game
     public override void _UnhandledInput(InputEvent @event)
     {
         // Exult's flash_shape holds the game (SDL_Delay): nothing answers the mouse or keys meanwhile.
-        if (!_ready || _cursor.Holding || _newGame is not null)
+        // The save/load screen takes its own input, as Exult's modal gumps do.
+        if (!_ready || _cursor.Holding || _newGame is not null || _saveLoad is not null)
         {
             return;
         }
@@ -270,15 +271,17 @@ public partial class U7Game
                     DebugDie(restart: key.ShiftPressed);
                     break;
                 case Key.F5:
-                    try
+                    QuickSave();
+                    break;
+                case Key.Escape:
+                    // Exult ActionCloseOrMenu: the gumps close; with none open, the save/load screen.
+                    if (_gumps.GumpMode)
                     {
-                        SaveTo(SaveGame.QuickSlot);
-                        _statusExtra = "game saved";
+                        _gumps.CloseAll();
                     }
-                    catch (Exception ex)
+                    else if (!UsecodeRunning)
                     {
-                        GD.PushError("save failed: " + ex);
-                        _statusExtra = "save failed";
+                        OpenSaveLoad();
                     }
 
                     break;

@@ -94,6 +94,7 @@ public sealed class GumpButton
                 view.Gumps.Add(Parent.Owner, U7Constants.GumpStats);
                 break;
             case GumpButtonKind.Disk:
+                view.Gumps.OpenFileMenu?.Invoke();
                 break;
             case GumpButtonKind.Combat:
                 view.Gumps.ToggleCombat?.Invoke();

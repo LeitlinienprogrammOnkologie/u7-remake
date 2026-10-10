@@ -444,7 +444,8 @@ public sealed class Barges(GameMap map)
         }
 
         U7Object? best = null;
-        foreach (var b in map.FindNearby(new TileCoord(obj.Tx, obj.Ty, obj.Tz), Barge.Shape, 20))
+        // (Mask 0x10: a search without it skips barges, as it does eggs.)
+        foreach (var b in map.FindNearbyExult(new TileCoord(obj.Tx, obj.Ty, obj.Tz), Barge.Shape, 20, 0x10))
         {
             if (!b.IsBarge || !Of(b).InFootprint(obj.Tx, obj.Ty))
             {

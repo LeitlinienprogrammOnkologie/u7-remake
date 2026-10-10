@@ -196,6 +196,7 @@ public partial class U7Game : Node2D
             };
             _gumps.PossibleTheft = _combat.Guards.PossibleTheft;
             _gumps.ToggleCombat = ToggleCombat;
+            _gumps.OpenFileMenu = OpenSaveLoad;
             _gumps.IsCombatOn = () => _combat.InCombat;
             _gumps.GumpsVga = _shapes.GumpsVga;
 
@@ -499,6 +500,14 @@ public partial class U7Game : Node2D
 
         // Exult BG_Game::new_game: nothing else runs until the avatar is named.
         if (_newGame is not null)
+        {
+            Vector2I? noWalk = null;
+            AgentUpdate(delta, ref noWalk);
+            return;
+        }
+
+        // Exult Newfile_gump: a modal gump; the time queue is paused while it shows.
+        if (_saveLoad is not null)
         {
             Vector2I? noWalk = null;
             AgentUpdate(delta, ref noWalk);
@@ -969,12 +978,6 @@ public partial class U7Game : Node2D
 
         _conversation.Refresh();
     }
-
-    /// <summary>Saves the game into the slot (F5, the console's <c>save</c>).</summary>
-    void SaveTo(string slot) =>
-        SaveGame.Write(slot, _map, _npcs, _usecode, _combat.Spawned,
-            new GwinState(_clock.Day, _clock.Hour, _clock.Minute, _combat.InCombat, _music.CurrentTrack, _music.Repeat,
-                _music.EggCount, _clock.SpecialLight, _combat.Armageddon));
 
     /// <summary>Loads the slot by restarting the scene on it (F9, the console's <c>load</c>); false when it holds no save.</summary>
     bool LoadFrom(string slot)

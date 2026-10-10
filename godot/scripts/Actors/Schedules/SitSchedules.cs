@@ -32,7 +32,7 @@ public sealed class SitSchedule(NpcBrain brain, U7Object? chair = null) : Schedu
             if (Runner.Barges?.Moving is not null || !Npc.GetFlag(ObjFlag.InParty) ||
                 Runner.Party is not { } party ||
                 party.Members.Prepend(Runner.Avatar).Any(m => (m.Frame & 0xf) != ActorWalker.SitFrame) ||
-                Map.FindNearby(Here(chair), U7.World.Barge.Shape, 24).Count == 0)
+                ClosestTo(Here(chair), [U7.World.Barge.Shape]) is null)
             {
                 return;
             }

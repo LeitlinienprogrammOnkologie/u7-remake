@@ -330,6 +330,8 @@ public sealed class ScheduleRunner
         var prev = Avatar.ScheduleType;
         Avatar.ScheduleType = type;
         b.Schedule = type == ScheduleType.Combat ? new CombatSchedule(b, prev) : null;
+        // (Exult set_schedule_type asks the new schedule at once; here at the next step.)
+        b.Queued = true;
     }
 
     /// <summary>
@@ -509,6 +511,8 @@ public sealed class ScheduleRunner
             {
                 busy.CurrentAction = null;
                 busy.ActionDone = null;
+                // The player's walk queues the avatar: its schedule is asked once it is over.
+                busy.Queued = true;
             }
 
             // (Also a schedule restored from a save, which has no brain yet.)
@@ -898,6 +902,13 @@ public sealed class ScheduleRunner
     /// <summary>Exult <c>Npc_actor::handle_event</c>: the action's next step, or the schedule's <c>now_what</c>.</summary>
     void RunBrain(NpcBrain b, double delta)
     {
+        if (b == _avatarBrain && b.CurrentAction is null && !b.Queued)
+        {
+            // Exult Main_actor::handle_event: out of the time queue, the avatar waits for a start
+            // (a sitter moved to another throne stays seated there).
+            return;
+        }
+
         b.StepTimer -= delta;
         b.Pause -= delta;
         if (b.Pause > 0 || b.StepTimer > 0)
@@ -956,6 +967,12 @@ public sealed class ScheduleRunner
         }
 
         b.StepTimer = _stepInterval;
+        if (b == _avatarBrain)
+        {
+            // Exult Main_actor::handle_event asks the schedule once; only a start queues the avatar again.
+            b.Queued = false;
+        }
+
         (b.Schedule ??= Create(b, b.Npc.ScheduleType)).NowWhat();
     }
 
