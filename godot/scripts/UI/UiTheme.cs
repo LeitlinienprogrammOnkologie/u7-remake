@@ -39,6 +39,42 @@ public static class UiTheme
         return font;
     }
 
+    /// <summary>The size of the words over the world (barks, the cursor's flashes): Exult's font at the world's zoom, kept readable.</summary>
+    public static int WorldTextSize(float zoom) => Mathf.Clamp(Mathf.RoundToInt(6.5f * zoom), 14, 40);
+
+    /// <summary>
+    /// A gold-on-wood button's boxes: the backgrounds of its states, its
+    /// border's colour at rest and when disabled (bright gold under the mouse
+    /// and pressed), its width, corner radius and margin.
+    /// </summary>
+    public sealed record ButtonLook(Color Normal, Color Hover, Color Pressed, Color HoverPressed, Color Border, Color DisabledBorder,
+        int BorderWidth, int Radius, int Margin);
+
+    /// <summary>
+    /// Every button (the user's pick, 2026-10-10: the new game screen's look
+    /// for the conversation's answers too): dark wood, a firm gold border.
+    /// Buttons that size to their words add a margin (<c>with { Margin = ... }</c>).
+    /// </summary>
+    public static readonly ButtonLook PanelLook = new(WoodDark, new Color(0.24f, 0.17f, 0.09f), new Color(0.35f, 0.26f, 0.12f),
+        new Color(0.38f, 0.28f, 0.13f), Gold with { A = 0.5f }, Gold with { A = 0.25f }, 2, 6, 0);
+
+    /// <summary>A gold-on-wood button: gold words, bright under the mouse and pressed, faded when disabled, in the look's boxes.</summary>
+    public static void StyleButton(Button button, ButtonLook look)
+    {
+        button.FocusMode = Control.FocusModeEnum.None;
+        button.MouseDefaultCursorShape = Control.CursorShape.PointingHand;
+        button.AddThemeColorOverride("font_color", Gold);
+        button.AddThemeColorOverride("font_hover_color", GoldBright);
+        button.AddThemeColorOverride("font_pressed_color", GoldBright);
+        button.AddThemeColorOverride("font_hover_pressed_color", GoldBright);
+        button.AddThemeColorOverride("font_disabled_color", Gold with { A = 0.45f });
+        button.AddThemeStyleboxOverride("normal", Box(look.Normal, look.Border, look.BorderWidth, look.Radius, look.Margin));
+        button.AddThemeStyleboxOverride("hover", Box(look.Hover, GoldBright, look.BorderWidth, look.Radius, look.Margin));
+        button.AddThemeStyleboxOverride("pressed", Box(look.Pressed, GoldBright, look.BorderWidth, look.Radius, look.Margin));
+        button.AddThemeStyleboxOverride("hover_pressed", Box(look.HoverPressed, GoldBright, look.BorderWidth, look.Radius, look.Margin));
+        button.AddThemeStyleboxOverride("disabled", Box(look.Normal, look.DisabledBorder, look.BorderWidth, look.Radius, look.Margin));
+    }
+
     public static StyleBoxFlat Box(Color bg, Color border, int borderWidth, int radius, int margin)
     {
         var box = new StyleBoxFlat

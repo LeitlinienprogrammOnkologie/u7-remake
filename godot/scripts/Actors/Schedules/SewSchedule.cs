@@ -47,10 +47,6 @@ public sealed class SewSchedule(NpcBrain brain) : Schedule(brain)
     U7Object? _cloth;
     int _sewClothesCnt;
 
-    U7Object? Closest(int shape) => FindClosest([shape], 24).FirstOrDefault();
-
-    static U7Object? Valid(U7Object? obj) => obj is { Removed: false } ? obj : null;
-
     int Frames(int shape) => Math.Max(1, Map.Catalog[shape].FrameCount);
 
     public override void NowWhat()
@@ -182,7 +178,7 @@ public sealed class SewSchedule(NpcBrain brain) : Schedule(brain)
                 var tpos = new TileCoord(table.Tx + 1, table.Ty - 2, table.Tz).Wrapped();
                 // The cloth goes in the middle of the table.
                 var (x, y, w, h) = ObjectGeometry.Footprint(table);
-                var cpos = new TileCoord(x + w / 2, y + h / 2, table.Tz + Map.Catalog[table.Shape].DimZ);
+                var cpos = new TileCoord(x + w / 2, y + h / 2, TopLift(table));
                 if (PathWalk.Astar(Map, Npc, tpos, dist: 1) is { } walk)
                 {
                     SetAction(new SequenceAction(100, walk, new FacePosAction(table, 250),
@@ -279,7 +275,7 @@ public sealed class SewSchedule(NpcBrain brain) : Schedule(brain)
 
                 var tpos = new TileCoord(wares.Tx + 1, wares.Ty - 2, wares.Tz).Wrapped();
                 var (x, y, w, h) = ObjectGeometry.Footprint(wares);
-                var cpos = new TileCoord(x + Rng.Next(w), y + Rng.Next(h), wares.Tz + Map.Catalog[wares.Shape].DimZ);
+                var cpos = new TileCoord(x + Rng.Next(w), y + Rng.Next(h), TopLift(wares));
                 if (PathWalk.Astar(Map, Npc, tpos, dist: 1) is { } walk)
                 {
                     SetAction(new SequenceAction(100, walk, new PickupAction(Map, cloth, cpos, 250, temporary: true)));

@@ -65,6 +65,9 @@ public sealed class MusicPlayer : IDisposable
     /// </summary>
     public bool StartFile(string path, int sequence, bool repeat) => Start(path, sequence, repeat, -1);
 
+    /// <summary>Files already read, by path and sequence: jukebox eggs restart their track often, and a load reloads the scene.</summary>
+    static readonly Dictionary<(string Path, int Sequence), (IReadOnlyList<MidiEvent> Events, int Division)> Parsed = new();
+
     bool Start(string path, int sequence, bool repeat, int track)
     {
         Stop();
@@ -86,18 +89,23 @@ public sealed class MusicPlayer : IDisposable
             return false;
         }
 
-        List<MidiEvent> events;
-        int division;
-        try
+        if (!Parsed.TryGetValue((path, sequence), out var parsed))
         {
-            events = MidiFile.Load(path, out division, sequence);
+            try
+            {
+                parsed = (MidiFile.Load(path, out var div, sequence), div);
+            }
+            catch (Exception ex)
+            {
+                LastError = $"music {Path.GetFileName(path)}: {ex.Message}";
+                GD.Print(LastError);
+                return false;
+            }
+
+            Parsed[(path, sequence)] = parsed;
         }
-        catch (Exception ex)
-        {
-            LastError = $"music {Path.GetFileName(path)}: {ex.Message}";
-            GD.Print(LastError);
-            return false;
-        }
+
+        var (events, division) = parsed;
 
         lock (_gate)
         {
@@ -153,7 +161,7 @@ public sealed class MusicPlayer : IDisposable
         }
     }
 
-    void Run(List<MidiEvent> events, int division)
+    void Run(IReadOnlyList<MidiEvent> events, int division)
     {
         do
         {

@@ -1,11 +1,9 @@
 using System.IO;
 using Godot;
 using U7.Actors;
-using U7.Audio;
 using U7.Core;
 using U7.Data;
 using U7.Usecode;
-using U7.World;
 
 namespace U7.Game;
 
@@ -18,69 +16,125 @@ namespace U7.Game;
 public static class SaveGame
 {
     public const string QuickSlot = "quick";
+    const string TmpSuffix = ".tmp";
+    const string OldSuffix = ".old";
 
     public static string SlotDir(string slot) => Path.Combine(U7Paths.SavesDir, slot);
 
-    public static bool Exists(string slot) => File.Exists(Path.Combine(SlotDir(slot), "NPC.DAT"));
-
-    public static void Write(string slot, GameMap map, List<U7Object?> npcs, UsecodeMachine? usecode,
-        GameClock clock, bool inCombat, MusicPlayer? music, IEnumerable<U7Object>? monsters = null, bool armageddon = false)
+    /// <summary>Whether the slot holds a save; first puts back one cut off between <see cref="Swap"/>'s two renames.</summary>
+    public static bool Exists(string slot)
     {
         var dir = SlotDir(slot);
-        Directory.CreateDirectory(dir);
-        foreach (var old in Directory.GetFiles(dir, "U7IREG*"))
+        if (!Directory.Exists(dir) && Directory.Exists(dir + OldSuffix))
         {
-            File.Delete(old);
+            Directory.Move(dir + OldSuffix, dir);
         }
 
-        map.WriteIregFiles(dir);
-        NpcDat.Save(dir, npcs, map);
-        NpcDat.SaveMonsters(dir, monsters ?? Array.Empty<U7Object>(), map);
+        return File.Exists(Path.Combine(dir, "NPC.DAT"));
+    }
+
+    /// <summary>
+    /// Exult <c>Game_window::write</c>, into a fresh <c>slot.tmp</c> that
+    /// replaces the slot only once every file is written, so a failure
+    /// part-way leaves the old save whole.
+    /// </summary>
+    public static void Write(string slot, GameMap map, List<U7Object?> npcs, UsecodeMachine? usecode,
+        IEnumerable<U7Object> monsters, GwinState gwin)
+    {
+        var dir = SlotDir(slot);
+        var tmp = dir + TmpSuffix;
+        if (Directory.Exists(tmp))
+        {
+            Directory.Delete(tmp, recursive: true);
+        }
+
+        Directory.CreateDirectory(tmp);
+        map.WriteIregFiles(tmp);
+        NpcDat.Save(tmp, npcs, map);
+        NpcDat.SaveMonsters(tmp, monsters, map);
         if (usecode is not null)
         {
-            File.WriteAllBytes(Path.Combine(dir, "FLAGINIT"), usecode.GFlags);
-            UsecodeDat.Write(dir, usecode.Party?.Members.Select(m => m.NpcNum).ToList() ?? [], usecode.Timers);
+            File.WriteAllBytes(Path.Combine(tmp, "FLAGINIT"), usecode.GFlags);
+            UsecodeDat.Write(tmp, usecode.Party?.Members.Select(m => m.NpcNum).ToList() ?? [], usecode.Timers);
         }
 
-        File.Delete(Path.Combine(dir, OldGwinName));
-        WriteGwin(Path.Combine(dir, GwinName), clock, inCombat, music, armageddon);
+        using (var w = new BinaryWriter(File.Create(Path.Combine(tmp, GwinName))))
+        {
+            gwin.Write(w);
+        }
+
         var identity = Path.Combine(U7Paths.RepoRoot, "u7", "GAMEDAT", "IDENTITY");
         if (File.Exists(identity))
         {
-            File.Copy(identity, Path.Combine(dir, "IDENTITY"), overwrite: true);
+            File.Copy(identity, Path.Combine(tmp, "IDENTITY"));
         }
 
+        KeepUnwritten(dir, tmp);
+        Swap(dir, tmp);
         GD.Print($"saved to {dir}");
+    }
+
+    /// <summary>
+    /// Copies the old slot's files this save didn't write, which writing over
+    /// the slot used to keep: FLAGINIT and USECODE.* without usecode, IDENTITY
+    /// without the GOG copy. Not GWIN.DAT, which GAMEWIN.DAT replaces.
+    /// </summary>
+    static void KeepUnwritten(string dir, string tmp)
+    {
+        if (!Directory.Exists(dir))
+        {
+            return;
+        }
+
+        foreach (var file in Directory.GetFiles(dir))
+        {
+            var name = Path.GetFileName(file);
+            var dest = Path.Combine(tmp, name);
+            if (!name.Equals(OldGwinName, StringComparison.OrdinalIgnoreCase) && !File.Exists(dest))
+            {
+                File.Copy(file, dest);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Puts the new slot in place of the old. Windows can't swap directories
+    /// in one step, so the old one is renamed aside first and put back if the
+    /// new one can't take its place (<see cref="Exists"/> puts it back after a crash).
+    /// </summary>
+    static void Swap(string dir, string tmp)
+    {
+        var old = dir + OldSuffix;
+        if (Directory.Exists(old))
+        {
+            Directory.Delete(old, recursive: true);
+        }
+
+        if (!Directory.Exists(dir))
+        {
+            Directory.Move(tmp, dir);
+            return;
+        }
+
+        Directory.Move(dir, old);
+        try
+        {
+            Directory.Move(tmp, dir);
+        }
+        catch
+        {
+            Directory.Move(old, dir);
+            throw;
+        }
+
+        Directory.Delete(old, recursive: true);
     }
 
     /// <summary>Exult <c>gamewin.dat</c>; saves made before this used the name GWIN.DAT.</summary>
     const string GwinName = "GAMEWIN.DAT";
     const string OldGwinName = "GWIN.DAT";
 
-    /// <summary>Exult <c>Game_window::write_gwin</c>.</summary>
-    static void WriteGwin(string path, GameClock clock, bool inCombat, MusicPlayer? music, bool armageddon)
-    {
-        using var w = new BinaryWriter(File.Create(path));
-        w.Write((ushort)0); // scrolltx
-        w.Write((ushort)0); // scrollty
-        w.Write((ushort)clock.Day);
-        w.Write((ushort)clock.Hour);
-        w.Write((ushort)clock.Minute);
-        w.Write((uint)clock.SpecialLight);
-        var track = music?.CurrentTrack ?? -1;
-        w.Write(unchecked((uint)track));
-        w.Write((uint)((music is { Repeat: true } ? 1u : 0u) | ((uint)(music?.EggCount ?? 0) << 16)));
-        w.Write((byte)(armageddon ? 1 : 0));
-        w.Write((byte)0); // ambient light
-        w.Write((byte)(inCombat ? 1 : 0));
-        w.Write((byte)0); // infravision
-    }
-
-    /// <param name="EggCount">Exult <c>set_egg_count(repeat >> 16)</c>: the continuous jukebox eggs holding the track.</param>
-    public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCombat, int Track, bool Repeat, int EggCount,
-        int SpecialLight, bool Armageddon);
-
-    /// <summary>Exult <c>Game_window::read_gwin</c> (the parts we keep).</summary>
+    /// <summary>The loaded save's <see cref="GwinState"/>; null for a new game or an unreadable file.</summary>
     public static GwinState? ReadGwin()
     {
         var data = U7Paths.ReadGameDat(GwinName) ?? U7Paths.ReadGameDat(OldGwinName);
@@ -92,33 +146,7 @@ public static class SaveGame
         try
         {
             using var r = new BinaryReader(new MemoryStream(data));
-            r.ReadUInt16();
-            r.ReadUInt16();
-            int day = r.ReadUInt16();
-            int hour = r.ReadUInt16();
-            int minute = r.ReadUInt16();
-            var track = -1;
-            var repeat = false;
-            var eggCount = 0;
-            var combat = false;
-            var armageddon = false;
-            var light = 0;
-            if (r.BaseStream.Length - r.BaseStream.Position >= 12)
-            {
-                light = (int)r.ReadUInt32();
-                track = unchecked((int)r.ReadUInt32());
-                var repeatWord = r.ReadUInt32();
-                repeat = (repeatWord & 1) != 0;
-                eggCount = (int)(repeatWord >> 16);
-                if (r.BaseStream.Length - r.BaseStream.Position >= 3)
-                {
-                    armageddon = r.ReadByte() == 1;
-                    r.ReadByte();
-                    combat = r.ReadByte() != 0;
-                }
-            }
-
-            return new GwinState(day, hour, minute, combat, track, repeat, eggCount, light, armageddon);
+            return GwinState.Read(r);
         }
         catch (Exception ex)
         {

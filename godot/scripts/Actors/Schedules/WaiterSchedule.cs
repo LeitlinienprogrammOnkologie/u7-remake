@@ -42,7 +42,6 @@ public sealed class WaiterSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
     }
 
     State _state;
-    readonly TileCoord _startPos = Here(brain.Npc);
     U7Object? _customer;
     /// <summary>The table worked at: a prep table, or the counter waited at.</summary>
     U7Object? _prepTable;
@@ -163,8 +162,8 @@ public sealed class WaiterSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
 
         _prepTable = null;
         const int dist = 8; // Bad luck? Walk randomly.
-        var dest = new TileCoord(_startPos.Tx - dist + Rng.Next(2 * dist), _startPos.Ty - dist + Rng.Next(2 * dist),
-            _startPos.Tz).Wrapped();
+        var dest = new TileCoord(StartPos.Tx - dist + Rng.Next(2 * dist), StartPos.Ty - dist + Rng.Next(2 * dist),
+            StartPos.Tz).Wrapped();
         StartAction(PathWalk.Line(Map, Npc, dest), 2 * Std, Rng.Next(2000));
         return false;
     }
@@ -275,23 +274,13 @@ public sealed class WaiterSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
             }
 
             // Found it.
-            var (fx, fy, fw, fh) = ObjectGeometry.Footprint(table);
-            int sx = cx, sy = cy;
-            if (cy >= fy && cy < fy + fh)
-            {
-                sx = cx <= fx ? fx : fx + fw - 1; // East or west of the table.
-            }
-            else
-            {
-                sy = cy <= fy ? fy : fy + fh - 1; // North or south.
-            }
-
+            var (sx, sy) = ObjectGeometry.EdgeNearest(table, cx, cy);
             if (ObjectGeometry.InFootprint(table, sx, sy))
             {
                 // Small plates: frames 4, 5. Seems random.
                 var plate = Map.CreateIregObject(PlateShape, 4 + Rng.Next(2));
                 plate.SetFlag(ObjFlag.Temporary);
-                Map.PlaceInWorld(plate, sx, sy, table.Tz + Map.Catalog[table.Shape].DimZ);
+                Map.PlaceInWorld(plate, sx, sy, TopLift(table));
                 return plate;
             }
         }
@@ -490,7 +479,7 @@ public sealed class WaiterSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
                     break;
                 }
 
-                var prepTable = _prepTable is { Removed: false } t ? t : null;
+                var prepTable = Valid(_prepTable);
                 ReadyFood(); // So we can drop it.
                 if ((!_cooking || Rng.Next(3) != 0) && prepTable is not null &&
                     ObjectGeometry.Distance(Npc, prepTable) <= 3)
@@ -550,7 +539,7 @@ public sealed class WaiterSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
                 break;
             case State.WaitAtCounter:
             {
-                var counter = _prepTable is { Removed: false } t ? t : null;
+                var counter = Valid(_prepTable);
                 // Check for customers who have left.
                 if (Rng.Next(2) != 0 && FindUnattendedPlate())
                 {
@@ -688,8 +677,7 @@ public sealed class WaiterSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
 
                     // Delete after picking up, the food on it too.
                     IActorAction act = new PickupAction(Map, plate, 250, delete: true);
-                    var leftovers = Map.FindNearby(Here(plate), FoodShape, 2)
-                        .OrderBy(f => Here(f).Distance(Here(plate))).FirstOrDefault();
+                    var leftovers = ClosestTo(Here(plate), [FoodShape], 2);
                     if (leftovers is not null)
                     {
                         act = new SequenceAction(100, act, new PickupAction(Map, leftovers, 250, delete: true));

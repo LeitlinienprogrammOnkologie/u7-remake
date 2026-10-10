@@ -80,13 +80,18 @@ public sealed class UsecodeMachine
     public bool WaitingForPlayer => Wait is not (UsecodeWait.None or UsecodeWait.Fade or UsecodeWait.WizardEye or UsecodeWait.Flash);
     public string? UserChoice { get; private set; }
     public string StringReg { get; private set; } = "";
-    public string LastIntrinsic { get; private set; } = "";
-    public int LastFunctionId { get; private set; } = -1;
-    public int LastIp { get; private set; }
-    public int LastEvent { get; private set; }
+    /// <summary>The intrinsic called last, for the debug text.</summary>
+    public string LastIntrinsic => _lastIntrinsic < 0 ? "" : $"UI_{BgIntrinsics.Name(_lastIntrinsic)}(0x{_lastIntrinsic:X2}@{_lastIntrinsicArgc:D2})";
+    int _lastIntrinsic = -1;
+    int _lastIntrinsicArgc;
+    /// <summary>The frame run last, for the debug text: its function, event and the instruction it was on.</summary>
+    UsecodeFrame? _lastFrame;
+    public int LastFunctionId => _lastFrame?.Function.Id ?? -1;
+    public int LastIp => _lastFrame?.InsIp ?? 0;
+    public int LastEvent => _lastFrame?.EventId ?? 0;
     public string HudMessage { get; set; } = "";
-    public readonly List<string> FlagLog = new();
-    public readonly List<string> IntrinsicLog = new();
+    /// <summary>The last global flags set (offset, value), for the debug text.</summary>
+    readonly Queue<(int Offset, byte Value)> _flagLog = new();
     public event Action<string>? Say;
     public event Action<U7Object, string>? ItemSay;
     public event Action? AnswersChanged;
@@ -146,6 +151,8 @@ public sealed class UsecodeMachine
     public const double StdDelaySeconds = U7.Core.U7Constants.StandardDelayMs / 1000.0;
 
     readonly List<UsecodeScript> _scripts = new();
+    /// <summary>The objects with a script in <see cref="_scripts"/>, so the checks made per NPC and tick can skip the rest at once.</summary>
+    readonly HashSet<U7Object> _scripted = new();
     public IReadOnlyList<UsecodeScript> Scripts => _scripts;
 
     /// <summary>Exult <c>Usecode_internal::create_script</c> + <c>Usecode_script::start</c>.</summary>
@@ -163,6 +170,7 @@ public sealed class UsecodeMachine
         }
 
         _scripts.Add(script);
+        _scripted.Add(obj);
     }
 
     /// <summary>
@@ -192,6 +200,11 @@ public sealed class UsecodeMachine
     /// <summary>Exult <c>Usecode_script::terminate</c>.</summary>
     public void TerminateScripts(U7Object obj)
     {
+        if (!_scripted.Contains(obj))
+        {
+            return;
+        }
+
         foreach (var s in _scripts)
         {
             if (s.Obj == obj)
@@ -201,15 +214,50 @@ public sealed class UsecodeMachine
         }
     }
 
-    public bool HasScript(U7Object obj) => _scripts.Any(s => s.Obj == obj && !s.Done);
+    public bool HasScript(U7Object obj)
+    {
+        if (!_scripted.Contains(obj))
+        {
+            return false;
+        }
+
+        foreach (var s in _scripts)
+        {
+            if (s.Obj == obj && !s.Done)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Exult <c>Actor::in_usecode_control</c>: dont_move / dont_render set, or a
     /// started script that is not no_halt. Such an actor does not walk on its own.
     /// </summary>
-    public bool InUsecodeControl(U7Object actor) =>
-        U7.Actors.ObjFlag.DontMoveMode(actor) ||
-        _scripts.Any(s => s.Obj == actor && s.Activated && !s.Done && !s.NoHalt);
+    public bool InUsecodeControl(U7Object actor)
+    {
+        if (U7.Actors.ObjFlag.DontMoveMode(actor))
+        {
+            return true;
+        }
+
+        if (!_scripted.Contains(actor))
+        {
+            return false;
+        }
+
+        foreach (var s in _scripts)
+        {
+            if (s.Obj == actor && s.Activated && !s.Done && !s.NoHalt)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>Exult <c>Usecode_script::save</c> for every running script on the object.</summary>
     public IEnumerable<byte[]> SaveScripts(U7Object obj)
@@ -273,6 +321,7 @@ public sealed class UsecodeMachine
             var noHalt = r.ReadUInt16() != 0;
             var delayMs = r.ReadUInt32();
             _scripts.Add(new UsecodeScript(this, obj, code, index, noHalt, delayMs / 1000.0));
+            _scripted.Add(obj);
         }
         catch (Exception ex)
         {
@@ -392,7 +441,14 @@ public sealed class UsecodeMachine
             }
         }
 
-        _scripts.RemoveAll(s => s.Done);
+        if (_scripts.RemoveAll(s => s.Done) > 0)
+        {
+            _scripted.Clear();
+            foreach (var s in _scripts)
+            {
+                _scripted.Add(s.Obj);
+            }
+        }
     }
 
     /// <summary>Exult <c>set_item_frame</c>: keep the reflection bit, reset the walk cycle for actors.</summary>
@@ -476,16 +532,12 @@ public sealed class UsecodeMachine
             return null;
         }
 
+        // Exult add(item, true): readied where it fits, as when it was picked up.
         foreach (var item in body.Contents.ToList())
         {
-            item.Container = npc;
-            item.ReadySlot = -1;
-            item.Tx = 255;
-            item.Ty = 255;
-            npc.Contents.Add(item);
+            U7.Actors.Equipment.AddToActor(npc, item, Catalog, Map, dontCheck: true);
         }
 
-        body.Contents.Clear();
         var tx = body.Tx;
         var ty = body.Ty;
         var tz = body.Tz;
@@ -670,23 +722,14 @@ public sealed class UsecodeMachine
         UserChoice = answer;
         var wait = Wait;
         Wait = UsecodeWait.None;
-        if (wait is UsecodeWait.SelectMenu or UsecodeWait.SelectMenuIndex && _pendingCallisPush)
-        {
-            _pendingCallisPush = false;
-            if (wait == UsecodeWait.SelectMenuIndex)
-            {
-                var n = index >= 0 ? index + 1 : Conv.LocateAnswer(answer) + 1;
-                Push(UsecodeValue.FromInt(n));
-            }
-            else
-            {
-                Push(UsecodeValue.FromString(answer));
-            }
-        }
-
         _foundAnswer = false;
-        Run();
-        FinishIfDone();
+        // The menu intrinsics return the answer (select_from_menu2 its number); a converse loop reads UserChoice.
+        Resume(wait switch
+        {
+            UsecodeWait.SelectMenuIndex => UsecodeValue.FromInt(index >= 0 ? index + 1 : Conv.LocateAnswer(answer) + 1),
+            UsecodeWait.SelectMenu => UsecodeValue.FromString(answer),
+            _ => null
+        });
     }
 
     public void ResumeWait(UsecodeValue result)
@@ -697,13 +740,31 @@ public sealed class UsecodeMachine
         }
 
         Wait = UsecodeWait.None;
-        if (_pendingCallisPush)
+        Resume(result);
+    }
+
+    /// <summary>
+    /// A wait is over: hand the intrinsic that waited its result (when it
+    /// returns one and <paramref name="result"/> isn't null), then run on, or
+    /// finish the abort that waited for the text (<paramref name="abort"/>).
+    /// </summary>
+    void Resume(UsecodeValue? result, bool abort = false)
+    {
+        if (result is not null && _pendingCallisPush)
         {
             _pendingCallisPush = false;
             Push(result);
         }
 
-        Run();
+        if (abort)
+        {
+            Abort();
+        }
+        else
+        {
+            Run();
+        }
+
         FinishIfDone();
     }
 
@@ -715,6 +776,7 @@ public sealed class UsecodeMachine
         while (_callStack.Count > 0 && !_exitRun && Wait == UsecodeWait.None)
         {
             var frame = _callStack[^1];
+            _lastFrame = frame;
             var frameChanged = false;
             while (!frameChanged)
             {
@@ -733,9 +795,6 @@ public sealed class UsecodeMachine
                 }
 
                 frame.InsIp = frame.Ip;
-                LastFunctionId = frame.Function.Id;
-                LastIp = frame.Ip;
-                LastEvent = frame.EventId;
                 var opcode = (UsecodeOp)frame.Code[frame.Ip++];
                 frameChanged = Step(frame, opcode);
                 if (Wait != UsecodeWait.None)
@@ -1170,10 +1229,10 @@ public sealed class UsecodeMachine
                 if ((uint)offset < (uint)GFlags.Length)
                 {
                     GFlags[offset] = v;
-                    FlagLog.Add($"flag 0x{offset:X3} = {v}");
-                    if (FlagLog.Count > 16)
+                    _flagLog.Enqueue((offset, v));
+                    if (_flagLog.Count > 16)
                     {
-                        FlagLog.RemoveAt(0);
+                        _flagLog.Dequeue();
                     }
                 }
 
@@ -1331,8 +1390,7 @@ public sealed class UsecodeMachine
 
         frame.SaveSp = _sp;
         _callStack.Add(frame);
-        LastFunctionId = funcid;
-        LastEvent = eventid;
+        _lastFrame = frame;
         return true;
     }
 
@@ -1491,23 +1549,9 @@ public sealed class UsecodeMachine
             after();
         }
 
-        if (_pendingCallisPush)
-        {
-            _pendingCallisPush = false;
-            Push(UsecodeValue.FromInt(0));
-        }
-
-        if (_abortAfterText)
-        {
-            _abortAfterText = false;
-            Abort();
-        }
-        else
-        {
-            Run();
-        }
-
-        FinishIfDone();
+        var abort = _abortAfterText;
+        _abortAfterText = false;
+        Resume(UsecodeValue.FromInt(0), abort);
     }
 
     /// <summary>
@@ -1624,31 +1668,21 @@ public sealed class UsecodeMachine
         }
 
         obj.BarkText = text;
-        obj.BarkUntilMsec = Time.GetTicksMsec() + 4000;
+        obj.BarkUntilMsec = Time.GetTicksMsec() + U7Constants.TextEffectMs;
         ItemSay?.Invoke(obj, text);
     }
 
     UsecodeValue CallIntrinsic(int id, int argc)
     {
+        // Those not passed are 0, each its own value: the VM changes values in place, so none is shared.
         var parms = new UsecodeValue[12];
         for (var i = 0; i < parms.Length; i++)
         {
-            parms[i] = UsecodeValue.FromInt(0);
+            parms[i] = i < argc ? Pop() : UsecodeValue.FromInt(0);
         }
 
-        for (var i = 0; i < argc; i++)
-        {
-            parms[i] = Pop();
-        }
-
-        var name = BgIntrinsics.Name(id);
-        LastIntrinsic = $"UI_{name}(0x{id:X2}@{argc:D2})";
-        IntrinsicLog.Add(LastIntrinsic);
-        if (IntrinsicLog.Count > 24)
-        {
-            IntrinsicLog.RemoveAt(0);
-        }
-
+        _lastIntrinsic = id;
+        _lastIntrinsicArgc = argc;
         return _intrinsics.Call(id, parms, argc);
     }
 
@@ -1926,23 +1960,15 @@ public sealed class UsecodeMachine
             sb.AppendLine($"waiting: {Wait}  answers: {string.Join(", ", Conv.Answers)}");
         }
 
-        if (FlagLog.Count > 0)
+        if (_flagLog.Count > 0)
         {
-            sb.AppendLine("flags: " + string.Join("; ", FlagLog));
+            sb.AppendLine("flags: " + string.Join("; ", _flagLog.Select(f => $"flag 0x{f.Offset:X3} = {f.Value}")));
         }
 
         return sb.ToString().TrimEnd();
     }
 
-    public void Log(string msg)
-    {
-        GD.Print("[usecode] " + msg);
-        IntrinsicLog.Add(msg);
-        if (IntrinsicLog.Count > 24)
-        {
-            IntrinsicLog.RemoveAt(0);
-        }
-    }
+    public void Log(string msg) => GD.Print("[usecode] " + msg);
 
     static int ReadU16(byte[] d, ref int ip)
     {

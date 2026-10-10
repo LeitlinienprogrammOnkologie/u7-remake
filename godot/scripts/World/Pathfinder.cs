@@ -388,9 +388,11 @@ public class FastPathClient : PathClient
             return true; // Already okay.
         }
 
+        var dst = new TileCoord(to.Tx, to.Ty, to.Tz);
+        var tovol = Block.Of(to);
         for (var i = 1; i <= 5; i++)
         {
-            if (IsGrabable(map, from, to, new FastPathClient(map, from, to, i)))
+            if (IsGrabable(map, from, dst, tovol, new FastPathClient(map, from, to, i)))
             {
                 return true;
             }
@@ -399,18 +401,33 @@ public class FastPathClient : PathClient
         return false;
     }
 
-    /// <summary>Exult <c>Fast_pathfinder_client::is_grabable</c> to a spot: a 1×1×1 block there.</summary>
-    public static bool IsGrabable(GameMap map, U7Object from, TileCoord to) =>
-        IsGrabable(map, from, new U7Object { Tx = to.Tx, Ty = to.Ty, Tz = to.Tz, DimX = 1, DimY = 1, DimZ = 1 });
+    /// <summary>Exult <c>Fast_pathfinder_client::is_grabable</c> to a spot: a 1×1×1 block there, with the spot's distance and client.</summary>
+    public static bool IsGrabable(GameMap map, U7Object from, TileCoord to)
+    {
+        if (ObjectGeometry.Distance(from, to) <= 1)
+        {
+            return true; // Already okay.
+        }
+
+        var tovol = new Block(to.Tx, to.Ty, to.Tz, 1, 1, 1);
+        for (var i = 1; i <= 5; i++)
+        {
+            if (IsGrabable(map, from, to, tovol, new FastPathClient(map, from, to, i)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     // Exult is_grabable_internal.
-    static bool IsGrabable(GameMap map, U7Object from, U7Object to, FastPathClient client)
+    static bool IsGrabable(GameMap map, U7Object from, TileCoord to, Block tovol, FastPathClient client)
     {
         var fromvol = Block.Of(from);
-        var tovol = Block.Of(to);
         var here = new TileCoord(from.Tx, from.Ty, from.Tz);
         var src = here;
-        var dst = new TileCoord(to.Tx, to.Ty, to.Tz);
+        var dst = to;
         ClosestEdge(fromvol, tovol, ref src, ref dst);
         src = src with { Tz = from.Tz };
         if (AstarSteps.Find(client, src, dst) is not { } path)
@@ -438,7 +455,7 @@ public class FastPathClient : PathClient
 
         var srcvol = fromvol;
         fromvol = fromvol.Moved(t.Tx - src.Tx, t.Ty - src.Ty, t.Tz - src.Tz);
-        dst = new TileCoord(to.Tx, to.Ty, to.Tz);
+        dst = to;
         ClosestEdge(fromvol, tovol, ref t, ref dst);
         if (ZombieSteps.Line(t, dst) is not { } line)
         {

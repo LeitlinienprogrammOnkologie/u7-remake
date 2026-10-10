@@ -37,6 +37,42 @@ public sealed class GameMap
     readonly byte[]?[][] _dungeonLevels;
     /// <summary>Exult <c>Chunk_cache</c> blocked flags: what solid objects occupy, per tile and lift.</summary>
     public ChunkBlocking Blocking { get; }
+    /// <summary>
+    /// Exult <c>Chunk_cache</c>'s doors: each chunk's doors in its list's
+    /// order, built on first use (<see cref="FindDoor"/>), then kept as
+    /// objects come and go, so a door found is the one a scan would find.
+    /// </summary>
+    readonly List<U7Object>?[,] _doors = new List<U7Object>?[U7Constants.NumChunks, U7Constants.NumChunks];
+    /// <summary>
+    /// Each chunk's objects the lighting looks at (Exult keeps its chunks'
+    /// light counts the same way): every actor and the shapes in
+    /// <see cref="LightShapes"/>, in the chunk list's order, built on first
+    /// use and then kept as objects come and go.
+    /// </summary>
+    readonly List<U7Object>?[,] _lightCandidates = new List<U7Object>?[U7Constants.NumChunks, U7Constants.NumChunks];
+    bool[]? _lightShapes;
+
+    /// <summary>The shapes the lighting looks at (light sources, windows, glowing magic), by shape number; set before the first look.</summary>
+    public bool[]? LightShapes
+    {
+        get => _lightShapes;
+        set
+        {
+            _lightShapes = value;
+            Array.Clear(_lightCandidates);
+        }
+    }
+
+    bool IsLightCandidate(U7Object obj) =>
+        obj.IsActor || (_lightShapes is { } shapes && (uint)obj.Shape < (uint)shapes.Length && shapes[obj.Shape]);
+
+    /// <summary>The chunk's objects the lighting looks at (<see cref="LightShapes"/>), in its list's order.</summary>
+    public List<U7Object> LightCandidates(int cx, int cy)
+    {
+        cx = U7Constants.WrapChunk(cx);
+        cy = U7Constants.WrapChunk(cy);
+        return _lightCandidates[cx, cy] ??= ChunkObjects[cx][cy].Where(IsLightCandidate).ToList();
+    }
 
     public GameMap(ShapeCatalog catalog)
     {
@@ -71,7 +107,6 @@ public sealed class GameMap
             Console.WriteLine($"IREG load failed: {ex.Message}");
         }
 
-        LogEggSummary();
         SetupDungeonLevels();
     }
 
@@ -250,6 +285,16 @@ public sealed class GameMap
             _covers.Clear();
         }
 
+        if (Catalog[obj.Shape].Door)
+        {
+            _doors[cx, cy]?.Add(obj);
+        }
+
+        if (IsLightCandidate(obj))
+        {
+            _lightCandidates[cx, cy]?.Add(obj);
+        }
+
         if (obj.IsEgg)
         {
             AddEgg(obj);
@@ -272,6 +317,16 @@ public sealed class GameMap
             if (Catalog[obj.Shape].IsBuilding)
             {
                 _covers.Clear();
+            }
+
+            if (Catalog[obj.Shape].Door)
+            {
+                _doors[cx, cy]?.Remove(obj);
+            }
+
+            if (IsLightCandidate(obj))
+            {
+                _lightCandidates[cx, cy]?.Remove(obj);
             }
 
             if (obj.IsEgg)
@@ -297,13 +352,25 @@ public sealed class GameMap
         }
 
         _chunkOrdered[cx][cy] = true;
+        // Each object's ordering info once for the whole chunk, not once for every pair.
+        var infos = new RenderOrdering.Info[9][];
+        for (var k = 0; k < 9; k++)
+        {
+            var near = ObjectsInChunk(cx + k % 3 - 1, cy + k / 3 - 1);
+            infos[k] = new RenderOrdering.Info[near.Count];
+            for (var i = 0; i < near.Count; i++)
+            {
+                infos[k][i] = new RenderOrdering.Info(near[i], Catalog);
+            }
+        }
+
         var list = ChunkObjects[cx][cy];
         for (var i = 0; i < list.Count; i++)
         {
             var obj = list[i];
             if (!obj.IsFlat && !obj.Removed)
             {
-                AddDependencies(obj, cx, cy, onlyEarlierInOwnChunk: true, ownIndex: i);
+                AddDependencies(obj, cx, cy, onlyEarlierInOwnChunk: true, ownIndex: i, infos);
             }
         }
     }
@@ -313,15 +380,18 @@ public sealed class GameMap
     /// neighbours (Exult limits the neighbours by overlap flags; comparing
     /// against all of them only adds dependencies Exult would also accept).
     /// </summary>
-    void AddDependencies(U7Object obj, int cx, int cy, bool onlyEarlierInOwnChunk, int ownIndex = int.MaxValue)
+    /// <param name="infos">The nine chunks' ordering info by list index (dy, then dx), when worked out for a whole chunk.</param>
+    void AddDependencies(U7Object obj, int cx, int cy, bool onlyEarlierInOwnChunk, int ownIndex = int.MaxValue,
+        RenderOrdering.Info[][]? infos = null)
     {
         const int Reach = 24; // tiles; sprites never extend further
-        var info = new RenderOrdering.Info(obj, Catalog);
+        var info = infos is null ? new RenderOrdering.Info(obj, Catalog) : infos[4][ownIndex];
         for (var dy = -1; dy <= 1; dy++)
         {
             for (var dx = -1; dx <= 1; dx++)
             {
                 var list = ObjectsInChunk(cx + dx, cy + dy);
+                var listInfos = infos?[(dy + 1) * 3 + dx + 1];
                 var own = dx == 0 && dy == 0;
                 var end = own && onlyEarlierInOwnChunk ? Math.Min(ownIndex, list.Count) : list.Count;
                 for (var i = 0; i < end; i++)
@@ -333,7 +403,7 @@ public sealed class GameMap
                         continue;
                     }
 
-                    var cmp = RenderOrdering.Compare(info, new RenderOrdering.Info(other, Catalog));
+                    var cmp = RenderOrdering.Compare(info, listInfos is null ? new RenderOrdering.Info(other, Catalog) : listInfos[i]);
                     if (cmp == 1)
                     {
                         (obj.Dependencies ??= new HashSet<U7Object>()).Add(other);
@@ -864,9 +934,11 @@ public sealed class GameMap
     public U7Object? FindDoor(TileCoord tile)
     {
         tile = tile.Wrapped();
-        foreach (var obj in ObjectsInChunk(tile.ChunkX, tile.ChunkY))
+        var doors = _doors[tile.ChunkX, tile.ChunkY] ??=
+            ChunkObjects[tile.ChunkX][tile.ChunkY].Where(o => Catalog[o.Shape].Door).ToList();
+        foreach (var obj in doors)
         {
-            if (!obj.Removed && Catalog[obj.Shape].Door && Blocks(obj, tile))
+            if (!obj.Removed && Blocks(obj, tile))
             {
                 return obj;
             }
@@ -950,6 +1022,19 @@ public sealed class GameMap
             if (Catalog[obj.Shape].IsBuilding || Catalog[shape].IsBuilding)
             {
                 _covers.Clear();
+            }
+
+            // Its place in the chunk's list stays: what it joins or leaves is rebuilt in that order when next needed.
+            var (ccx, ccy) = (U7Constants.WrapChunk(obj.Tx / U7Constants.TilesPerChunk), U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk));
+            if (Catalog[obj.Shape].Door != Catalog[shape].Door)
+            {
+                _doors[ccx, ccy] = null;
+            }
+
+            if (!obj.IsActor && _lightShapes is { } lights && (uint)shape < (uint)lights.Length &&
+                (uint)obj.Shape < (uint)lights.Length && lights[obj.Shape] != lights[shape])
+            {
+                _lightCandidates[ccx, ccy] = null;
             }
         }
 
@@ -2242,35 +2327,19 @@ public sealed class GameMap
         }
     }
 
-    void LogEggSummary()
-    {
-        var counts = new int[12];
-        var trinsic = 0;
-        foreach (var e in Eggs)
-        {
-            if ((uint)e.EggType < (uint)counts.Length)
-            {
-                counts[e.EggType]++;
-            }
-
-            if (Math.Abs(e.Tx - U7Constants.StartTileX) <= 80 &&
-                Math.Abs(e.Ty - U7Constants.StartTileY) <= 80)
-            {
-                trinsic++;
-            }
-        }
-
-        Console.WriteLine(
-            $"eggs: {Eggs.Count} total, {trinsic} near Trinsic start; " +
-            $"teleport={counts[U7.World.EggType.Teleport]} usecode={counts[U7.World.EggType.Usecode]} " +
-            $"jukebox={counts[U7.World.EggType.Jukebox]} button={counts[U7.World.EggType.Button]} " +
-            $"path={counts[U7.World.EggType.Path]} monster={counts[U7.World.EggType.Monster]}");
-    }
-
     /// <summary>Exult <c>Game_map::create_ireg_object</c>: a new item that is not in the world yet.</summary>
     public U7Object CreateIregObject(int shape, int frame)
     {
         var obj = MakeObject(0, 0, 0, shape, frame, 0, ObjectKind.Ireg);
+        obj.Removed = true;
+        return obj;
+    }
+
+    /// <summary>Exult's <c>Actor</c> constructors: a new actor that is not in the world yet, sized as <see cref="CreateIregObject"/>.</summary>
+    public U7Object CreateActor(int shape, int frame)
+    {
+        var obj = MakeObject(0, 0, 0, shape, frame, 0, ObjectKind.Actor);
+        obj.IsActor = true;
         obj.Removed = true;
         return obj;
     }

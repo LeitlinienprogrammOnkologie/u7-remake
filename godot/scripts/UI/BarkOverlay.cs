@@ -33,7 +33,7 @@ public sealed partial class BarkOverlay : Control
 
         var xf = world.GetGlobalTransformWithCanvas();
         var zoom = xf.X.X;
-        var size = Mathf.Clamp(Mathf.RoundToInt(6.5f * zoom), 14, 40);
+        var size = UiTheme.WorldTextSize(zoom);
         var outline = Math.Max(4, size / 5);
         var font = UiTheme.Font;
         var view = GetViewportRect().Size;

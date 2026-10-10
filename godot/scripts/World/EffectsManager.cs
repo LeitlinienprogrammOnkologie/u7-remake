@@ -25,8 +25,10 @@ public sealed class SpriteEffect
     public int DeltaY;
     /// <summary>Repetitions, or &lt;0 to go through the frames once.</summary>
     public int Reps;
-    /// <summary>Milliseconds until its next event.</summary>
-    public double Due;
+    /// <summary>When its next event is due, in effect time (its entry in Exult's time queue).</summary>
+    public double DueMs;
+    /// <summary>When it went into the queue: equal times go first in, first out.</summary>
+    public long Seq;
     /// <summary>Exult <c>Explosion_effect</c>: what happens a quarter of the way through (the blast).</summary>
     public Action<SpriteEffect>? AtQuarter;
 
@@ -93,7 +95,7 @@ public sealed class EffectsManager
             DeltaY = dy,
             Frame = frame,
             Reps = reps,
-            Due = delayMs
+            DueMs = _nowMs + delayMs
         });
 
     /// <summary>Exult <c>Sprites_effect(num, obj, xf, yf, dx, dy, frm, rps)</c>: starts at once and follows the object.</summary>
@@ -109,15 +111,25 @@ public sealed class EffectsManager
             DeltaX = dx,
             DeltaY = dy,
             Frame = frame,
-            Reps = reps
+            Reps = reps,
+            DueMs = _nowMs
         });
 
     SpriteEffect Add(SpriteEffect e)
     {
+        e.Seq = NextSeq();
         _sprites.Insert(0, e);
-        GD.Print($"sprite effect {e.Sprite} ({e.Frames} frames) at {e.Pos.Tx},{e.Pos.Ty},{e.Pos.Tz}");
         return e;
     }
+
+    /// <summary>
+    /// Exult <c>Time_queue::add</c> puts an entry after those due at the same
+    /// time (<c>upper_bound</c>): this numbers the entries in the order they go
+    /// in, so equal times run first in, first out.
+    /// </summary>
+    internal long NextSeq() => ++_seq;
+
+    long _seq;
 
     /// <summary>Exult <c>Effects_manager::add_effect</c>: at the front.</summary>
     public void Add(WeatherEffect effect) => _weather.Insert(0, effect);
@@ -218,40 +230,49 @@ public sealed class EffectsManager
 
     public void Update(double delta)
     {
-        var ms = delta * 1000;
-        _nowMs += ms;
-        // Exult's time queue: the weather's events in time order, each at the
-        // time it was due, so a long frame catches up step by step.
-        while (NextDue() is { } due)
+        _nowMs += delta * 1000;
+        // Exult's time queue: the weather's and the animations' events in one
+        // time order (equal times first in, first out), each at the time it
+        // was due, so a long frame catches up step by step.
+        while (true)
         {
-            due.HandleEvent(due.DueMs);
-        }
-
-        for (var i = _sprites.Count - 1; i >= 0; i--)
-        {
-            var e = _sprites[i];
-            e.Due -= ms;
-            while (e.Due <= 0)
+            var weather = NextDue(_weather, w => (w.DueMs, w.Seq));
+            var sprite = NextDue(_sprites, e => (e.DueMs, e.Seq));
+            if (sprite is not null && (weather is null || (sprite.DueMs, sprite.Seq).CompareTo((weather.DueMs, weather.Seq)) < 0))
             {
-                if (Step(e))
+                if (Step(sprite))
                 {
-                    _sprites.RemoveAt(i);
-                    break;
+                    _sprites.Remove(sprite);
                 }
-
-                e.Due += U7Constants.StandardDelayMs;
+                else
+                {
+                    sprite.DueMs += U7Constants.StandardDelayMs;
+                    sprite.Seq = NextSeq();
+                }
+            }
+            else if (weather is not null)
+            {
+                weather.HandleEvent(weather.DueMs);
+            }
+            else
+            {
+                break;
             }
         }
     }
 
-    WeatherEffect? NextDue()
+    /// <summary>The entry due first by now, by time and then by when it went in.</summary>
+    T? NextDue<T>(List<T> entries, Func<T, (double DueMs, long Seq)> key) where T : class
     {
-        WeatherEffect? next = null;
-        foreach (var w in _weather)
+        T? next = null;
+        (double DueMs, long Seq) best = default;
+        foreach (var e in entries)
         {
-            if (w.DueMs <= _nowMs && (next is null || w.DueMs < next.DueMs))
+            var k = key(e);
+            if (k.DueMs <= _nowMs && (next is null || k.CompareTo(best) < 0))
             {
-                next = w;
+                next = e;
+                best = k;
             }
         }
 

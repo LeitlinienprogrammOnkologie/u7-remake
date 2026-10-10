@@ -45,10 +45,6 @@ public sealed class ForgeSchedule(NpcBrain brain) : Schedule(brain)
     U7Object? _tongs;
     U7Object? _hammer;
 
-    static U7Object? Valid(U7Object? obj) => obj is { Removed: false } ? obj : null;
-
-    U7Object? Closest(int shape) => FindClosest([shape], 24).FirstOrDefault();
-
     /// <summary>Exult's paths here get within 1 tile (<c>Actor_pathfinder_client(npc, 1)</c>).</summary>
     PathWalk? PathTo(TileCoord dest) => PathTo(Here(Npc), dest);
 
@@ -97,7 +93,7 @@ public sealed class ForgeSchedule(NpcBrain brain) : Schedule(brain)
                 }
 
                 var (x, y, w, h) = ObjectGeometry.Footprint(firepit);
-                var bpos = new TileCoord(x + w / 2 + 1, y + h / 2, firepit.Tz + Map.Catalog[firepit.Shape].DimZ);
+                var bpos = new TileCoord(x + w / 2 + 1, y + h / 2, TopLift(firepit));
                 var put = new PickupAction(Map, blank, bpos, 250, temporary: false);
                 SetAction(PathTo(ObjectGeometry.Tile(firepit)) is { } walk ? new SequenceAction(100, walk, put) : put);
                 _state = State.UseBellows;
@@ -161,7 +157,7 @@ public sealed class ForgeSchedule(NpcBrain brain) : Schedule(brain)
                 var tpos = ObjectGeometry.Tile(firepit);
                 var tpos2 = new TileCoord(anvil.Tx, anvil.Ty + 1, anvil.Tz);
                 var (x, y, _, _) = ObjectGeometry.Footprint(anvil);
-                var bpos = new TileCoord(x + 2, y, anvil.Tz + Map.Catalog[anvil.Shape].DimZ);
+                var bpos = new TileCoord(x + 2, y, TopLift(anvil));
                 SetAction(PathTo(tpos) is { } walk && PathTo(tpos, tpos2) is { } walk2
                     ? new SequenceAction(100, walk, new PickupAction(Map, blank, 250), walk2,
                         new PickupAction(Map, blank, bpos, 250, temporary: false))

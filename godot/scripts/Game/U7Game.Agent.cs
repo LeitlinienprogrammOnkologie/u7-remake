@@ -276,7 +276,7 @@ public partial class U7Game
             case "use":
             {
                 // As the mouse (ActivateUnderMouse): nothing new starts while usecode runs or waits.
-                if (_usecode!.InUsecode || _usecode.WaitingForChoice)
+                if (UsecodeRunning)
                 {
                     AgentLog("usecode is running (finish it first)");
                     break;
@@ -356,7 +356,7 @@ public partial class U7Game
             case "call":
             {
                 // A test shortcut: run a usecode function (hex) on an object, by default the avatar, event 1.
-                if (_usecode!.InUsecode || _usecode.WaitingForChoice)
+                if (UsecodeRunning)
                 {
                     AgentLog("usecode is running");
                     break;
@@ -365,7 +365,7 @@ public partial class U7Game
                 var fun = Convert.ToInt32(parts[1], 16);
                 var target = parts.Length > 2 ? AgentTarget(parts[2]) ?? throw new ArgumentException("no such object/npc") : av;
                 var ev = parts.Length > 3 ? int.Parse(parts[3]) : (int)UsecodeEvent.DoubleClick;
-                _usecode.Call(fun, target, (UsecodeEvent)ev);
+                _usecode!.Call(fun, target, (UsecodeEvent)ev);
                 _conversation.Refresh();
                 AgentLog($"called 0x{fun:X3} on {AgentName(target)}, event {ev}");
                 break;
@@ -833,25 +833,17 @@ public partial class U7Game
                 _gumps.CloseAll();
                 break;
             case "save":
-                if (_usecode!.InUsecode || _usecode.WaitingForChoice)
+                if (UsecodeRunning)
                 {
                     AgentLog("usecode is running (finish it first)");
                     break;
                 }
 
-                SaveGame.Write(arg, _map, _npcs, _usecode, _clock, _combat.InCombat, _music, _combat.Spawned, _combat.Armageddon);
+                SaveTo(arg);
                 AgentLog($"saved to {SaveGame.SlotDir(arg)}");
                 break;
             case "load":
-                if (!SaveGame.Exists(arg))
-                {
-                    AgentLog($"no saved game '{arg}'");
-                    break;
-                }
-
-                U7Paths.GameDatOverride = SaveGame.SlotDir(arg);
-                GetTree().ReloadCurrentScene();
-                AgentLog("loading...");
+                AgentLog(LoadFrom(arg) ? "loading..." : $"no saved game '{arg}'");
                 break;
             default:
                 AgentLog($"unknown command; {AgentHelp}");

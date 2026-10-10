@@ -621,6 +621,9 @@ public class CombatSchedule : Schedule
         }
     }
 
+    /// <summary>Where <see cref="SetHandToHand"/> puts the weapon, in Exult's order.</summary>
+    static readonly int[] PutAwaySpots = [ReadySpot.Belt, ReadySpot.Back2h, ReadySpot.BackShield, ReadySpot.Rhand, ReadySpot.Back];
+
     /// <summary>Exult <c>Combat_schedule::set_hand_to_hand</c>: bare hands, the weapon put aside.</summary>
     protected void SetHandToHand()
     {
@@ -632,7 +635,7 @@ public class CombatSchedule : Schedule
         }
 
         Map.TakeFromWorld(weapon);
-        foreach (var spot in (int[])[ReadySpot.Belt, ReadySpot.Back2h, ReadySpot.BackShield, ReadySpot.Rhand, ReadySpot.Back])
+        foreach (var spot in PutAwaySpots)
         {
             if (Equipment.GetReadied(Npc, spot) is null &&
                 Equipment.AddReadied(Npc, weapon, spot, Map.Catalog, Map, forcePos: true))
@@ -921,7 +924,7 @@ public sealed class DuelSchedule : CombatSchedule
         if (r == 0)
         {
             // First look for practice targets: the archery target.
-            PracticeTarget = FindClosest([ArcheryTarget], 24).FirstOrDefault();
+            PracticeTarget = Closest(ArcheryTarget);
             if (PracticeTarget is not null)
             {
                 ReadyDuelWeapon(Bow, Arrows);
@@ -934,7 +937,7 @@ public sealed class DuelSchedule : CombatSchedule
             ReadyDuelWeapon(TrainingSword, -1);
             if (r == 1)
             {
-                PracticeTarget = FindClosest([FencingDummy], 24).FirstOrDefault();
+                PracticeTarget = Closest(FencingDummy);
             }
         }
 

@@ -37,7 +37,7 @@ public sealed class PatrolSchedule(NpcBrain brain) : Schedule(brain)
     int NumPathEggs => Map.Catalog[PathShape].FrameCount - 1;
 
     List<U7Object> Markers(int frame = -1) =>
-        Map.FindNearby(Here(Npc), PathShape, 25, 16).Where(m => frame < 0 || m.Frame == frame).ToList();
+        Map.FindNearby(Here(Npc), PathShape, 25, 16, frame: frame < 0 ? U7Constants.AnyShape : frame);
 
     public override void NowWhat()
     {
@@ -176,7 +176,7 @@ public sealed class PatrolSchedule(NpcBrain brain) : Schedule(brain)
             _paths.Add(null);
         }
 
-        var path = _pathnum >= 0 && _paths[_pathnum] is { Removed: false } known ? known : null;
+        var path = _pathnum >= 0 ? Valid(_paths[_pathnum]) : null;
         if (path is null)
         {
             path = FindNearest(Markers(_pathnum));
@@ -239,7 +239,7 @@ public sealed class PatrolSchedule(NpcBrain brain) : Schedule(brain)
                 delay = 5;
                 break;
             case 24: // Read: the book within 4 tiles.
-                _book = FindClosest([BookShape], 4).FirstOrDefault();
+                _book = Closest(BookShape, 4);
                 goto case 3;
             case 3: // Sit.
                 if (SitDown(null, 0) is not null)

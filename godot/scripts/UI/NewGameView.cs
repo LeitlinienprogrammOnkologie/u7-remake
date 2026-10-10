@@ -82,18 +82,7 @@ public sealed partial class NewGameView : Control
                 button.Toggled += _ => ShowPortrait();
             }
 
-            button.FocusMode = FocusModeEnum.None;
-            button.MouseDefaultCursorShape = CursorShape.PointingHand;
-            button.AddThemeColorOverride("font_color", UiTheme.Gold);
-            button.AddThemeColorOverride("font_hover_color", UiTheme.GoldBright);
-            button.AddThemeColorOverride("font_pressed_color", UiTheme.GoldBright);
-            button.AddThemeColorOverride("font_hover_pressed_color", UiTheme.GoldBright);
-            button.AddThemeColorOverride("font_disabled_color", UiTheme.Gold with { A = 0.45f });
-            button.AddThemeStyleboxOverride("normal", UiTheme.Box(UiTheme.WoodDark, UiTheme.Gold with { A = 0.5f }, 2, 6, 0));
-            button.AddThemeStyleboxOverride("hover", UiTheme.Box(new Color(0.24f, 0.17f, 0.09f), UiTheme.GoldBright, 2, 6, 0));
-            button.AddThemeStyleboxOverride("pressed", UiTheme.Box(new Color(0.35f, 0.26f, 0.12f), UiTheme.GoldBright, 2, 6, 0));
-            button.AddThemeStyleboxOverride("hover_pressed", UiTheme.Box(new Color(0.38f, 0.28f, 0.13f), UiTheme.GoldBright, 2, 6, 0));
-            button.AddThemeStyleboxOverride("disabled", UiTheme.Box(UiTheme.WoodDark, UiTheme.Gold with { A = 0.25f }, 2, 6, 0));
+            UiTheme.StyleButton(button, UiTheme.PanelLook);
             AddChild(button);
         }
 

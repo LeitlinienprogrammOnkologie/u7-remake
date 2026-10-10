@@ -8,7 +8,8 @@ namespace U7.Usecode;
 
 /// <summary>
 /// Black Gate intrinsic dispatch (Exult <c>bgintrinsics.h</c> + <c>intrinsics.cc</c>).
-/// Phase A/B are implemented; everything else logs and returns 0.
+/// Every intrinsic gets 12 parameters, those not passed 0 (Exult's default
+/// <c>Usecode_value</c>); one without a port logs and returns 0.
 /// </summary>
 public sealed class BgIntrinsics
 {
@@ -284,7 +285,7 @@ public sealed class BgIntrinsics
     {
         // Exult: the text said so far shows first, under the face that said it.
         _vm.ShowPendingText();
-        var frame = p.Length > 1 ? (int)p[1].IntValue : 0;
+        var frame = (int)p[1].IntValue;
         var item = _vm.GetItem(p[0]);
         var shape = FaceShape(p[0], item);
         if (shape < 0)
@@ -692,8 +693,8 @@ public sealed class BgIntrinsics
     /// </summary>
     UsecodeValue FadePalette(UsecodeValue[] p)
     {
-        var cycles = p.Length > 0 ? (int)p[0].IntValue : 0;
-        var fadeIn = p.Length <= 2 || p[2].IntValue != 0;
+        var cycles = (int)p[0].IntValue;
+        var fadeIn = p[2].IntValue != 0;
         if (fadeIn)
         {
             _vm.Lighting?.ResetPalette();
@@ -717,28 +718,11 @@ public sealed class BgIntrinsics
             }
         }
 
-        var arr = UsecodeValue.FromArray(bodies.Count);
-        for (var i = 0; i < bodies.Count; i++)
-        {
-            arr.PutElem(i, UsecodeValue.FromObject(bodies[i]));
-        }
-
-        return arr;
+        return UsecodeValue.FromObjects(bodies);
     }
 
     /// <summary>Exult <c>Usecode_internal::get_party</c>: avatar first, then the members.</summary>
-    UsecodeValue GetPartyList()
-    {
-        var members = _vm.Party?.Members;
-        var count = members?.Count ?? 0;
-        var arr = UsecodeValue.FromArray(1 + count, UsecodeValue.FromObject(_vm.Avatar));
-        for (var i = 0; i < count; i++)
-        {
-            arr.PutElem(1 + i, UsecodeValue.FromObject(members![i]));
-        }
-
-        return arr;
-    }
+    UsecodeValue GetPartyList() => UsecodeValue.FromObjects(PartyObjects());
 
     /// <summary>Exult <c>UI_add_to_party</c> (BG intrinsic 0x1e): join, follow the avatar, become good.</summary>
     UsecodeValue AddToParty(UsecodeValue[] p)
@@ -780,13 +764,7 @@ public sealed class BgIntrinsics
     {
         if (p[0].IsArray)
         {
-            var arr = UsecodeValue.FromArray(p[0].ArraySize);
-            for (var i = 0; i < p[0].ArraySize; i++)
-            {
-                arr.PutElem(i, UsecodeValue.FromObject(_vm.GetItem(p[0].GetElem(i))));
-            }
-
-            return arr;
+            return UsecodeValue.FromObjects(Enumerable.Range(0, p[0].ArraySize).Select(i => _vm.GetItem(p[0].GetElem(i))));
         }
 
         return UsecodeValue.FromObject(_vm.GetItem(p[0]));
@@ -1468,7 +1446,7 @@ public sealed class BgIntrinsics
 
     /// <summary>Exult <c>UI_find_nearby(where, shape, dist, mask)</c>.</summary>
     UsecodeValue FindNearby(UsecodeValue[] p) =>
-        NearbyArray(FindNearbyFor(p[0], p[1], (int)p[2].IntValue, p.Length > 3 ? (int)p[3].IntValue : 0));
+        NearbyArray(FindNearbyFor(p[0], p[1], (int)p[2].IntValue, (int)p[3].IntValue));
 
     /// <summary>
     /// Exult <c>Usecode_internal::find_nearby</c>: round a click's result
@@ -1504,21 +1482,7 @@ public sealed class BgIntrinsics
         return _vm.Map.FindNearbyExult(new TileCoord(outer.Tx, outer.Ty, outer.Tz), shape, dist, mask);
     }
 
-    static UsecodeValue NearbyArray(List<U7Object> found)
-    {
-        if (found.Count == 0)
-        {
-            return UsecodeValue.FromArray(0);
-        }
-
-        var arr = UsecodeValue.FromArray(found.Count);
-        for (var i = 0; i < found.Count; i++)
-        {
-            arr.PutElem(i, UsecodeValue.FromObject(found[i]));
-        }
-
-        return arr;
-    }
+    static UsecodeValue NearbyArray(List<U7Object> found) => UsecodeValue.FromObjects(found);
 
     /// <summary>
     /// Exult <c>Usecode_internal::find_nearest</c>: of the shape round the
@@ -1675,8 +1639,8 @@ public sealed class BgIntrinsics
     UsecodeValue CountObjects(UsecodeValue[] p)
     {
         var shape = (int)p[1].IntValue;
-        var qual = p.Length > 2 ? (int)p[2].IntValue : U7Constants.AnyShape;
-        var frame = p.Length > 3 ? (int)p[3].IntValue : U7Constants.AnyShape;
+        var qual = (int)p[2].IntValue;
+        var frame = (int)p[3].IntValue;
         var oval = p[0].IsPtr ? 0 : (int)p[0].IntValue;
         if (oval == -357)
         {
@@ -1901,13 +1865,7 @@ public sealed class BgIntrinsics
             }
         }
 
-        var arr = UsecodeValue.FromArray(got.Count);
-        for (var i = 0; i < got.Count; i++)
-        {
-            arr.PutElem(i, UsecodeValue.FromObject(got[i]));
-        }
-
-        return arr;
+        return UsecodeValue.FromObjects(got);
     }
 
     /// <summary>
@@ -1923,7 +1881,6 @@ public sealed class BgIntrinsics
         {
             obj = combat.CreateMonster(shape, 0, U7.Actors.ScheduleType.Wait, U7.Actors.Alignment.Neutral);
             obj.Alignment = U7.Actors.Alignment.Neutral;
-            obj.Removed = true;
         }
         else
         {
@@ -2208,26 +2165,17 @@ public sealed class BgIntrinsics
         }
 
         var shape = (int)p[1].IntValue;
-        var qual = p.Length > 2 ? (int)p[2].IntValue : U7Constants.AnyShape;
-        var frame = p.Length > 3 ? (int)p[3].IntValue : U7Constants.AnyShape;
         var found = new List<U7Object>();
-        CollectMatching(obj, shape, qual, frame, found);
-        var arr = UsecodeValue.FromArray(found.Count);
-        for (var i = 0; i < found.Count; i++)
-        {
-            arr.PutElem(i, UsecodeValue.FromObject(found[i]));
-        }
-
-        return arr;
+        CollectMatching(obj, shape, (int)p[2].IntValue, (int)p[3].IntValue, found);
+        return UsecodeValue.FromObjects(found);
     }
 
+    /// <summary>Exult <c>Container_game_object::get_objects</c>: the matches, depth first.</summary>
     static void CollectMatching(U7Object container, int shape, int qual, int frame, List<U7Object> dest)
     {
         foreach (var child in container.Contents)
         {
-            if ((shape == U7Constants.AnyShape || child.Shape == shape) &&
-                (frame == U7Constants.AnyShape || (child.Frame & 31) == frame) &&
-                (qual == U7Constants.AnyShape || child.Quality == qual))
+            if (ItemQuantity.Matches(child, shape, qual, frame))
             {
                 dest.Add(child);
             }
@@ -2385,8 +2333,7 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
-        var party = _vm.Party?.Members.Prepend(_vm.Avatar) ?? [_vm.Avatar];
-        return UsecodeValue.FromInt(party.All(m => barge.InFootprint(m.Tx, m.Ty)) ? 1 : 0);
+        return UsecodeValue.FromInt(PartyObjects().All(m => barge.InFootprint(m.Tx, m.Ty)) ? 1 : 0);
     }
 
     /// <summary>Exult <c>UI_sit_down(npc, chair)</c>: the NPC's schedule becomes sitting on that chair.</summary>

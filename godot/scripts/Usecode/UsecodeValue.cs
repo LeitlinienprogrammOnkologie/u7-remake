@@ -64,6 +64,23 @@ public sealed class UsecodeValue
         return u;
     }
 
+    /// <summary>An array of the objects in order, a null one as a null object.</summary>
+    public static UsecodeValue FromObjects(IEnumerable<U7Object?> objs)
+    {
+        var u = new UsecodeValue
+        {
+            _type = UsecodeValType.Array,
+            _array = new List<UsecodeValue>(),
+            _undefined = false
+        };
+        foreach (var obj in objs)
+        {
+            u._array.Add(FromObject(obj));
+        }
+
+        return u;
+    }
+
     public static UsecodeValue FromArray(int size, UsecodeValue? first = null)
     {
         var u = new UsecodeValue
@@ -376,49 +393,35 @@ public sealed class UsecodeValue
         return true;
     }
 
+    /// <summary>Exult <c>Usecode_value::operator+=</c>, as a new value.</summary>
     public UsecodeValue Add(UsecodeValue v2)
     {
-        var v1 = Clone();
-        if (v1._undefined)
+        if (_undefined)
         {
             return v2.Clone();
         }
 
         if (v2._undefined)
         {
-            return v1;
+            return Clone();
         }
 
-        if (v1._type == UsecodeValType.Int)
+        return _type switch
         {
-            if (v2._type == UsecodeValType.Int)
+            UsecodeValType.Int => v2._type switch
             {
-                v1._int += v2._int;
-            }
-            else if (v2._type == UsecodeValType.String)
+                UsecodeValType.Int => FromInt(_int + v2._int),
+                UsecodeValType.String => FromString(_int.ToString(CultureInfo.InvariantCulture) + v2._str),
+                _ => Clone()
+            },
+            UsecodeValType.String => v2._type switch
             {
-                v1._type = UsecodeValType.String;
-                v1._str = v1._int.ToString(CultureInfo.InvariantCulture) + v2._str;
-            }
-
-            return v1;
-        }
-
-        if (v1._type == UsecodeValType.String)
-        {
-            if (v2._type == UsecodeValType.Int)
-            {
-                v1._str += v2._int.ToString(CultureInfo.InvariantCulture);
-            }
-            else if (v2._type == UsecodeValType.String)
-            {
-                v1._str += v2._str;
-            }
-
-            return v1;
-        }
-
-        return FromInt(0);
+                UsecodeValType.Int => FromString(_str + v2._int.ToString(CultureInfo.InvariantCulture)),
+                UsecodeValType.String => FromString(_str + v2._str),
+                _ => Clone()
+            },
+            _ => FromInt(0)
+        };
     }
 
     public UsecodeValue Sub(UsecodeValue v2) => Operate(v2, (a, b) => a - b);
@@ -431,10 +434,10 @@ public sealed class UsecodeValue
     public UsecodeValue Mod(UsecodeValue v2) =>
         Operate(v2, (a, b) => b == 0 ? (a < 0 ? long.MinValue : long.MaxValue) : a % b);
 
+    /// <summary>Exult <c>Usecode_value::operate</c>, as a new value.</summary>
     UsecodeValue Operate(UsecodeValue v2, Func<long, long, long> op)
     {
-        var v1 = Clone();
-        if (v1._undefined)
+        if (_undefined)
         {
             return FromInt(op(0, v2.NeedIntValue()));
         }
@@ -444,28 +447,15 @@ public sealed class UsecodeValue
             return FromInt(0);
         }
 
-        if (v1._type == UsecodeValType.Int)
+        return _type switch
         {
-            if (v2._type is UsecodeValType.Int or UsecodeValType.String)
-            {
-                v1._int = op(v1._int, v2.NeedIntValue());
-            }
-
-            return v1;
-        }
-
-        if (v1._type == UsecodeValType.String)
-        {
+            UsecodeValType.Int => v2._type is UsecodeValType.Int or UsecodeValType.String
+                ? FromInt(op(_int, v2.NeedIntValue()))
+                : Clone(),
             // Exult: two strings join with a space; a string and anything else stays the string.
-            if (v2._type == UsecodeValType.String)
-            {
-                v1._str += " " + v2._str;
-            }
-
-            return v1;
-        }
-
-        return FromInt(0);
+            UsecodeValType.String => v2._type == UsecodeValType.String ? FromString(_str + " " + v2._str) : Clone(),
+            _ => FromInt(0)
+        };
     }
 
     public override string ToString()

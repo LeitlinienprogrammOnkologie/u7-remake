@@ -24,7 +24,7 @@ When a finding is fixed, strike it through or delete it here, and update PROGRES
 4. ~~R5 with D9, then D10 and D11 in one pass over the combat code.~~ Done 2026-10-09.
 5. ~~R6 with D12, then the rest of section 1 by subsystem.~~ Done 2026-10-09: every D finding is fixed, a few with a small part left (each says which).
 6. ~~D18 needs the user's decision first, and so does D12's sleep-to-sleep case.~~ Decided and done 2026-10-09 (the user left both to the best choice): D18 Exult's rule, D12's sleeper gets up (Exult's bug fixed).
-7. The rest of sections 2 and 3 as the code around them is touched.
+7. ~~The rest of sections 2 and 3 as the code around them is touched.~~ Done 2026-10-10 (R20's button look chosen by the user), but for the small leftovers each entry names.
 
 ---
 
@@ -33,7 +33,7 @@ When a finding is fixed, strike it through or delete it here, and update PROGRES
 ### ~~D1. A load forgets the jukebox egg count~~ (fixed 2026-10-09)
 
 - `GwinState.EggCount` reads `repeat >> 16`; U7Game sets it after `MusicPlayer.Start`, which clears it. Checked headless: a save holding count 1 loads as 1 (the console's own `_music.Stop()` after a load zeroes it again, so a byte-for-byte round trip needs a windowed run).
-- **Left:** the background-track condition of `read_gwin` (the port plays every track, as Exult does with MT-32 music), and the track lost by a save made with music off (headless or muted). R10 is still the structural fix.
+- **Left:** the background-track condition of `read_gwin` (the port plays every track, as Exult does with MT-32 music), and the track lost by a save made with music off (headless or muted). R10's one `GwinState` (done) keeps the writer and reader from drifting apart again.
 
 ### D2. Usecode started from inside usecode (fixed but for the order)
 
@@ -154,6 +154,16 @@ When a finding is fixed, strike it through or delete it here, and update PROGRES
 
 - **Left:** `ShowPendingText` still says leftover text when a function returns (Exult doesn't); no case was found, and changing it risks the conversations.
 
+### ~~D23. Stacks combine without Exult's rules~~ (found and fixed 2026-10-09)
+
+- `Inventory.TryCombine` and `TryCombineInto` are gone. Exult has three combining paths, now each ported:
+  - a drop on a stack, Exult `Game_object::drop`: `ItemQuantity.Drop` (U7Game's world `DropOn` already had it and now calls it): same shape, any frame for the quantity-frame shapes, all or nothing up to 100;
+  - a drop on a container, Exult `Container_game_object::add(obj, false, true)`: `ItemQuantity.Combine`, i.e. `add_quantity` without creating, filling the stacks of the kind at any depth, partly if need be, the rest then added (before: only the container's own stacks, and frames had to match);
+  - Exult `Actor::add(..., combine)` for a drop on a party member or a paperdoll's open area: `Equipment.AddToActor(..., combine:)` fills the bags' stacks first, or drops onto what a hand holds (before: a second stack).
+- Counts change through `Modify` (Exult `modify_quantity`), so the frame follows: 60 bolts show frame 31 (before: 30). `Equipment.AddReadied` no longer combines into an occupied spot (Exult `add_readied` doesn't). A drop on a container that refuses it now falls through to the gump (its container or the paperdoll's spots), as Exult's `Gump::add` and `Actor_gump::add` do; the port refused it.
+- With it, R15's duplicated drop block is one `Gump.DropOnto`.
+- Checked headless on `britain1`: 10 coins (frame 6) dropped on Iolo join the 16 in his backpack (26, frame 7); two bolt stacks dropped on one tile become 60 in frame 31; through a temporary console command calling `Combine`: 100 coins into Iolo fill his backpack's 16 to 100 and keep 16, a further 10 are refused by his full stack, and his 100 into the avatar fill its 16 to 100 and its 10 (frame 6) to 26 (frame 7), the party's gold unchanged. Mouse drops in a window not tried; the gumps only call the two functions.
+
 ### ~~R1. Direction tables and helpers in several copies~~ (done 2026-10-09)
 
 - One `Core/Directions` (Exult dir.cc): `Dx` / `Dy`, `FrameRotation` (the old `Rotate`), `Of` (`Get_direction`), `NoWrap`, `Of4`, `WrapDelta`, moved verbatim. The copies in ActorWalker, CombatEngine, UsecodeScript, PartyManager, TileCoord and ObjectGeometry are gone; `FrameToDir` was only the frame's rotation band and went too. `ActorWalker.FacingOfFrame`, `DirFrame` and `DirIndex` stay (frame and step helpers). Checked: walking and the party's following unchanged on `quick`.
@@ -163,17 +173,18 @@ When a finding is fixed, strike it through or delete it here, and update PROGRES
 - `U7Object.AllInside()` (one iterator and an explicit stack, depth first, removed things skipped) replaces the two `AllPossessions` copies and `CombatEngine.HasInside` (Is_draco; it counted removed things, which never stay in a container). `U7Object.SetFlagWithContents` replaces `CombatEngine.SetOkayToTake` and `PartyManager.SetFlagRecursively`. Checked: `AllInside` gave the old walk's exact sequence for every NPC on three saves.
 - **Left:** `U7Object.CollectContents` (a list, removed things included) stays for its callers. The locked-container rule (522, 798; Exult `inside_locked()`) is still only in `ItemQuantity.CanBeAdded`: applying it to the walks changes which weapon, shield or ammo is found, so it belongs with D9 and D11.
 
-### R3. Container membership changed outside GameMap
+### ~~R3. Container membership changed outside GameMap~~ (done 2026-10-09)
 
-- ~~`Equipment.Equip`, `Equipment.UnequipSlot`~~ (gone with R5), `CombatEngine.LeaveBody` (~2276-2296), `GumpManager.LiftUp` (~469-486) and UsecodeMachine (~419-427) edit `Contents`, `Container` and `ReadySlot` by hand, repeating `GameMap.PlaceInContainer` / `TakeFromWorld`.
-- `Inventory.TryCombine` (~158-191) marks the source `Removed` and clears `Container` (~187-189) but leaves it in the parent's `Contents`; safe today only because every caller detaches it first.
-- **Exult:** `remove_this`, `Container_game_object::add`.
-- **Fix:** route through GameMap. **Risk:** medium-low. **Check:** drag, ready, kill, resurrect; counts and weights unchanged.
+- `LeaveBody` moves the items with `PlaceInContainer` / `PlaceInWorld`, `GumpManager.LiftUp` with `TakeFromWorld`, and `UsecodeMachine.Resurrect` with `Equipment.AddToActor(..., dontCheck: true)`. `Inventory.TryCombine` took the map and removed a used-up stack with `RemoveObject`, so it left its container's list wherever it was (since D23, `ItemQuantity.Drop` / `Combine` do); the console's `put` doesn't detach first, so "every caller detaches it first" was not quite so.
+- Two changes towards Exult came with it: a resurrected NPC's items are readied again (Exult `Actor::resurrect`'s `add(item, true)`; before, they all came back loose, the armour not counting), and a body-less death's items that find no spot stay with the dead actor (Exult's `tooheavy`; before, they were lost).
+- Checked headless on `britain1`: Iolo killed, his body holds his things at 255,255 unreadied; the Resurrect spell (0x0684) on the body brings him back with crossbow, backpack, armour, leggings and boots in their old spots; two bolt stacks merged in his backpack (a temporary console command calling `TryCombine`) leave one stack of 60 and the backpack at 7 items.
 
-### R4. Objects built by hand
+### ~~R4. Objects built by hand~~ (done 2026-10-09)
 
-- `GameMap.CreateIregObject` (~2218, Exult `create_ireg_object`) is public, wraps the private `MakeObject`, handles reflection, and the schedules already use it. Yet `CombatEngine.CreateItem` (~2034, forces `Solid = false`), `HatchMonsterEgg` (~226-243), `LeaveBody`, `CreateMonster` (~331) and the avatar in U7Game (~97) build `U7Object`s themselves.
-- **Fix:** use `CreateIregObject`, then place the object; also fixes the reflected footprint in D17. **Risk:** low.
+- `GameMap.CreateActor` (Exult's `Actor` constructors) is `CreateIregObject` for actors: footprint by the frame's reflection, solidity from the shape, out of the world until placed. `CreateMonster` and the avatar in U7Game use it (a monster hatched in a reflected frame now has its turned footprint), `Place` and the avatar go in with `PlaceInWorld`; `LeaveBody`'s body and the missiles that land or come back use `CreateIregObject`, and `CombatEngine.CreateItem` is gone. `HatchMonsterEgg` already did (D17).
+- Towards Exult: a landed missile has quality 0 (Exult's; the quantity reads as 1 either way) and the shape's solidity, no longer forced off; of the shapes that can land, only the hawk (555) is solid.
+- Checked headless: the arena's rats spawn, fight and leave bodies; a new game's avatar starts at the gate with its dagger readied and the opening runs to Iolo joining. Not reached: a missile landing (Iolo hit with every bolt in two fights) and a returning hawk.
+- **Left:** NpcDat still builds the actors it reads (`ApplyShape`, the same footprint rule), as loading may.
 
 ### ~~R5. Equipment is a static class fed its tables by every caller~~ (done 2026-10-09, differently)
 
@@ -184,97 +195,79 @@ When a finding is fixed, strike it through or delete it here, and update PROGRES
 - `ScheduleRunner.ChangeSchedule` is Exult's `set_schedule_type`: an unfinished `IfElsePathAction` (`path_run_usecode`) is kept, any other action dropped; `Ending(new type)`; the new schedule (made and begun unless given); type and pending set; `NowWhat` at once within the activity range (Exult: unless dormant). `BeginType` and `SetSchedule` go through it; the avatar's `SetAvatarSchedule` keeps the walk too (it dropped it on every combat toggle) but not `StopAction`'s frame-time reset. Every schedule that changes the schedule inside its own `NowWhat` returns right after, so the immediate `NowWhat` can't be overwritten.
 - **Left:** `RestoreSchedules`, `AddMonster` and `Revive` still assign a fresh brain's schedule directly (there is no old schedule to end, and a restored NPC keeps its pose).
 
-### R7. Helpers copied between schedule classes
+### ~~R7. Helpers copied between schedule classes~~ (mostly done 2026-10-09)
 
-- `Valid()` defined 3 times (Bake ~44, Forge ~48, Sew ~52) and written inline 8 more (`x is { Removed: false } t ? t : null`).
-- `PathTo` wrappers in Bake (~58) and Forge (~53-56).
-- "Top of a table" (`obj.Tz + Catalog[obj.Shape].DimZ`) at about 10 sites.
-- The table-edge spot logic in `ScheduleWithObjects.DropItem` (~78-87) and `WaiterSchedule.CreateCustomerPlate` (~278-287).
-- `LabSchedule.PerimeterTile` is general geometry also used by Bake; it belongs in `ObjectGeometry`.
-- `WaiterSchedule._startPos` (~45) duplicates `Schedule.StartPos`.
-- "Path, then face, then act" repeated in Sew, Lab, Farmer, Miner, Preach, Bake, Forge: a `WalkThenFace(dest, dist, target, ms, ...)` returning null would cover them.
-- Nearest object found by sorting a whole list: `FindClosest(...).FirstOrDefault()` and `is [var x, ..]` in Bake (~46), Forge (~50), Sew (~50), Lab (~46), Patrol (~242), Preach (~118), Desk (~182), Combat (~923, ~936), Sit (~72); and with `OrderBy` in `LabSchedule.ClosestTo` (~71-76), Desk (~185-186), Waiter (~691-692). Exult's single-result `find_closest` (objs.cc ~747-772) is a plain scan keeping the first closest; only the vector overload sorts (`std::sort`, also unstable). Add one `ClosestTo(TileCoord, int[] shapes, int dist = 24)` scan to `Schedule`. Ties at the `List.Sort` sites then resolve as in Exult; the `OrderBy` sites are already stable.
-- `PatrolSchedule._state` (bare int from -1 to 6, used through ~383) and `_phase` (~29), `GrazeSchedule._phase`, `TalkSchedule._phase`, `PaceSchedule._phase` and `SleepSchedule._napState` are bare ints with magic numbers; most other schedules use a `State` enum. (Exult uses ints in several of these too.)
-- Quality and frame filters applied in LINQ after `FindNearby` (Bake `Nearby` ~49-55, `PatrolSchedule.Markers` ~39-40, `SetProcureItemAction` in Schedule ~208), though `FindNearby` takes `qual` and `frame`. Bake's `OkayToTake` filter has to stay.
-- **Risk:** low (pure extraction).
+- In `Schedule`: one `Valid` (the three copies and eight inline ones gone), `TopLift` (Exult `get_lift() + get_3d_height()`, ten sites), and Exult's two `find_closest`s with Exult's mask 0xb0: `FindClosest` (the sorted list, kept where Exult goes through the list: chairs, crops, ores, plates) and `ClosestTo` / `Closest` (the single result: a scan keeping the first closest, no sort), now used wherever Exult takes one (practice targets, desk and its chair, cauldron, the lab's book and chair, the patrol's book, the icon, the sitter's chair, the bake, forge and sew shapes, the plate's leftovers). Ties now go as in Exult, where `List.Sort` was unstable; Bake, Forge and Sew lose their `Closest`, Lab its `ClosestTo`.
+- `ObjectGeometry.PerimeterTile` (from LabSchedule) and `ObjectGeometry.EdgeNearest` (the table edge `DropItem` and the waiter's plate both worked out); `WaiterSchedule` uses `StartPos`; Bake's `Nearby`, `PatrolSchedule.Markers` and the procure search pass quality and frame to `FindNearby` (Bake keeps its okay-to-take filter).
+- Checked headless on `britain1`: a day of Britain's schedules without an exception; Patterson at his desk handling desk items by the chair found, Gaye sitting at her work, Jeanette serving the Blue Boar's diners with a small plate (717:5) made on a table top.
+- **Left (on purpose):** the "path, then face, then act" helper (the schedules differ in the details it would have to cover) and the bare-int state machines (Exult's are ints too).
 
-### R8. Three usecode resume paths
+### ~~R8. Three usecode resume paths~~ (done 2026-10-09)
 
-- [UsecodeMachine.cs](../godot/scripts/Usecode/UsecodeMachine.cs) has three cores that each "clear the wait, maybe push a result, `Run`, `FinishIfDone`": `Choose` (~604), `ResumeWait` (~633) and `ResumeAfterText` (~1427). `ClosePicture`, `EndWizardEye`, `EndFlash` and `UpdateFade` already go through `ResumeWait`; `ContinueText` and `TurnBookPage` through `ResumeAfterText`. `_afterText` runs only in `ResumeAfterText` (as does `_abortAfterText`, correctly: it is only set while a text wait is pending).
-- **Fix:** one private `Resume(UsecodeValue? result)`; each wait kind only works out its result.
-- **Risk:** low. **Check:** replay the opening, books, the map, fades and numeric input.
+- One private `UsecodeMachine.Resume(result, abort)`: the waiting intrinsic's result pushed if it waits for one, then `Run` (or the abort that waited for the text), then `FinishIfDone`. `Choose` works out the menu's result (the answer, or its number for `select_from_menu2`; none for a converse), `ResumeWait` passes its own, `ResumeAfterText` 0 after running `_afterText`.
 
-### R9. Small usecode helpers repeated
+### ~~R9. Small usecode helpers repeated~~ (done 2026-10-09)
 
-- "Objects to usecode array" written 6 times in BgIntrinsics (~711, ~725, ~774, ~1505, ~1895, ~2206), each `PutElem` copying a fresh value. Add `UsecodeValue.FromObjects`.
-- "Avatar plus party" built three ways (`GetPartyList`, `PartyObjects` ~1818, `OnBarge` ~2372).
-- `CollectMatching` (~2208, Exult `Container_game_object::get_objects`) repeats `ItemQuantity.Matches`.
-- `p.Length > 1/2/3` checks (~285, ~683, ~1459, ~1666-1667, ~2199-2200) are always true because `p` has 12 slots, so their "missing argument" fallbacks never run. Read `p[i]` (0 when not passed; Exult's is a default `Usecode_value`, 0 but undefined, useval.h ~71), and fix the stale "Phase A/B" class comment. (`n` is used by `Stub` to log arguments and stays.)
-- `UsecodeValue.Operate` and `Add` deep-copy the left value before checking types; copy only when the result is the left value.
-- **Risk:** low.
+- `UsecodeValue.FromObjects` builds the six object arrays; `get_party_list` and `on_barge` use `PartyObjects`; `CollectMatching` uses `ItemQuantity.Matches` (now public). The `p.Length` checks are plain `p[i]`, which is what ran (12 slots) and what Exult does: `show_npc_face`, `fade_palette`, `find_nearby`, `count_objects` and `get_cont_items` all read `parms[i]` without looking at `num_parms`. The class comment says so instead of "Phase A/B". `Add` and `Operate` build their result instead of deep-copying the left value first.
+- Checked headless with R8 from `quest4`: the map quiz (three numeric answers), Iolo's "leave" (`select_from_menu` Yes / No: "Whew. Thou didst frighten me!"), a book's page, the cloth map, a death (the fades, Paws, Iolo's and Spark's words), and Polly's bread in Paws (`select_from_menu2`, Yes, 3: 6 gold paid, three loaves).
 
-### R10. Saves
+### ~~R10. Saves~~ (done 2026-10-09)
 
-- [SaveGame.cs](../godot/scripts/Game/SaveGame.cs): GAMEWIN.DAT has a separate writer and reader, which is how D1 happened. One `GwinState` with symmetric `Write(BinaryWriter)` / `Read(BinaryReader)`.
-- `Write` deletes the slot's `U7IREG*` files (~31-34) before writing new ones; an exception part-way leaves a broken slot. Write into `slot.tmp` and swap; the format is unchanged. Two caveats: loading a slot has no fallback for files `Write` skips (FLAGINIT and USECODE.* when there is no usecode, IDENTITY when `u7/GAMEDAT/IDENTITY` is missing; U7Paths ~68-71), so copy those over from the old slot; and a directory swap on Windows isn't atomic, so rename the old slot aside first.
-- The 9-argument `SaveGame.Write(...)` call appears in U7Game (~1082) and U7Game.Agent (~842), and so does the load sequence (U7Game ~1093-1096, Agent ~846-853). One `SaveTo(slot)` / `LoadFrom(slot)`.
-- **Exult:** `Game_window::write_gwin` / `read_gwin` (gamewin.cc ~1424-1522).
-- **Risk:** low. **Check:** `save a`, `load a`, `save b`, diff the slots byte for byte.
+- `Game/GwinState` is GAMEWIN.DAT's one writer and reader (Exult `write_gwin` / `read_gwin`), the reader now Exult's field by field: a short file keeps the defaults of what it lacks (before, a file with the special light but no music lost the light, and one cut inside the last bytes lost armageddon and combat both), combat `== 1`.
+- `SaveGame.Write` writes into `slot.tmp`, copies over the old slot's files it didn't write (all but `GWIN.DAT`), renames the old slot to `slot.old`, moves the new one in (putting the old one back if that fails) and deletes the old. `SaveGame.Exists` puts back a `slot.old` left without its slot by a crash between the renames. `U7Game.SaveTo` / `LoadFrom` serve F5 / F9 and the console.
+- Checked headless: GAMEWIN.DAT byte for byte as the old writer's; `save b` twice, `load b`, `save c`: b and c identical; GWIN.DAT replaced and a stray file kept on a `quest4` copy; a slot left as `.old` loads; a save over a slot with a file held open fails with the old slot unchanged, and the next save succeeds and clears the `.tmp`; GAMEWIN.DAT cut to 22, 14 and 10 bytes loads, cut to 6 is refused (Exult throws there too).
+- **Not byte for byte across a load:** the reload runs a few frames before the console's next command, so NPC.DAT can drift (a frame, an item picked up), already so with the old writer. Animated objects (D7) also move between two commands, so `save a` then `save b` can differ in a frame byte.
 
 ### ~~R11. `Check_weight` and `get_outermost` ported twice~~ (done 2026-10-09)
 
 - `Inventory.CheckWeight(obj, onto, catalog)` is Exult's `Check_weight`; `GumpManager.RefuseDrop` and `U7Game.CheckWeight` (which keeps the cursor flash) call it. GumpManager's and the console's private `Outermost` copies are gone (`Inventory.Outermost`). Not play-tested: the console's `put` skips the drop checks, and only a mouse drop reaches them; the expression is unchanged.
 
-### R12. Repeated guards and calls in U7Game
+### ~~R12. Repeated guards and calls in U7Game~~ (done 2026-10-09)
 
-- `UsecodeRunning` exists (~1452) but its check is written inline at ~380, ~406, ~431, ~463, ~473, ~661, ~1848.
-- "Can walk" is computed three ways: the left button in `_Process` (~670) and `EndWalkPress` (~1430) tests only `IsDead`; `RightButtonDown` (~1509-1522) uses `CombatSchedule.CanAct` (also paralysed, asleep, health ≤ 0) and `Drag is null`. Exult uses `avatar_can_act` for every walk (exult.cc ~1275, ~1576, ~1710), so a single predicate is a **behaviour change** towards Exult (a paralysed or sleeping avatar could no longer walk with the left button), not a pure refactor.
-- `_usecode.Call(...)` plus `_conversation.Refresh()` is copied into the spell-cast, `UsecodeAction`, `CallUsecode` and death callbacks (~416-436, ~468-478) and `RunUsecode`; `PathWalk.ActivateDoor` (~404-412) is a fifth `Call`, without the refresh. The spell cast and the death callback are unguarded on purpose (the death one defers through `WhenDone`), so a guarded helper fits only the others.
-- The combat toggle is the same in the gump button callback (~225-234) and the C key (~1048-1055).
-- **Fix:** `TryCallUsecode(fun, obj, ev)` for the guarded calls, one `CanWalk` predicate (with the change above), one `ToggleCombat()`. **Risk:** low, medium for `CanWalk`.
+- `UsecodeRunning` replaces the inline checks (U7Game and the console's `talk`, `call`, `save`). `TryCallUsecode(fun, item, ev)` serves `PathWalk.ActivateDoor` (which gains the panel refresh), `UsecodeAction.Call` and the schedules' `CallUsecode`; the spell cast and the death callbacks stay unguarded, as they were on purpose. One `ToggleCombat()` serves the combat button and the C key.
+- `CanWalk` is one predicate for the held left button, the keys, the left quick click's path and both right-button handlers: no usecode, no `dont_move`, and `CombatSchedule.CanAct` (Exult's `avatar_can_act`; Exult's `start_actor` also refuses a sleeping or paralysed avatar). **Behaviour change towards Exult:** a sleeping or paralysed avatar no longer walks with the left button or the keys.
+- Checked headless on `britain1`: `rmouse` walks, then refuses while the avatar is asleep, then walks again; a walk through the castle's east door both ways opens and closes it; a minute of the schedules at 11:00 ran without an exception. The left button and the keys can't be driven headless.
 
-### R13. The conversation panel is refreshed by 20 manual calls
+### ~~R13. The conversation panel is refreshed by 20 manual calls~~ (done 2026-10-09)
 
-- U7Game ~420, ~426, ~434, ~479, ~631, ~997, ~1006, ~1017, ~1769, ~1808, ~1837, ~1998 (12), U7Game.Agent ~369, ~466, ~471, ~476, ~498, ~508, ~519, ~829 (8), plus 3 VM events (U7Game ~500-502). `ConversationPanel.Refresh` relies on every path that changes `Wait` remembering to call it.
-- **Fix:** in the panel's `_Process` (~277), compare a cheap snapshot (`Wait`, `InUsecode`, face, text, answer count) and refresh on change. The comparison must come before its `!Visible` early return, since `Refresh` is what shows the panel. The agent's `cont` and its page note read the pagination a synchronous `Refresh` sets up, so keep the agent's calls or refresh before reading.
-- **Risk:** medium. **Check:** `talk` / `cont` / `choose` transcripts on `quest4` and `britain1` identical.
+- `ConversationPanel` keeps a snapshot of what it was last built from (the wait, whether usecode runs, the text, the speaking and last face, both faces, the answers as a hash) and `_Process` refreshes when it changes, before its `!Visible` return (refreshing is what shows it). A path that changes the VM without refreshing no longer leaves the panel stale. The manual calls stay: they make the panel right in the same frame, and the console's `cont` reads the pages a synchronous `Refresh` sets up; `Refresh` is idempotent, so the snapshot only refreshes again after a real change.
+- Checked headless from `quest4`: Iolo's talk with the leave menu and the map quiz give the same transcript as before, line for line.
 
-### R14. Left-button state in several flags
+### ~~R14. Left-button state in several flags~~ (done 2026-10-10)
 
-- `_suppressWalk`, `_walkPress`, `_walkPressMsec`, `_bookPress` (U7Game ~65-74; `_rightOnGump` is the right button's, Exult `right_on_gump`), mixing events and polling (`Input.IsMouseButtonPressed` ~675, ~717). After a left press that reaches the press branch (~899-951) `_suppressWalk` is `!_walkPress`; a press swallowed earlier (~855: holding a drag, the new game screen, a GUI control) leaves both false, and only the Shift-teleport cheat reads `_suppressWalk` alone. An enum changes that case (held left + Shift would no longer teleport), arguably a fix.
-- **Fix:** one `enum LeftPress { None, Walk, Consumed, Book }`; move input (~849-1120, ~1425-1838) to a partial `U7Game.Input.cs`; the drop code (`DropOnMap` / `DropAtLift` / `DropOn`, ~1179-1298, Exult drag.cc) into its own class next to GumpManager.
-- **Risk:** medium. **Check:** windowed: quick click, held walk, book page turn, right double-click, Shift + held left.
+- One `LeftPress` (None, Walk, Consumed, Book) replaces `_suppressWalk`, `_walkPress` and `_bookPress`: every press says where it went, the held walk and the cheat teleport need a press on open ground (`Walk`), a press made while reading keeps `Book` until it is let go, and the state goes back to `None` once the button is up. **Changes, towards Exult:** a press that never reached the game (a GUI control, the new game screen, a cursor flash holding it) no longer lets Shift teleport, and no longer blocks the right button's walk while the left is held (Exult's main loop steers with the right button whatever the left does).
+- The input moved to a partial `U7Game.Input.cs`: the key and mouse handler, both buttons' walking, the cursor, books and pictures waiting for a click, the Wizard Eye, and the drops on the map (Exult drag.cc). The drops stay methods of U7Game rather than a class of their own: they use the camera, the cursor, the world view, the map, the eggs and the combat quantities, which a class would have to be handed one by one. U7Game.cs is half its size (1,031 lines).
+- Checked headless with real mouse and key events fed to the game (`Input.ParseInputEvent`, a temporary console command), before and after: a held left walk on open grass (9 tiles east in 1.5 s), Shift and the held left teleporting (repeatedly while held, as before), a quick left click walking a path, a right double-click walking a path, a click turning a book page, Shift and a press on a rock starting a drag instead, and the C key toggling combat: the same results.
 
-### R15. Gump contents: paint order and drops duplicated
+### ~~R15. Gump contents: paint order and drops duplicated~~ (done 2026-10-09)
 
-- `Gump.FindObject` (~101-138) and `PaintContents` (~309-337) each loop twice with the same filter (loose items, then readied). `ActorGump.Add` (~44-68) copies the combine / put-into-container block of `Gump.Add` (~146-170).
-- **Fix:** a protected `PaintOrder()` used by paint, hit-test and `GumpView.Texts`; a protected `TryDropOnto`. Layout during paint (`LayoutContents`, `SetToSpot` in `ActorGump.Paint`) is a literal port of `Gump::paint` and should stay.
-- **Risk:** low.
+- `Gump.PaintOrder` (the loose things, then the readied ones over them, not the one dragged) serves `PaintContents` and `FindObject` (the last one under the mouse is the top one); `GumpView.Texts` doesn't depend on the order and keeps its loop. The drop block is one `Gump.DropOnto` since D23. Layout during paint stays, a literal `Gump::paint`.
+- Checked headless: naming things in an open backpack and on the paperdoll (the Orb of the Moons, a stack of 100 gold, the armour) and the gump itself.
 
 ### R16. (withdrawn) Blocking counts capped at 3
 
 - [ChunkBlocking.cs](../godot/scripts/Data/ChunkBlocking.cs) (~129) `Math.Min(3, count + 1)` copies Exult's 2-bit `Set_blocked_tile` / `Clear_blocked_tile` (chunks.cc ~70-108), which saturates the same way. Dropping the cap would move *away* from Exult, so it stays. Nothing rebuilds a chunk after `Need` builds it (~45-68), so the live counts can't drift from a rebuild in practice.
 
-### R17. Frame extents read from two sources
+### ~~R17. Frame extents read from two sources~~ (done 2026-10-09)
 
-- `ShapeCatalog.LoadFrames` (~255) reads `assets/data/shape_frames.csv`; `VgaShapeFile.ParseExtents` (~214) reads the same from SHAPES.VGA. All 10,286 RLE frames match today; the CSV's 3,885 tile frames use a different convention (`0, 0, 7, 7` against `ParseExtents`' `8, 8, -1, -1`).
-- **Fix:** fill `ShapeRecord.Frames` from the SHAPES.VGA that ShapeCache already loads, mapping tile frames to the catalog's convention and keeping `ShapeRecord.FrameCount` (~306, used by `DisplayFrame`), so paint order and painting can't drift apart. **Risk:** low.
+- `ShapeCatalog` opens SHAPES.VGA once (`ShapesVga`) and fills `ShapeRecord.Frames`, `FrameCount` and `TileShape` from it, a terrain frame as the catalog's (0, 0, 7, 7); ShapeCache paints from the same `VgaShapeFile` (it used to parse the file a second time). The game no longer reads `shape_frames.csv` (the Python tools still do).
+- Checked: one run loading both and comparing every shape: all 14,171 frames (10,286 RLE, 3,885 terrain) equal, and every shape's frame count and tile flag.
 
-### R18. Fallbacks to the bogus extracted PNGs
+### ~~R18. Fallbacks to the bogus extracted PNGs~~ (done 2026-10-09)
 
-- [U7Paths.cs](../godot/scripts/Core/U7Paths.cs) (~22-24, ~112-119: `GumpPng`, `FontPng`, `FacePng`), used by [ShapeCache.cs](../godot/scripts/Rendering/ShapeCache.cs) (~124, ~166, ~211-214). The PNGs are bogus 8x8 tiles (CLAUDE.md), so when a VGA frame fails to decode the port draws that tile where Exult draws nothing, and reports a fake 8x8 size to the hit-tests (through `GetGumpFrame` ~143-147 and `GetFontFrame` ~191-195).
-- **Fix:** delete the fallbacks and helpers, and the then-unused `GumpsDir`, `FontsDir` and `FacesDir`. A missing frame then falls to `GumpButton.Contains`' 8 px box (D19). **Risk:** low. **Check:** a script decoding every gump and face shape the catalog references.
+- The PNG fallbacks in `ShapeCache` (gumps, fonts, faces, a face's frame 0) and their fake sizes in `GetGumpFrame` / `GetFontFrame` are gone, and with them `U7Paths.GumpPng`, `FontPng`, `FacePng`, `GumpsDir`, `FontsDir`, `FacesDir`. The VGA decode wraps frame numbers, so only a shape missing or broken in the VGA file reached a fallback.
+- Checked: a temporary console command decoding the VGA frame of every extracted PNG (4,194 gump, 1,727 font, 5,455 face): none failed, so the fallbacks could never load anything; the conversation's faces, the paperdoll and a book work as before.
 
-### R19. Effects on two clocks
+### ~~R19. Effects on two clocks~~ (done 2026-10-09)
 
-- [EffectsManager.cs](../godot/scripts/World/EffectsManager.cs) (~219-245): weather uses absolute due times, sprite effects count down their own `Due` and step newest first (~231). All weather events in a frame run before any sprite step, including an explosion's quarter-way blast, whatever their due times. Exult runs one time queue in time order. Weather and sprite events hardly interact, so the gain is small.
-- **Fix:** absolute due times for sprites, one ordered queue. **Risk:** medium (edge-case ordering, towards Exult). **Check:** log event order with `sprite` and `weather 2`.
+- `EffectsManager.Update` runs one time queue for the weather and the SPRITES.VGA animations: each entry has an absolute `DueMs` and a sequence number taken whenever it is (re)scheduled, and the one due first runs next, equal times first in, first out (Exult `Time_queue::add`'s `upper_bound`); a long frame still catches up step by step. Before, all weather events of a frame ran before any animation step (an explosion's quarter-way blast among them), and equal-time weather events went newest first.
+- Checked headless: a storm (`weather 2 3`) with the teleport and another sprite running: the sprites step every 200 ms from their first frame at once, the storm's lightning flashes, its rain ends gradually, a usecode lightning keeps flashing after it, no error.
 
-### R20. Small UI duplicates and leftovers
+### ~~R20. Small UI duplicates and leftovers~~ (done 2026-10-10 but for the barge list, cosmetic)
 
-- `SignGump.Translation` (~74-86) rebuilds its strings with LINQ on every `_Draw`; `Lines` is set once in the constructor, so compute once.
-- The text size `Clamp(RoundToInt(6.5f * zoom), 14, 40)` is in both [BarkOverlay.cs](../godot/scripts/UI/BarkOverlay.cs) (~36) and [MouseCursor.cs](../godot/scripts/UI/MouseCursor.cs) (~141).
-- The gold-on-wood button styling is in both `ConversationPanel.MakeButton` and `NewGameView._Ready`, but not identically (border 1 with alpha against border 2 with hover-pressed and disabled styles). A shared `UiTheme.StyleButton` needs parameters to keep both looks; unifying the look is the user's call.
+- ~~`SignGump.Translation` rebuilds its strings with LINQ on every `_Draw`~~ (done 2026-10-09: worked out once in the constructor; Trinsic's ",rand" still reads STRAND).
+- ~~The text size `Clamp(RoundToInt(6.5f * zoom), 14, 40)` is in both BarkOverlay and MouseCursor~~ (done 2026-10-09: `UiTheme.WorldTextSize`).
+- ~~The gold-on-wood button styling is in both `ConversationPanel.MakeButton` and `NewGameView._Ready`~~ (done 2026-10-10: `UiTheme.StyleButton` with two `ButtonLook`s, `AnswerLook` and `PanelLook`, each exactly as it was; the answers gain hover-pressed and disabled boxes they never show). The user then chose one look (2026-10-10): the new game screen's, for the answers too (`AnswerLook` is gone).
 - `Barges._all` ([Barge.cs](../godot/scripts/World/Barge.cs) ~411) is never pruned within a session (it is rebuilt on each scene load, U7Game ~362); barges are few, so this is cosmetic.
 
 ---
@@ -285,60 +278,55 @@ When a finding is fixed, strike it through or delete it here, and update PROGRES
 
 - `PaletteSet.Blend` uses Exult's `from + (to - from) * t` (also for the overcast's grey), exact when both ends agree, so the one-step jitter is gone. `SceneLighting.BuildPalettes` keys `T` only when `From != To`, and copies the day palette (made once) into `Lit` instead of re-blending it. Checked: no rebuild over 20 s at noon, one at night, one per clock tick through the dawn blend.
 
-### P2. `FindNearby` reads too many chunks and sorts twice (mostly done 2026-10-09)
+### ~~P2. `FindNearby` reads too many chunks and sorts twice~~ (done 2026-10-09)
 
-- Done with D6: `FindNearby` reads only the chunks the box touches and doesn't sort. **Left:** `FindClosest` still sorts a whole list (R7), and multi-shape lookups do one pass per shape.
+- Done with D6: `FindNearby` reads only the chunks the box touches and doesn't sort. The single-result lookups no longer sort a list (R7's `ClosestTo`). Multi-shape lookups still do one pass per shape, as Exult's `find_closest` does.
 
-### P3. The same chunks are scanned three times a frame
+### ~~P3. The same chunks are scanned three times a frame~~ (mostly done 2026-10-09)
 
-- `LightSources.Level` ([LightSources.cs](../godot/scripts/World/LightSources.cs) ~122-159), `SceneLighting.FindLights` (~248-325) and WorldView's paint (~331-362) each walk every object. `Level` calls `DungeonHeight` and `DisplayFrame` only for light sources; `FindLights` calls `IsPainted` and `DungeonHeight` per object. `WorldView.IsPainted` (~634-658) is a hand copy of the painter's checks and can drift. The roof lift and the dungeon test are worked out separately in WorldView (~290-291) and SceneLighting (~178, ~190).
-- **Exult:** `Map_chunk::add` / `remove` keep per-chunk `dungeon_lights` / `non_dungeon_lights` counts (objs/chunks.cc ~852, ~917, ~1435) for the light level (gamerend.cc ~588-597); they don't feed drawing.
-- **Fix:** per-chunk light-source lists maintained in `InsertIntoChunk`, `RemoveFromChunk`, `SetShape`. They cover `Level`; `FindLights` also collects actors (carried lights), windows and magic emitters that aren't light sources, which need their own lists or the paint pass. Optionally collect light candidates during WorldView's own paint pass (before its `IsPool` skip).
-- **Risk:** low for the lists, medium for the merge. **Check:** keep the old path in a debug build and compare `Level`, `Class` and the light list every frame; the console's `light` across saves and hours.
+- `GameMap.LightCandidates(cx, cy)`: each chunk's objects the lighting looks at, every actor (carried lights) and the shapes SceneLighting hands over as `LightShapes` (light sources, windows, glowing magic), in the chunk list's order, built on first use and kept by `InsertIntoChunk` / `RemoveFromChunk`, dropped by `SetShape` when a shape change makes or unmakes one (Exult keeps its chunks' light counts the same way). `LightSources.Level` and `SceneLighting.FindLights` walk those instead of every object.
+- Checked headless with a check beside it (every chunk `FindLights` visited, the kept list against a fresh filter of the chunk): 98,315 checks over Britain from 18:00 to 22:00 with NPCs about and a lamp post lit and put out by hand (889 to 526 and back: the level 0, 552, 0), no difference.
+- **Left:** WorldView's paint pass still walks every object (it paints them), `WorldView.IsPainted` is still a copy of the painter's checks, and the roof lift and dungeon test are still worked out in both WorldView and SceneLighting.
 
-### P4. Extra passes in the world upload
+### ~~P4. Extra passes in the world upload~~ (done 2026-10-09)
 
-- [WorldView.cs](../godot/scripts/Rendering/WorldView.cs): `Fill8(0)` and `ClearGlow()` (~302-303) are redundant: the terrain `Copy8` (~319-326) writes both pixels and glow over the whole buffer, margin included. `Upload` (~421-448) interleaves index and glow into a two-channel texture with a per-pixel C# loop. 15 `SetShaderParameter("...")` calls (~391-408) allocate a `StringName` each frame; six set constants (`glow_boost`, `window_spread`, `cloud_tint`, `cloud_scale`, `cloud_soft`, `mist_scale`).
-- **Fix:** drop the clears; two single-channel textures; static cached `StringName`s; constants once in `_Ready`. **Risk:** low. **Check:** pixel-diff `shot` captures.
+- The two clears are gone (the terrain copy covers every pixel and its glow; `GetFlats` is always a whole chunk), and with them the then unused whole-buffer `Fill8` and `ClearGlow`. `Upload` hands the buffer's index and glow arrays to two R8 textures, the glow one as the shader's `glow_tex` (both read with `texelFetch` at the same texel, as the RG8's two channels were), so the per-pixel interleave loop is gone. The six look constants are set once in `_Ready`; the nine per-frame parameters use cached `StringName`s.
+- Checked windowed (1280x720, zoom 4): `britain1` at 22:00 in the throne room, the torch lit and the teleport sprite (7) glowing over the avatar, shot with the old and the new `WorldView`: no pixel differs but the bark and the actors that moved between the runs; the sprite's 567 glowing pixels match.
 
-### P5. Every actor pixel takes the translucent path
+### ~~P5. Every actor pixel takes the translucent path~~ (done 2026-10-09)
 
-- [IndexBuffer8.cs](../godot/scripts/Rendering/IndexBuffer8.cs) (~119-158), from WorldView (~727). Exult's `Actor::paint` always paints translucent (actors.cc ~2095), so every pixel is tested one by one, even in runs with no see-through colours (0xEE-0xFE). Missiles and sprites (WorldView ~796, ~828, ~872) take the same path.
-- **Fix:** when `ShapeFrame` decodes, flag each RLE run containing a see-through pixel; other runs get a span copy plus glow fill. **Risk:** low. **Check:** hash the buffer on both paths.
+- `IndexBuffer8.PaintRleTranslucent` finds a run's first see-through colour with the vectorised `IndexOfAnyInRange(0xEE, 0xFE)` and copies everything before it at once (indices and glow), going pixel by pixel only from there; most actor runs have none. Missiles and sprites share the path. (No flag at decode was needed.)
+- Checked windowed with the old loop run beside it into scratch copies: 122,830 painted runs (Britain by night and day, the party, a guard, the teleport sprite), no byte different in pixels, glow or panes.
 
-### P6. A* scans whole chunks for doors
+### ~~P6. A* scans whole chunks for doors~~ (done 2026-10-09)
 
-- `FindDoor` / `FindBlocking` ([GameMap.cs](../godot/scripts/Data/GameMap.cs) ~837-864) scan every object in the chunk, called by `ActorPathClient.CheckBlocking` ([Pathfinder.cs](../godot/scripts/World/Pathfinder.cs) ~47, ~66) for every blocked neighbour.
-- **Exult:** `Chunk_cache::find_door` (chunks.cc ~677-684) walks the chunk's door set (a `std::set` ordered by pointer); `find_blocking` (objs.cc ~837-850) is a full scan, as here.
-- **Fix:** a per-chunk door list for `FindDoor` only, kept in `InsertIntoChunk` / `RemoveFromChunk` (not `Blocking.Update`, which skips non-solid objects, marks every chunk a footprint covers, and builds lazily), in chunk order so the first match is unchanged. **Risk:** low. **Check:** assert old and new agree; time a long walk in Britain.
+- `GameMap.FindDoor` walks a per-chunk door list (Exult `Chunk_cache::find_door`'s door set), built from the chunk's objects on first use (loading fills the lists directly) and then kept by `InsertIntoChunk` / `RemoveFromChunk`, which append and remove as the chunk list does, so the doors keep its order and the first match is the scan's; `SetShape` drops a chunk's list when a shape change makes or unmakes a door. `FindBlocking` stays a full scan, as Exult's `find_blocking`.
+- Checked headless on `britain1` with both lookups run side by side: 30,000 calls from the schedules (08:00, 18:00, 22:00) and walks through the castle's doors, no disagreement; the lookups took 2.6 ms in all against 18.9 ms for the scan.
 
-### P7. Usecode VM overhead
+### ~~P7. Usecode VM overhead~~ (done 2026-10-09)
 
-- `CallIntrinsic` (~1572) allocates a 12-slot array plus 12 zero values, formats the `LastIntrinsic` string, and does `IntrinsicLog.RemoveAt(0)` per call; `FlagLog` likewise per flag write (~1114-1117). The run loop (~676-678) writes `LastFunctionId`, `LastIp`, `LastEvent` per instruction (fix D22's `ExecuteUsecodeArray` row before dropping `LastEvent`).
-- `UsecodeFunction.GetString` re-decodes on every PUSHS / ADDSI (~872, ~879; 14,676 PUSHS and 9,732 ADDSI sites; converse loops push all answers each pass).
-- `InUsecodeControl`, `HasScript`, `TerminateScripts` scan every script (~193-212); ScheduleRunner (~881) calls `InUsecodeControl` per NPC per tick. (Exult's `Usecode_script::find` scans too.)
-- **Fix:** store id and argc, format only when the log is read; ring buffers; a shared zero value (only if no intrinsic changes its parameters in place: `UsecodeValue` is mutable); cache strings by offset; a by-object lookup kept beside the ordered script list. **Risk:** low.
+- `CallIntrinsic` keeps only the id and argument count (`LastIntrinsic` is formatted when the debug text asks) and makes zeros only for the parameters not passed; a shared zero stays out, as the VM changes values in place. The write-only `IntrinsicLog` is gone; `FlagLog` is a ring of (offset, value) formatted on read. The run loop keeps a reference to the frame it runs (`LastFunctionId`, `LastIp`, `LastEvent` read from it) instead of three writes per instruction.
+- `UsecodeFunction.GetString` decodes each string once, by offset.
+- `InUsecodeControl`, `HasScript` and `TerminateScripts` first ask a set of the objects that have scripts (kept where scripts are added and pruned), so most NPCs are answered at once and nothing is allocated; the ordered list stays for the rest.
+- Checked headless: a new game's opening to Iolo joining (the avatar under usecode control throughout), a conversation, a death and the wake in Paws, and Britain's wake-up hour, all as before and without an error.
 
-### P8. Per-frame allocations in actors
+### ~~P8. Per-frame allocations in actors~~ (done 2026-10-09)
 
-- `NpcTimers.Update` (~55): `Where(...).ToList()` every frame while any timer exists; a reusable buffer or a `PriorityQueue` keyed on `Next`.
-- `CombatEngine.IsHostileNearby` (~907) runs every frame from the cursor (U7Game ~1635) and while a key is held from the speed check (~1710), and walks every brain through `Schedules.Brains`, whose `Concat` / `Append` (ScheduleRunner ~366-369) allocates. Exult's `is_hostile_nearby` (gamewin.cc ~3168) looks only at `get_nearby_npcs`; the port already filters by the visible rectangle, so iterating the on-screen brains gives the same answer. (Exult also uses `get_effective_alignment` and skips the check in god mode; see D13.)
-- Small arrays allocated per call in `MoveAside` (~170), `FindWeaponAmmo` (~1401), `FindBestSpot` (Equipment ~359), `UnequipSlot` (~557), and collection expressions `(int[])[...]` at Equipment ~381, ~498 and CombatSchedule ~634: make them static readonly.
-- **Risk:** low.
+- `NpcTimers.Update` collects the due timers into a reused list. `IsHostileNearby` walks `ScheduleRunner.NpcBrains`, `MonsterBrains` and `AvatarBrain` as they are (no `Concat` / `Append`); the visible rectangle stays its filter, which is what Exult's `get_nearby_npcs` amounts to. Equipment's hands, bags and last spots and `SetHandToHand`'s spots are static arrays (`FindWeaponAmmo` already had one; `UnequipSlot` went with R5); `MoveAside`'s directions, which depend on the facing, a stack span.
+- Checked headless on `britain1`: poison and sleep wear off on their timers; with combat off the cursor turns from fast (100 ms) to medium (200 ms) while the arena's rats fight and back once they are dead.
+- **Left:** Exult's god-mode skip and `get_effective_alignment` (D13).
 
-### P9. Map work
+### ~~P9. Map work~~ (done 2026-10-09)
 
-- `AddDependencies` (GameMap ~335-370) recomputes `RenderOrdering.Info` (a readonly struct, so no allocation) for every pair within the 24-tile `Reach`; compute once per object per call.
-- `FastPathClient.IsGrabable(TileCoord)` (Pathfinder ~403) creates a whole `U7Object` to describe a box, consuming a global object id each time (U7Object ~19). It only runs on a click (U7Game ~1247), so it isn't hot; pass a `Block` to stop burning ids.
-- **Risk:** low.
+- `EnsureChunkOrdered` works out every object's `RenderOrdering.Info` in the chunk and its eight neighbours once and hands the arrays to `AddDependencies`, which used to build the other object's info for every pair (each chunk's first ordering: n x N builds, now N). A single object entering a chunk still builds them as it goes.
+- `FastPathClient.IsGrabable(TileCoord)` is Exult's spot version: a 1x1x1 `Block` with the spot's `distance` and client box (`FastPathClient(map, from, TileCoord, dist)`), no longer a made-up `U7Object` that used up an object id each call and took the object versions of both (a slightly different box and height, so also a small step towards Exult for drops on the map).
+- Checked windowed: three scenes (the throne room by night with the torch and the teleport sprite, rooms with rugs, a bed and racks, a fenced field) shot before and after: identical but for a bark and the actors that moved between the runs.
 
-### P10. Debug work in the game loop
+### ~~P10. Debug work in the game loop~~ (done 2026-10-09)
 
-- `U7Game._Ready` (~504-555) walks all 192x192 chunks counting filled containers and lists nearby NPCs and eggs, only to print them, outside `_debugOn`; it runs on every load (loading reloads the scene, U7Game ~749, ~1097, Agent ~853). Remove or put behind the debug flag.
-- `_Process` (~816-842) does a `PickObject` and builds the HUD string every frame. The HUD also shows hp, combat mode, party, invincible, dead, the picked object's frame and flags, the jukebox track and the egg, combat and status messages, so a rebuild-on-change needs all of those in its key; otherwise leave it.
-- `EffectsManager.Add` (~118) and `CombatEngine.Place` print on every sprite effect and spawn.
-- `MusicPlayer.Start` (~93) re-reads and re-parses the MIDI on every egg restart; cache parsed events by (path, sequence).
-- **Risk:** low.
+- Removed: `U7Game._Ready`'s load-time prints (the walk over all 36,864 chunks counting filled containers, the nearby NPCs and eggs; the console's `look` and `eggs` tell the same), `GameMap.LogEggSummary` (the same kind, on every map load), and the prints in `EffectsManager.Add` and `CombatEngine.Place` (the spawn stays in `LastMessage`). Combat's prints per hit, missile and death stay: they are events, and handy in the headless logs.
+- `MusicPlayer` keeps every MIDI file it has read, by path and sequence, in a static cache (a load reloads the scene); the playing thread only reads the events. Not exercised: the console runs with music off.
+- **Left, as advised:** the HUD string built every frame.
 
 ---
 

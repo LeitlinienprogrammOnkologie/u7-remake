@@ -41,7 +41,7 @@ public sealed class ShapeCache
     public ShapeCache(ShapeCatalog catalog)
     {
         _catalog = catalog;
-        _shapes8 = new FrameTable(new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "SHAPES.VGA")));
+        _shapes8 = new FrameTable(catalog.ShapesVga);
         _gumpsVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "GUMPS.VGA"));
         _fontsVga = VgaFont.File;
         _facesVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "FACES.VGA"));
@@ -123,38 +123,12 @@ public sealed class ShapeCache
             return cached;
         }
 
-        Image? image = _gumpsVga.Decode(shape, frame, _palette);
-        if (image is null)
-        {
-            var path = U7Paths.GumpPng(shape, frame);
-            if (File.Exists(path))
-            {
-                image = Image.LoadFromFile(path);
-            }
-        }
-
+        var image = _gumpsVga.Decode(shape, frame, _palette);
         _gumpImg[key] = image;
         return image;
     }
 
-    public FrameInfo GetGumpFrame(int shape, int frame)
-    {
-        var fi = _gumpsVga.Get(shape, frame);
-        if (fi.Width > 0)
-        {
-            return fi;
-        }
-
-        var img = GetGumpImage(shape, frame);
-        if (img is null)
-        {
-            return default;
-        }
-
-        var w = img.GetWidth();
-        var h = img.GetHeight();
-        return new FrameInfo(w, h, 0, 0, w - 1, h - 1, false);
-    }
+    public FrameInfo GetGumpFrame(int shape, int frame) => _gumpsVga.Get(shape, frame);
 
     public Texture2D? GetFontGlyph(int font, int frame)
     {
@@ -164,42 +138,13 @@ public sealed class ShapeCache
             return cached;
         }
 
-        Texture2D? tex = null;
         var image = _fontsVga.Decode(font, frame, _palette);
-        if (image is null)
-        {
-            var path = U7Paths.FontPng(font, frame);
-            if (File.Exists(path))
-            {
-                image = Image.LoadFromFile(path);
-            }
-        }
-
-        if (image is not null)
-        {
-            tex = ImageTexture.CreateFromImage(image);
-        }
-
+        var tex = image is null ? null : ImageTexture.CreateFromImage(image);
         _fontTex[key] = tex;
         return tex;
     }
 
-    public FrameInfo GetFontFrame(int font, int frame)
-    {
-        var fi = _fontsVga.Get(font, frame);
-        if (fi.Width > 0)
-        {
-            return fi;
-        }
-
-        var tex = GetFontGlyph(font, frame);
-        if (tex is null)
-        {
-            return default;
-        }
-
-        return new FrameInfo(tex.GetWidth(), tex.GetHeight(), 0, 0, tex.GetWidth() - 1, tex.GetHeight() - 1, false);
-    }
+    public FrameInfo GetFontFrame(int font, int frame) => _fontsVga.Get(font, frame);
 
     public Texture2D? GetFace(int shape, int frame)
     {
@@ -209,27 +154,8 @@ public sealed class ShapeCache
             return cached;
         }
 
-        Texture2D? tex = null;
         var image = _facesVga.Decode(shape, frame, _palette);
-        if (image is null)
-        {
-            var path = U7Paths.FacePng(shape, frame);
-            if (!File.Exists(path) && frame != 0)
-            {
-                path = U7Paths.FacePng(shape, 0);
-            }
-
-            if (File.Exists(path))
-            {
-                image = Image.LoadFromFile(path);
-            }
-        }
-
-        if (image is not null)
-        {
-            tex = ImageTexture.CreateFromImage(image);
-        }
-
+        var tex = image is null ? null : ImageTexture.CreateFromImage(image);
         _faceTex[key] = tex;
         return tex;
     }

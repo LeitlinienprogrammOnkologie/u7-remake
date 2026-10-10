@@ -20,6 +20,7 @@ public sealed class SignGump
     {
         GumpShape = gumpShape;
         Lines = lines;
+        Translation = Translate(lines);
     }
 
     /// <summary>Exult <c>Sign_gump::paint</c>'s font: embossed on the gold plaque, engraved on the tombstone, else the plain runes.</summary>
@@ -71,18 +72,17 @@ public sealed class SignGump
     /// Fellowship's signs are in capitals, and so is all for an avatar who
     /// can read runes).
     /// </summary>
-    public string? Translation
-    {
-        get
-        {
-            var readable = Lines.Select(Readable).ToList();
-            if (readable.SequenceEqual(Lines))
-            {
-                return null;
-            }
+    public string? Translation { get; }
 
-            return string.Join(" ", readable.Select(l => l.Trim()).Where(l => l.Length > 0));
+    static string? Translate(IReadOnlyList<string> lines)
+    {
+        var readable = lines.Select(Readable).ToList();
+        if (readable.SequenceEqual(lines))
+        {
+            return null;
         }
+
+        return string.Join(" ", readable.Select(l => l.Trim()).Where(l => l.Length > 0));
     }
 
     /// <summary>

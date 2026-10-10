@@ -99,28 +99,10 @@ public class Gump
             return null;
         }
 
+        // The last one painted under the mouse is the one on top.
         U7Object? found = null;
-        foreach (var obj in Owner.Contents)
+        foreach (var obj in PaintOrder(view))
         {
-            if (obj.Removed || obj == view.Gumps.Drag?.Object || obj.ReadySlot is >= 0 and < 12)
-            {
-                continue;
-            }
-
-            GetShapeLocation(obj, out var ox, out var oy);
-            if (view.WorldSpriteContains(obj, mx, my, ox, oy))
-            {
-                found = obj;
-            }
-        }
-
-        foreach (var obj in Owner.Contents)
-        {
-            if (obj.Removed || obj == view.Gumps.Drag?.Object || obj.ReadySlot is not (>= 0 and < 12))
-            {
-                continue;
-            }
-
             GetShapeLocation(obj, out var ox, out var oy);
             if (view.WorldSpriteContains(obj, mx, my, ox, oy))
             {
@@ -129,6 +111,35 @@ public class Gump
         }
 
         return found;
+    }
+
+    /// <summary>
+    /// The things shown, in the order painted (Exult <c>Gump::paint</c>): the
+    /// loose ones, then the readied ones over them; not the one being dragged.
+    /// </summary>
+    protected IEnumerable<U7Object> PaintOrder(GumpView view)
+    {
+        if (Owner is null)
+        {
+            yield break;
+        }
+
+        var dragged = view.Gumps.Drag?.Object;
+        foreach (var obj in Owner.Contents)
+        {
+            if (!obj.Removed && obj != dragged && obj.ReadySlot is not (>= 0 and < 12))
+            {
+                yield return obj;
+            }
+        }
+
+        foreach (var obj in Owner.Contents)
+        {
+            if (!obj.Removed && obj != dragged && obj.ReadySlot is >= 0 and < 12)
+            {
+                yield return obj;
+            }
+        }
     }
 
     public void GetShapeLocation(U7Object obj, out int ox, out int oy)
@@ -145,22 +156,9 @@ public class Gump
         }
 
         var onobj = FindObject(view, mx, my);
-        if (onobj is not null && onobj != obj)
+        if (onobj is not null && onobj != obj && DropOnto(view, onobj, obj))
         {
-            if (Inventory.TryCombine(onobj, obj, view.Catalog))
-            {
-                return true;
-            }
-
-            if (Inventory.IsContainer(onobj, view.Catalog))
-            {
-                if (Inventory.TryCombineInto(onobj, obj, view.Catalog))
-                {
-                    return true;
-                }
-
-                return Equipment.TryPlace(view.Map, obj, onobj, 8, 8, view.Catalog);
-            }
+            return true;
         }
 
         var sx = mx - X - ObjectArea.X;
@@ -168,6 +166,17 @@ public class Gump
         ClampToArea(view, obj, ref sx, ref sy);
         return Equipment.TryPlace(view.Map, obj, Owner, sx, sy, view.Catalog);
     }
+
+    /// <summary>
+    /// Exult <c>onobj->drop(obj)</c> (a gump's thing under the mouse, with
+    /// <c>combine</c>): a stack of the kind takes it in (<c>Game_object::drop</c>);
+    /// a container takes it, filling its stacks first
+    /// (<c>Container_game_object::add</c>). False leaves it to the gump.
+    /// </summary>
+    protected static bool DropOnto(GumpView view, U7Object onobj, U7Object obj) =>
+        Inventory.IsContainer(onobj, view.Catalog)
+            ? view.Quantities.Combine(onobj, obj) || Equipment.TryPlace(view.Map, obj, onobj, 8, 8, view.Catalog)
+            : view.Quantities.Drop(onobj, obj);
 
     protected void ClampToArea(GumpView view, U7Object obj, ref int sx, ref int sy)
     {
@@ -302,29 +311,8 @@ public class Gump
 
     protected void PaintContents(GumpView view)
     {
-        if (Owner is null)
+        foreach (var obj in PaintOrder(view))
         {
-            return;
-        }
-
-        foreach (var obj in Owner.Contents)
-        {
-            if (obj.Removed || obj == view.Gumps.Drag?.Object || obj.ReadySlot is >= 0 and < 12)
-            {
-                continue;
-            }
-
-            GetShapeLocation(obj, out var ox, out var oy);
-            view.DrawWorldShape(obj.Shape, obj.Frame, ox, oy);
-        }
-
-        foreach (var obj in Owner.Contents)
-        {
-            if (obj.Removed || obj == view.Gumps.Drag?.Object || obj.ReadySlot is not (>= 0 and < 12))
-            {
-                continue;
-            }
-
             GetShapeLocation(obj, out var ox, out var oy);
             view.DrawWorldShape(obj.Shape, obj.Frame, ox, oy);
         }

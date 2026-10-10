@@ -138,7 +138,7 @@ public sealed partial class MouseCursor : Control
             return;
         }
 
-        var size = Mathf.Clamp(Mathf.RoundToInt(6.5f * Zoom), 14, 40);
+        var size = UiTheme.WorldTextSize(Zoom);
         var font = UiTheme.Font;
         var textSize = font.GetStringSize(text, HorizontalAlignment.Left, -1, size);
         var pad = new Vector2(size * 0.5f, size * 0.3f);

@@ -115,7 +115,7 @@ public sealed class PreachSchedule(NpcBrain brain) : Schedule(brain)
             {
                 _state = State.FindPodium; // In case we fail.
                 Start(2 * Std, 0);
-                if (FindClosest([IconShape], 24) is not [var icon, ..])
+                if (Closest(IconShape) is not { } icon)
                 {
                     return;
                 }

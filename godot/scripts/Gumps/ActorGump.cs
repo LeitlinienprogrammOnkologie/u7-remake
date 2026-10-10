@@ -49,22 +49,9 @@ public sealed class ActorGump : Gump
         }
 
         var onobj = FindObject(view, mx, my);
-        if (onobj is not null && onobj != obj)
+        if (onobj is not null && onobj != obj && DropOnto(view, onobj, obj))
         {
-            if (Inventory.TryCombine(onobj, obj, view.Catalog))
-            {
-                return true;
-            }
-
-            if (Inventory.IsContainer(onobj, view.Catalog))
-            {
-                if (Inventory.TryCombineInto(onobj, obj, view.Catalog))
-                {
-                    return true;
-                }
-
-                return Equipment.TryPlace(view.Map, obj, onobj, 8, 8, view.Catalog);
-            }
+            return true;
         }
 
         var slot = FindClosest(mx, my, onlyEmpty: true);
@@ -78,7 +65,7 @@ public sealed class ActorGump : Gump
             return true;
         }
 
-        return Equipment.AddToActor(Owner, obj, view.Catalog, view.Map);
+        return Equipment.AddToActor(Owner, obj, view.Catalog, view.Map, combine: view.Quantities);
     }
 
     public override void Paint(GumpView view)

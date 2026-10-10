@@ -179,11 +179,9 @@ public sealed class DeskSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
             ItemsInHand++;
         }
 
-        if (FindClosest(Desks, 24) is [var desk, ..])
+        if (Closest(Desks) is { } desk)
         {
-            var here = Here(desk);
-            _chair = SitSchedule.ChairShapes.SelectMany(shape => Map.FindNearby(here, shape, 24))
-                .OrderBy(c => Here(c).Distance(here)).FirstOrDefault();
+            _chair = ClosestTo(Here(desk), SitSchedule.ChairShapes);
         }
 
         if (_chair is null)
@@ -231,7 +229,7 @@ public sealed class DeskSchedule(NpcBrain brain) : ScheduleWithObjects(brain)
 
     void WorkAtTable()
     {
-        var table = _table is { Removed: false } t ? t : null;
+        var table = Valid(_table);
         if (table is not null)
         {
             // Turn to face it.

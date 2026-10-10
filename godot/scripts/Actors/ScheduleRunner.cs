@@ -377,6 +377,11 @@ public sealed class ScheduleRunner
         _brains.Values.Concat(_monsters.Values).Where(b => b.OnScreen && !b.Npc.IsDead && !b.Npc.Removed)
             .Select(b => b.Npc);
 
+    /// <summary>The NPCs' and the monsters' schedules, for checks made every frame (no enumerator to allocate).</summary>
+    public Dictionary<int, NpcBrain>.ValueCollection NpcBrains => _brains.Values;
+    public Dictionary<U7Object, NpcBrain>.ValueCollection MonsterBrains => _monsters.Values;
+    public NpcBrain? AvatarBrain => _avatarBrain;
+
     /// <summary>The schedules running (NPCs, monsters and the avatar's), for combat's checks.</summary>
     public IEnumerable<NpcBrain> Brains =>
         _avatarBrain is null

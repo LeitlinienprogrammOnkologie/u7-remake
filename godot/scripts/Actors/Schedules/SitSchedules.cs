@@ -19,7 +19,7 @@ public sealed class SitSchedule(NpcBrain brain, U7Object? chair = null) : Schedu
 
     public override void NowWhat()
     {
-        var chair = _chair is { Removed: false } c ? c : null;
+        var chair = Valid(_chair);
         if (chair is not null && (Npc.Frame & 0xf) == ActorWalker.SitFrame && Here(Npc).Distance(Here(chair)) <= 1)
         {
             // Already sitting. A barge seat starts the barge, but not more than once.
@@ -69,7 +69,7 @@ public sealed class EatAtInnSchedule(NpcBrain brain) : Schedule(brain)
         var frnum = Npc.Frame & 0xf;
         if (!_sittingAtChair || frnum != ActorWalker.SitFrame)
         {
-            if (frnum == ActorWalker.SitFrame && FindClosest(SitSchedule.ChairShapes, 1).Count > 0)
+            if (frnum == ActorWalker.SitFrame && Closest(SitSchedule.ChairShapes, 1) is not null)
             {
                 _sittingAtChair = true;
             }

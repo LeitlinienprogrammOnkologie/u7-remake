@@ -253,7 +253,7 @@ public sealed class U7Object
         }
     }
 
-    public void Bark(string text, ulong ms = 1800)
+    public void Bark(string text, ulong ms = U7.Core.U7Constants.TextEffectMs)
     {
         BarkText = text;
         BarkUntilMsec = Godot.Time.GetTicksMsec() + ms;

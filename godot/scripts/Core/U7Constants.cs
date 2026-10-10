@@ -22,6 +22,8 @@ public static class U7Constants
     public const int MaxShapes = 1024;
     public const int TileShapeCount = 150; // shapes 0-149 are 8×8 flats
     public const int StandardDelayMs = 200;
+    /// <summary>Exult <c>Text_effect</c>: a bark shows at once and goes at its tenth event, a standard delay apart ("about 1-2 seconds").</summary>
+    public const int TextEffectMs = 9 * StandardDelayMs;
     public const int TicksPerMinute = 25;
     public const int NpcActivityDist = 32;
     public const int PathMaxNodes = 1024;

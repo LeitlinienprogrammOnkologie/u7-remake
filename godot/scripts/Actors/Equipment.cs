@@ -249,11 +249,7 @@ public static class Equipment
             return alt2;
         }
 
-        foreach (var spot in new[]
-                 {
-                     ReadySpot.Belt, ReadySpot.Back, ReadySpot.Back2h, ReadySpot.BackShield,
-                     ReadySpot.Lhand, ReadySpot.Rhand
-                 })
+        foreach (var spot in OtherSpots)
         {
             if (FitsInSpot(actor, obj, spot, catalog))
             {
@@ -271,7 +267,7 @@ public static class Equipment
     /// </summary>
     public static void EmptyHands(U7Object actor, ShapeCatalog catalog, GameMap map)
     {
-        foreach (var hand in (int[])[ReadySpot.Lhand, ReadySpot.Rhand])
+        foreach (var hand in Hands)
         {
             if (GetReadied(actor, hand) is not { } obj)
             {
@@ -287,7 +283,7 @@ public static class Equipment
         }
     }
 
-    /// <summary>Exult <c>Actor::add_readied</c>. Occupied spots try nest/combine.</summary>
+    /// <summary>Exult <c>Actor::add_readied</c>: an occupied spot takes it only into what is there, a container (never combined).</summary>
     public static bool AddReadied(
         U7Object actor, U7Object obj, int index, ShapeCatalog catalog, GameMap map, bool forcePos = false)
     {
@@ -315,11 +311,6 @@ public static class Equipment
 
         if (GetReadied(actor, index) is { } occupied)
         {
-            if (Inventory.TryCombine(occupied, obj, catalog))
-            {
-                return true;
-            }
-
             return Inventory.IsContainer(occupied, catalog) &&
                    TryPlace(map, obj, occupied, 8, 8, catalog);
         }
@@ -342,21 +333,26 @@ public static class Equipment
     /// Exult <c>Actor::add</c>: the preferred ready spot, else a readied bag
     /// with room; false if neither, unless <paramref name="dontCheck"/>
     /// (Exult's <c>dont_check</c>), which then ignores the bags' limits and at
-    /// last puts it loose in the actor.
+    /// last puts it loose in the actor. With <paramref name="combine"/> (Exult's
+    /// <c>combine</c>: a drop on a party member or a paperdoll) it first fills
+    /// the stacks of its kind in the bags, or the stack in a hand; the ready
+    /// spot itself is never combined into.
     /// </summary>
-    public static bool AddToActor(U7Object actor, U7Object obj, ShapeCatalog catalog, GameMap map, bool dontCheck = false)
+    public static bool AddToActor(U7Object actor, U7Object obj, ShapeCatalog catalog, GameMap map, bool dontCheck = false,
+        ItemQuantity? combine = null)
     {
         var index = FindBestSpot(actor, obj, catalog);
         if (index < 0)
         {
             // A bag with room (backpack, belt, hands); Exult's dont_check (reading
             // a save, its own swaps) then tries the bags regardless, then the actor.
-            if (PutInBag(actor, obj, catalog, map, true) || (dontCheck && PutInBag(actor, obj, catalog, map, false)))
+            if (PutInBag(actor, obj, catalog, map, true, combine) ||
+                (dontCheck && PutInBag(actor, obj, catalog, map, false, combine)))
             {
                 return true;
             }
 
-            return dontCheck && TryPlace(map, obj, actor, 0, 0, catalog, checkLimits: false);
+            return dontCheck && (combine?.Combine(actor, obj) == true || TryPlace(map, obj, actor, 0, 0, catalog, checkLimits: false));
         }
 
         if (index == ReadySpot.BothHands)
@@ -385,13 +381,23 @@ public static class Equipment
         return true;
     }
 
-    /// <summary>Into the first readied bag (backpack, belt, hands) that takes it.</summary>
-    static bool PutInBag(U7Object actor, U7Object obj, ShapeCatalog catalog, GameMap map, bool checkLimits)
+    /// <summary>
+    /// Into the first readied bag (backpack, belt, hands) that takes it (Exult
+    /// <c>spots[...]->add(obj, false, combine)</c>: combining, a thing that is no
+    /// container takes only a drop on it).
+    /// </summary>
+    static bool PutInBag(U7Object actor, U7Object obj, ShapeCatalog catalog, GameMap map, bool checkLimits, ItemQuantity? combine)
     {
-        foreach (var slot in (int[])[ReadySpot.Back, ReadySpot.Belt, ReadySpot.Lhand, ReadySpot.Rhand])
+        foreach (var slot in BagSpots)
         {
-            if (GetReadied(actor, slot) is { } bag && Inventory.IsContainer(bag, catalog) &&
-                TryPlace(map, obj, bag, 8, 8, catalog, checkLimits))
+            if (GetReadied(actor, slot) is not { } bag)
+            {
+                continue;
+            }
+
+            if (Inventory.IsContainer(bag, catalog)
+                    ? combine?.Combine(bag, obj) == true || TryPlace(map, obj, bag, 8, 8, catalog, checkLimits)
+                    : combine?.Drop(bag, obj) == true)
             {
                 return true;
             }
@@ -399,6 +405,13 @@ public static class Equipment
 
         return false;
     }
+
+    static readonly int[] Hands = [ReadySpot.Lhand, ReadySpot.Rhand];
+    /// <summary>Exult <c>Actor::add</c>'s bags, in its order.</summary>
+    static readonly int[] BagSpots = [ReadySpot.Back, ReadySpot.Belt, ReadySpot.Lhand, ReadySpot.Rhand];
+    /// <summary>Exult <c>find_best_spot</c>'s last tries, in its order.</summary>
+    static readonly int[] OtherSpots =
+        [ReadySpot.Belt, ReadySpot.Back, ReadySpot.Back2h, ReadySpot.BackShield, ReadySpot.Lhand, ReadySpot.Rhand];
 
     public static bool TryPlace(
         GameMap map, U7Object obj, U7Object container, int gx, int gy, ShapeCatalog catalog,

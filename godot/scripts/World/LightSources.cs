@@ -136,7 +136,7 @@ public static class LightSources
         {
             for (var cx = startCx; cx != stopCx; cx = U7Constants.WrapChunk(cx + 1))
             {
-                foreach (var obj in map.ObjectsInChunk(cx, cy))
+                foreach (var obj in map.LightCandidates(cx, cy))
                 {
                     if (obj.Removed || obj.Container is not null || !catalog[obj.Shape].LightSource ||
                         (map.DungeonHeight(obj.Tx, obj.Ty) != 0) != inDungeon)

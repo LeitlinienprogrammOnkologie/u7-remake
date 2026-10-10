@@ -43,7 +43,20 @@ public sealed class UsecodeFunction
         Bytecode = remaining > 0 ? code[ip..] : Array.Empty<byte>();
     }
 
-    public string GetString(int offset) => UsecodeValue.ReadCString(Data, offset);
+    /// <summary>The string at the offset in the data, decoded once (PUSHS and ADDSI ask again on every pass of a converse loop).</summary>
+    public string GetString(int offset)
+    {
+        _strings ??= new Dictionary<int, string>();
+        if (!_strings.TryGetValue(offset, out var s))
+        {
+            s = UsecodeValue.ReadCString(Data, offset);
+            _strings[offset] = s;
+        }
+
+        return s;
+    }
+
+    Dictionary<int, string>? _strings;
 
     public int GetExtern(int index) =>
         (uint)index < (uint)Externs.Length ? Externs[index] : -1;

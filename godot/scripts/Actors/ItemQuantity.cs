@@ -50,7 +50,8 @@ public sealed class ItemQuantity
     static bool CanBeAdded(U7Object cont, int shape, bool allowLocked = false) =>
         cont.Shape != shape && (allowLocked || !LockedContainers.Contains(cont.Shape));
 
-    static bool Matches(U7Object obj, int shape, int qual, int frame) =>
+    /// <summary>Exult's shape, quality and frame test (any for <see cref="U7Constants.AnyShape"/>; the frame without its reflection).</summary>
+    public static bool Matches(U7Object obj, int shape, int qual, int frame) =>
         (shape == U7Constants.AnyShape || obj.Shape == shape) &&
         (frame == U7Constants.AnyShape || (obj.Frame & 31) == frame) &&
         (qual == U7Constants.AnyShape || obj.Quality == qual);
@@ -224,6 +225,55 @@ public sealed class ItemQuantity
         }
 
         return cantAdd + Create(cont, delta, shape, qual, frame == U7Constants.AnyShape ? 0 : frame, temporary);
+    }
+
+    /// <summary>
+    /// Exult <c>Game_object::drop</c>: a stack of the same kind (any frame, for
+    /// the shapes with pile frames) takes in what is dropped on it if they make
+    /// no more than 100; what was dropped is used up.
+    /// </summary>
+    public bool Drop(U7Object onto, U7Object obj)
+    {
+        if (obj == onto || onto.Shape != obj.Shape || !_catalog[onto.Shape].HasQuantity ||
+            (!HasQuantityFrames(onto.Shape) && onto.Frame != obj.Frame))
+        {
+            return false;
+        }
+
+        var quantity = Inventory.GetQuantity(obj, _catalog);
+        if (Inventory.GetQuantity(onto, _catalog) + quantity > U7Constants.MaxQuantity)
+        {
+            return false;
+        }
+
+        Modify(onto, quantity, out _);
+        _map.RemoveObject(obj);
+        return true;
+    }
+
+    /// <summary>
+    /// The combining in Exult <c>Container_game_object::add(obj, ..., combine)</c>:
+    /// <see cref="Add"/> fills the container's stacks of the kind, nested ones
+    /// too, from <paramref name="obj"/>. True when all of it went in (it is
+    /// removed); otherwise it keeps the rest, for the caller to add.
+    /// </summary>
+    public bool Combine(U7Object cont, U7Object obj)
+    {
+        var quantity = Inventory.GetQuantity(obj, _catalog);
+        var qual = _catalog[obj.Shape].HasQuality ? obj.Quality : U7Constants.AnyShape;
+        var left = Add(cont, quantity, obj.Shape, qual, obj.Frame, dontCreate: true, temporary: false);
+        if (left == 0)
+        {
+            _map.RemoveObject(obj);
+            return true;
+        }
+
+        if (left < quantity)
+        {
+            Modify(obj, left - quantity, out _);
+        }
+
+        return false;
     }
 
     /// <summary>Exult <c>Container_game_object::create_quantity</c>.</summary>

@@ -15,6 +15,8 @@ public partial class GumpView : Node2D
     public ShapeCache Shapes = null!;
     public ShapeCatalog Catalog = null!;
     public GameMap Map = null!;
+    /// <summary>Stacks for drops: Exult's <c>drop</c> and <c>add(..., combine)</c>.</summary>
+    public U7.Actors.ItemQuantity Quantities = null!;
     public float Zoom = 4f;
     /// <summary>The book or scroll whose page the usecode waits on; Exult paints it over everything.</summary>
     public Func<TextGump?>? ShownBook;

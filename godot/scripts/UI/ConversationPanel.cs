@@ -162,6 +162,25 @@ public sealed partial class ConversationPanel : Control
         AddChild(_marker);
     }
 
+    /// <summary>
+    /// What the panel was last built from, to refresh itself when it changes
+    /// (see <see cref="_Process"/>): the callers refresh it as they change the
+    /// VM, but a path that forgets no longer leaves it stale.
+    /// </summary>
+    (UsecodeWait Wait, bool InUsecode, string Text, int TextFace, int LastFace, (int, int)? Face0, (int, int)? Face1, int Answers) _shown;
+
+    static (UsecodeWait, bool, string, int, int, (int, int)?, (int, int)?, int) Snapshot(UsecodeMachine vm)
+    {
+        var conv = vm.Conv;
+        var answers = conv.Answers.Count;
+        foreach (var a in conv.Answers)
+        {
+            answers = answers * 31 + a.GetHashCode();
+        }
+
+        return (vm.Wait, vm.InUsecode, conv.NpcText, conv.TextFace, conv.LastFace, conv.Faces[0], conv.Faces[1], answers);
+    }
+
     /// <summary>Rebuild from the VM's conversation state (faces, text, answers, waits).</summary>
     public void Refresh()
     {
@@ -170,6 +189,7 @@ public sealed partial class ConversationPanel : Control
             return;
         }
 
+        _shown = Snapshot(vm);
         var conv = vm.Conv;
         var wait = vm.Wait;
         var choosing = wait is UsecodeWait.Converse or UsecodeWait.SelectMenu or UsecodeWait.SelectMenuIndex;
@@ -197,6 +217,13 @@ public sealed partial class ConversationPanel : Control
 
         var side = main == 0 ? 1 : 0;
         var sideFace = main >= 0 ? conv.Faces[side] : null;
+        if (choosing && conv.Answers.Count > 0)
+        {
+            // Exult show_avatar_choices: the avatar's face while it picks an answer, here in the second
+            // speaker's place (the user's pick, 2026-10-10), which it takes for the choice.
+            sideFace = (U7.Actors.AvatarLook.FaceShape, U7.Actors.AvatarLook.FaceFrame(U7.Actors.AvatarLook.IsFemale(vm.Avatar)));
+        }
+
         _sidePortrait.Texture = sideFace is { } sf ? Shapes?.GetFace(sf.Shape, sf.Frame) : null;
         _sidePortrait.Visible = _sidePortrait.Texture is not null;
 
@@ -262,20 +289,21 @@ public sealed partial class ConversationPanel : Control
 
     static Button MakeButton(string text)
     {
-        var btn = new Button { Text = text, FocusMode = FocusModeEnum.None, MouseDefaultCursorShape = CursorShape.PointingHand };
+        var btn = new Button { Text = text };
         btn.AddThemeFontOverride("font", UiTheme.Font);
         btn.AddThemeFontSizeOverride("font_size", AnswerSize);
-        btn.AddThemeColorOverride("font_color", UiTheme.Gold);
-        btn.AddThemeColorOverride("font_hover_color", UiTheme.GoldBright);
-        btn.AddThemeColorOverride("font_pressed_color", UiTheme.GoldBright);
-        btn.AddThemeStyleboxOverride("normal", UiTheme.Box(new Color(0.20f, 0.14f, 0.08f, 0.65f), UiTheme.Gold with { A = 0.45f }, 1, 6, 8));
-        btn.AddThemeStyleboxOverride("hover", UiTheme.Box(new Color(0.34f, 0.24f, 0.12f, 0.92f), UiTheme.GoldBright, 1, 6, 8));
-        btn.AddThemeStyleboxOverride("pressed", UiTheme.Box(new Color(0.42f, 0.30f, 0.14f, 0.95f), UiTheme.GoldBright, 1, 6, 8));
+        UiTheme.StyleButton(btn, UiTheme.PanelLook with { Margin = 8 });
         return btn;
     }
 
     public override void _Process(double delta)
     {
+        // Before the visibility test: refreshing is what shows the panel.
+        if (Machine is { } changed && Snapshot(changed) != _shown)
+        {
+            Refresh();
+        }
+
         if (!Visible || Machine is not { } vm)
         {
             _marker.Visible = false;

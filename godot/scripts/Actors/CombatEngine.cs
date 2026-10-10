@@ -253,15 +253,11 @@ public sealed class CombatEngine
     /// <summary>A new temporary monster goes into the world at the spot, its schedule run by the monster AI.</summary>
     U7Object Place(U7Object npc, TileCoord spot)
     {
-        npc.Tx = spot.Tx;
-        npc.Ty = spot.Ty;
-        npc.Tz = spot.Tz;
         npc.SetFlag(ObjFlag.Temporary);
-        _map.AddObject(npc);
+        _map.PlaceInWorld(npc, spot.Tx, spot.Ty, spot.Tz);
         _spawned.Add(npc);
         Schedules?.AddMonster(npc);
         LastMessage = $"spawn {npc.NpcName} at {npc.Tx},{npc.Ty} align {npc.Alignment}";
-        GD.Print(LastMessage);
         return npc;
     }
 
@@ -321,23 +317,13 @@ public sealed class CombatEngine
     {
         var inf = _monsters[shape];
         var rec = _catalog[shape];
-        var npc = new U7Object
-        {
-            Shape = shape,
-            Frame = frame,
-            Kind = ObjectKind.Actor,
-            IsActor = true,
-            IsMonster = true,
-            NpcNum = -1,
-            Solid = rec.Solid,
-            DimX = rec.DimX,
-            DimY = rec.DimY,
-            DimZ = rec.DimZ,
-            Alignment = align == Alignment.Neutral ? inf.Alignment : align,
-            TypeFlags = inf.MoveFlags,
-            ScheduleType = sched,
-            NpcName = string.IsNullOrEmpty(rec.Name) ? $"shape {shape}" : rec.Name
-        };
+        var npc = _map.CreateActor(shape, frame);
+        npc.IsMonster = true;
+        npc.NpcNum = -1;
+        npc.Alignment = align == Alignment.Neutral ? inf.Alignment : align;
+        npc.TypeFlags = inf.MoveFlags;
+        npc.ScheduleType = sched;
+        npc.NpcName = string.IsNullOrEmpty(rec.Name) ? $"shape {shape}" : rec.Name;
         var str = RandomizeStat(inf.Strength);
         npc.SetProp(ActorProp.Strength, str);
         npc.SetProp(ActorProp.Health, str);
@@ -1125,19 +1111,38 @@ public sealed class CombatEngine
     /// </summary>
     public bool IsHostileNearby(int x0, int y0, int w, int h)
     {
-        foreach (var b in Schedules?.Brains ?? [])
+        // Every frame (the cursor, a held key): the collections walked as they are, nothing allocated.
+        if (Schedules is not { } s)
         {
-            var npc = b.Npc;
-            if (!npc.IsDead && !npc.Removed && npc.Alignment >= Alignment.Evil &&
-                b.Schedule is CombatSchedule { StartedBattle: true } or ArrestAvatarSchedule &&
-                U7Constants.TileDelta(x0, npc.Tx) is var dx && dx >= 0 && dx < w &&
-                U7Constants.TileDelta(y0, npc.Ty) is var dy && dy >= 0 && dy < h)
+            return false;
+        }
+
+        foreach (var b in s.NpcBrains)
+        {
+            if (IsHostileIn(b, x0, y0, w, h))
             {
                 return true;
             }
         }
 
-        return false;
+        foreach (var b in s.MonsterBrains)
+        {
+            if (IsHostileIn(b, x0, y0, w, h))
+            {
+                return true;
+            }
+        }
+
+        return s.AvatarBrain is { } a && IsHostileIn(a, x0, y0, w, h);
+    }
+
+    static bool IsHostileIn(NpcBrain b, int x0, int y0, int w, int h)
+    {
+        var npc = b.Npc;
+        return !npc.IsDead && !npc.Removed && npc.Alignment >= Alignment.Evil &&
+               b.Schedule is CombatSchedule { StartedBattle: true } or ArrestAvatarSchedule &&
+               U7Constants.TileDelta(x0, npc.Tx) is var dx && dx >= 0 && dx < w &&
+               U7Constants.TileDelta(y0, npc.Ty) is var dy && dy >= 0 && dy < h;
     }
 
     /// <summary>Restore spawned monsters from a saved game (MONSNPCS.DAT).</summary>
@@ -1937,7 +1942,7 @@ public sealed class CombatEngine
         if (pr.ReturnPath)
         {
             // A returning weapon is back: into the thrower's hands, else on the ground where it fell.
-            var back = CreateItem(pr.SpriteShape, 0, pr.Pos.Tx, pr.Pos.Ty, pr.Pos.Tz, temporary: false, place: false);
+            var back = _map.CreateIregObject(pr.SpriteShape, 0);
             if (target is not { Removed: false, IsDead: false } || !Equipment.AddToActor(target, back, _catalog, _map))
             {
                 back.SetFlag(ObjFlag.OkayToTake);
@@ -2024,9 +2029,14 @@ public sealed class CombatEngine
 
         if (drop && pr.SpriteShape >= 0 && _map.FindSpot(pr.Pos.Tx, pr.Pos.Ty, pr.Pos.Tz, 3) is { } spot)
         {
-            var temp = attacker is null || attacker.GetFlag(ObjFlag.Temporary);
-            var item = CreateItem(pr.SpriteShape, 0, spot.Tx, spot.Ty, spot.Tz, temp);
+            var item = _map.CreateIregObject(pr.SpriteShape, 0);
+            if (attacker is null || attacker.GetFlag(ObjFlag.Temporary))
+            {
+                item.SetFlag(ObjFlag.Temporary);
+            }
+
             item.SetFlag(ObjFlag.OkayToTake);
+            _map.PlaceInWorld(item, spot.Tx, spot.Ty, spot.Tz);
         }
     }
 
@@ -2306,38 +2316,6 @@ public sealed class CombatEngine
         }
     }
 
-    /// <summary>Create a world item (arrow on the ground, returned boomerang).</summary>
-    U7Object CreateItem(int shape, int frame, int tx, int ty, int tz, bool temporary, bool place = true)
-    {
-        var rec = _catalog[shape];
-        var reflected = (frame & 32) != 0;
-        var obj = new U7Object
-        {
-            Tx = tx,
-            Ty = ty,
-            Tz = tz,
-            Shape = shape,
-            Frame = frame,
-            Kind = ObjectKind.Ireg,
-            DimX = reflected ? rec.DimY : rec.DimX,
-            DimY = reflected ? rec.DimX : rec.DimY,
-            DimZ = rec.DimZ,
-            Solid = false,
-            Quality = rec.HasQuantity ? 1 : 0
-        };
-        if (temporary)
-        {
-            obj.SetFlag(ObjFlag.Temporary);
-        }
-
-        if (place)
-        {
-            _map.AddObject(obj);
-        }
-
-        return obj;
-    }
-
     /// <summary>Exult <c>Zombie</c>'s straight 3D line (<see cref="ZombieSteps"/>), without the start tile; empty when already there.</summary>
     static List<TileCoord> LinePath(TileCoord from, TileCoord to)
     {
@@ -2497,7 +2475,8 @@ public sealed class CombatEngine
 
     /// <summary>
     /// Exult <c>Actor::die</c>: shapes in the bodies table leave a corpse
-    /// container holding the inventory; otherwise the items drop nearby.
+    /// container holding the inventory; otherwise the items drop nearby, and
+    /// those with no room stay with the dead actor (Exult's <c>tooheavy</c>).
     /// Everything becomes okay to take.
     /// </summary>
     void LeaveBody(U7Object victim)
@@ -2505,24 +2484,9 @@ public sealed class CombatEngine
         U7Object? body = null;
         if (Bodies.TryGetBody(victim.Shape, out var bshape, out var bframe))
         {
-            bframe |= victim.Frame & 32;
-            var rec = _catalog[bshape];
-            var reflected = (bframe & 32) != 0;
-            body = new U7Object
-            {
-                Tx = victim.Tx,
-                Ty = victim.Ty,
-                Tz = victim.Tz,
-                Shape = bshape,
-                Frame = bframe,
-                Kind = ObjectKind.Ireg,
-                DimX = reflected ? rec.DimY : rec.DimX,
-                DimY = reflected ? rec.DimX : rec.DimY,
-                DimZ = rec.DimZ,
-                Solid = rec.Solid,
-                Quality = victim.NpcNum > 0 ? 1 : 0,
-                LiveNpcNum = victim.NpcNum > 0 ? victim.NpcNum : -1
-            };
+            body = _map.CreateIregObject(bshape, bframe | (victim.Frame & 32));
+            body.Quality = victim.NpcNum > 0 ? 1 : 0;
+            body.LiveNpcNum = victim.NpcNum > 0 ? victim.NpcNum : -1;
             if (victim.GetFlag(ObjFlag.Temporary))
             {
                 body.SetFlag(ObjFlag.Temporary);
@@ -2532,19 +2496,11 @@ public sealed class CombatEngine
         // Exult deletes spells (READY.DAT's spell bit: dragon breath, death bolts, ...) with the
         // rest of the inventory instead of handing them on; in a body also those inside containers.
         RemoveSpells(victim, inside: body is not null);
-        var items = victim.Contents.ToList();
-        victim.Contents.Clear();
-
-        foreach (var item in items)
+        foreach (var item in victim.Contents.ToList())
         {
-            item.Container = null;
-            item.ReadySlot = -1;
             if (body is not null)
             {
-                item.Tx = 255; // let the gump lay it out
-                item.Ty = 255;
-                item.Container = body;
-                body.Contents.Add(item);
+                _map.PlaceInContainer(item, body, 255, 255); // 255: let the gump lay it out
                 continue;
             }
 
@@ -2559,7 +2515,7 @@ public sealed class CombatEngine
         if (body is not null)
         {
             body.SetFlagWithContents(ObjFlag.OkayToTake);
-            _map.AddObject(body);
+            _map.PlaceInWorld(body, victim.Tx, victim.Ty, victim.Tz);
         }
     }
 

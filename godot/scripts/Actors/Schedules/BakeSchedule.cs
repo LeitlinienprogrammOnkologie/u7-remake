@@ -41,17 +41,11 @@ public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
     U7Object? _flourbag;
     bool _clearing;
 
-    static U7Object? Valid(U7Object? obj) => obj is { Removed: false } ? obj : null;
-
-    U7Object? Closest(int shape) => FindClosest([shape], 24).FirstOrDefault();
-
     /// <summary>Exult <c>Actor::find_nearby</c> with a quality, frame and okay-to-take filter.</summary>
     List<U7Object> Nearby(TileCoord pos, int shape, int dist, int qual = U7Constants.AnyShape,
         int frame = U7Constants.AnyShape, bool excludeOkayToTake = false) =>
-        Map.FindNearby(pos, shape, dist)
-            .Where(o => (qual == U7Constants.AnyShape || o.Quality == qual) &&
-                        (frame == U7Constants.AnyShape || o.Frame == frame) &&
-                        !(excludeOkayToTake && o.GetFlag(ObjFlag.OkayToTake)))
+        Map.FindNearby(pos, shape, dist, qual: qual, frame: frame)
+            .Where(o => !(excludeOkayToTake && o.GetFlag(ObjFlag.OkayToTake)))
             .ToList();
 
     /// <summary>Exult <c>Actor_pathfinder_client(npc, dist)</c> with <c>create_path</c>.</summary>
@@ -326,7 +320,7 @@ public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
         // Where to put the dough; Exult walks to that tile at lift 0.
         var (x, y, w, h) = ObjectGeometry.Footprint(worktable);
         var tablepos = new TileCoord(x + Rng.Next(w), y + Rng.Next(h),
-            worktable.Tz + Map.Catalog[worktable.Shape].DimZ);
+            TopLift(worktable));
         if (PathTo(tablepos with { Tz = 0 }, 1) is not { } walk)
         {
             delay = 2500; // Not good... try again.
@@ -382,7 +376,7 @@ public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
         }
 
         var (x, y, w, h) = ObjectGeometry.Footprint(display);
-        LabSchedule.PerimeterTile(x, y, w, h, Rng.Next(2 * w + 2 * h + 4), out var spot, out var spotOnTable);
+        ObjectGeometry.PerimeterTile(x, y, w, h, Rng.Next(2 * w + 2 * h + 4), out var spot, out var spotOnTable);
         var walk = PathTo(spot, 2);
         // (Exult's perimeter tiles are at lift 0.)
         spotOnTable = spotOnTable with { Tz = spotOnTable.Tz + Map.Catalog[display.Shape].DimZ };
@@ -433,7 +427,7 @@ public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
         var tpos = new TileCoord(oven.Tx + 1, oven.Ty + 1, oven.Tz).Wrapped();
         var (offX, offY, offZ) = stove is not null ? (-3, 0, -2) : (1, 0, 0);
         var (x, y, _, _) = ObjectGeometry.Footprint(oven);
-        var cpos = new TileCoord(x + offX, y + offY, oven.Tz + Map.Catalog[oven.Shape].DimZ + offZ);
+        var cpos = new TileCoord(x + offX, y + offY, TopLift(oven) + offZ);
         if (PathTo(tpos, 1) is { } walk)
         {
             SetAction(new SequenceAction(100, walk, new PickupAction(Map, dough, cpos, 250, temporary: false)));

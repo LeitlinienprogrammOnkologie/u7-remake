@@ -1,4 +1,3 @@
-using U7.Core;
 using U7.Data;
 
 namespace U7.Actors;
@@ -161,57 +160,5 @@ public static class Inventory
         }
 
         return true;
-    }
-
-    /// <summary>
-    /// Merge <paramref name="src"/> into <paramref name="dest"/> if they stack.
-    /// Returns true when <paramref name="src"/> is fully consumed.
-    /// </summary>
-    public static bool TryCombine(U7Object dest, U7Object src, ShapeCatalog catalog)
-    {
-        if (dest == src || dest.Removed || src.Removed)
-        {
-            return false;
-        }
-
-        var rec = catalog[dest.Shape];
-        if (!rec.HasQuantity || dest.Shape != src.Shape || dest.Frame != src.Frame)
-        {
-            return false;
-        }
-
-        var total = GetQuantity(dest, catalog) + GetQuantity(src, catalog);
-        if (total > U7Constants.MaxQuantity)
-        {
-            // Exult Container_game_object::add: fill the stack, keep the remainder.
-            var room = U7Constants.MaxQuantity - GetQuantity(dest, catalog);
-            if (room <= 0)
-            {
-                return false;
-            }
-
-            dest.Quality = U7Constants.MaxQuantity;
-            src.Quality = total - U7Constants.MaxQuantity;
-            return false;
-        }
-
-        dest.Quality = total;
-        src.Removed = true;
-        src.Container = null;
-        src.ReadySlot = -1;
-        return true;
-    }
-
-    public static bool TryCombineInto(U7Object container, U7Object src, ShapeCatalog catalog)
-    {
-        foreach (var child in container.Contents)
-        {
-            if (!child.Removed && TryCombine(child, src, catalog))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 }

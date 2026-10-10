@@ -19,9 +19,6 @@ public static class U7Paths
     public static string? GameDatOverride { get; set; }
     public static string SavesDir => Path.Combine(RepoRoot, "saves");
     public static string AssetsDir => Path.Combine(RepoRoot, "assets");
-    public static string GumpsDir => Path.Combine(AssetsDir, "graphics", "gumps");
-    public static string FontsDir => Path.Combine(AssetsDir, "graphics", "fonts");
-    public static string FacesDir => Path.Combine(AssetsDir, "graphics", "faces");
     public static string DataDir => Path.Combine(AssetsDir, "data");
     public static string TextDir => Path.Combine(AssetsDir, "text");
 
@@ -108,13 +105,4 @@ public static class U7Paths
             return _initGame;
         }
     }
-
-    public static string GumpPng(int shape, int frame) =>
-        Path.Combine(GumpsDir, $"{shape:D4}", $"{shape:D4}_f{frame:D4}.png");
-
-    public static string FontPng(int font, int frame) =>
-        Path.Combine(FontsDir, $"{font:D4}", $"{font:D4}_f{frame:D4}.png");
-
-    public static string FacePng(int shape, int frame) =>
-        Path.Combine(FacesDir, $"{shape:D4}", $"{shape:D4}_f{frame:D4}.png");
 }

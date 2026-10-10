@@ -124,4 +124,65 @@ public static class ObjectGeometry
 
         return Direction(from, to);
     }
+
+    /// <summary>
+    /// The tile on the edge of the object's footprint nearest (x, y), on the
+    /// side the point lies (Exult <c>drop_item</c> and the waiter's plate):
+    /// east or west of it when level with it, else north or south.
+    /// </summary>
+    public static (int X, int Y) EdgeNearest(U7Object obj, int x, int y)
+    {
+        var (fx, fy, fw, fh) = Footprint(obj);
+        if (y >= fy && y < fy + fh)
+        {
+            return (x <= fx ? fx : fx + fw - 1, y);
+        }
+
+        return (x, y <= fy ? fy : fy + fh - 1);
+    }
+
+    /// <summary>
+    /// Exult <c>Perimeter::get</c>: the i-th tile round a rectangle (from its
+    /// top left, clockwise), and the tile of the rectangle next to it.
+    /// </summary>
+    public static void PerimeterTile(int rx, int ry, int rw, int rh, int i, out TileCoord ptile, out TileCoord atile)
+    {
+        int x = rx - 1, y = ry - 1, w = rw + 2, h = rh + 2;
+        var size = 2 * rw + 2 * rh + 4;
+        while (true)
+        {
+            if (i < w - 1)
+            {
+                ptile = new TileCoord(x + i, y, 0);
+                atile = new TileCoord(ptile.Tx + (i == 0 ? 1 : 0), ptile.Ty + 1, 0);
+                return;
+            }
+
+            i -= w - 1;
+            if (i < h - 1)
+            {
+                ptile = new TileCoord(x + w - 1, y + i, 0);
+                atile = new TileCoord(ptile.Tx - 1, ptile.Ty + (i == 0 ? 1 : 0), 0);
+                return;
+            }
+
+            i -= h - 1;
+            if (i < w - 1)
+            {
+                ptile = new TileCoord(x + w - 1 - i, y + h - 1, 0);
+                atile = new TileCoord(ptile.Tx + (i == 0 ? -1 : 0), ptile.Ty - 1, 0);
+                return;
+            }
+
+            i -= w - 1;
+            if (i < h - 1)
+            {
+                ptile = new TileCoord(x, y + h - 1 - i, 0);
+                atile = new TileCoord(ptile.Tx + 1, ptile.Ty + (i == 0 ? -1 : 0), 0);
+                return;
+            }
+
+            i %= size; // Bad index.
+        }
+    }
 }

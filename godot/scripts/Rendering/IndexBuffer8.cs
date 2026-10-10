@@ -47,12 +47,6 @@ public sealed class IndexBuffer8
         Panes = new ushort[width * height];
     }
 
-    /// <summary>Exult <c>fill8(pix)</c>: the whole buffer.</summary>
-    public void Fill8(byte color) => Pixels.AsSpan().Fill(color);
-
-    /// <summary>Nothing glows: the start of a frame.</summary>
-    public void ClearGlow() => Glow.AsSpan().Clear();
-
     /// <summary>Exult <c>fill8(pix, w, h, x, y)</c>: a rectangle.</summary>
     public void Fill8(byte color, int w, int h, int x, int y)
     {
@@ -135,8 +129,13 @@ public sealed class IndexBuffer8
             var from = frame.Pixels.AsSpan(src, len);
             var to = Pixels.AsSpan(dest, len);
             var lit = Glow.AsSpan(dest, len);
+            // Most of a run has no see-through colour: copy up to the first one at once.
+            var first = from.IndexOfAnyInRange((byte)XformTables.FirstTranslucent, (byte)0xFE);
+            var plain = first < 0 ? len : first;
+            from[..plain].CopyTo(to);
+            lit[..plain].Fill(glow);
             var panes = (haze & PaneMark) != 0 ? Panes.AsSpan(dest, len) : default;
-            for (var i = 0; i < len; i++)
+            for (var i = plain; i < len; i++)
             {
                 var c = from[i];
                 if (c is >= XformTables.FirstTranslucent and <= 0xFE)

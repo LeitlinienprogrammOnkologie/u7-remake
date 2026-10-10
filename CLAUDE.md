@@ -40,7 +40,11 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
   weather and its timing), the look is the user's. Their picks so far:
   - **UI:** MedievalSharp and the "dark wood & gold" conversation panel;
     books and scrolls (for now) in the original GUMPS.VGA art and FONTS.VGA
-    font 4, scaled to fit the window.
+    font 4, scaled to fit the window. Buttons everywhere in the new game
+    screen's look (dark wood, a firm gold border, `UiTheme.PanelLook`;
+    2026-10-10, over the answers' see-through, thin-bordered one). The
+    avatar's face (Exult shows it by the answers) in the second speaker's
+    place at the panel's right while answers are offered (2026-10-10).
   - **Signs:** signs, tombstones and plaques in the original GUMPS.VGA art
     and rune fonts, scaled to fit like the books, the runes translated
     beneath in MedievalSharp, gold on dark wood (`GumpView.PaintSign`).
@@ -101,8 +105,10 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
 
 ```
 godot/scripts/
-  Game/       U7Game (scene root, input, wiring), U7Game.Agent (agent console),
-              AvatarController (player walking), SaveGame (Exult GAMEDAT layout),
+  Game/       U7Game (scene root, wiring), U7Game.Input (keys, mouse buttons,
+              cursor, drops on the map), U7Game.Agent (agent console),
+              AvatarController (player walking), SaveGame (Exult GAMEDAT layout;
+              GwinState: gamewin.dat),
               Endgame (Exult end_game and the credits)
   Data/       GameMap (chunks, IREG, eggs index, paint order), U7Object,
               ShapeCatalog, FlexFile, VgaShapeFile + ShapeFrame (Exult Shape_frame:
@@ -363,6 +369,4 @@ Next, in priority order:
    32-tile activity range or the follow schedule ever show their seams.
 
 Known small gaps:
-- Exult shows the avatar's portrait next to the answers.
-- Barks last 4 s; Exult's last about 2 s.
 - Picked-up items are readied into free slots, as in Exult `Actor::add`.

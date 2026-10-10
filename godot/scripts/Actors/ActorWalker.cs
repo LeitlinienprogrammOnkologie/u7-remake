@@ -163,7 +163,8 @@ public static class ActorWalker
         }
 
         // Try orthogonal directions first, then diagonals.
-        foreach (var d in new[] { (dir + 2) % 8, (dir + 6) % 8, 1, 3, 5, 7 })
+        ReadOnlySpan<int> dirs = [(dir + 2) % 8, (dir + 6) % 8, 1, 3, 5, 7];
+        foreach (var d in dirs)
         {
             var to = new TileCoord(npc.Tx + Directions.Dx[d], npc.Ty + Directions.Dy[d], npc.Tz).Wrapped();
             if (IsBlocked(map, npc, ref to, moveFlags: npc.TypeFlags))

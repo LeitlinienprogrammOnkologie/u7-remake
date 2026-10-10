@@ -165,6 +165,14 @@ public sealed class SceneLighting
         _party = party;
         _frameOf = obj => obj.Frame;
         Windows = new WindowLights(map);
+        // What FindLights and the light level look at, for the map's per-chunk lists (with every actor).
+        var lightShapes = new bool[catalog.Shapes.Length];
+        for (var s = 0; s < lightShapes.Length; s++)
+        {
+            lightShapes[s] = catalog[s].LightSource || WindowLights.IsWindow(s) || GlowTable.IsEmitter(s);
+        }
+
+        map.LightShapes = lightShapes;
         _palettes.SetNightTint(NightTint);
         _palettes.Get(PaletteSet.Day, _day);
         _day.CopyTo(Lit, 0);
@@ -271,7 +279,7 @@ public sealed class SceneLighting
         {
             for (var cx = c0x; cx <= c1x; cx++)
             {
-                foreach (var obj in _map.ObjectsInChunk(cx, cy))
+                foreach (var obj in _map.LightCandidates(cx, cy))
                 {
                     if (!WorldView.IsPainted(obj, _skip, av) || (_map.DungeonHeight(obj.Tx, obj.Ty) != 0) != InDungeon)
                     {

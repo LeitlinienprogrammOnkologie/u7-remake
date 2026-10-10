@@ -43,7 +43,7 @@ public sealed class LabSchedule : Schedule
     /// <summary>Exult <c>Lab_schedule::init</c>: the cauldron, the tables, a book on one and a chair by one.</summary>
     void Init()
     {
-        _cauldron = FindClosest([CauldronShape], 20).FirstOrDefault();
+        _cauldron = Closest(CauldronShape, 20);
         _tables.Clear();
         _tables.AddRange(Map.FindNearby(Here(Npc), 1003, 20));
         _tables.AddRange(Map.FindNearby(Here(Npc), 1018, 20));
@@ -57,29 +57,21 @@ public sealed class LabSchedule : Schedule
             }
 
             // A book on the table?
-            if (_book is null && ClosestTo(table, [BookShape], 4) is { } book &&
+            if (_book is null && ClosestTo(Here(table), [BookShape], 4) is { } book &&
                 ObjectGeometry.InFootprint(table, book.Tx, book.Ty))
             {
                 _book = book;
             }
 
-            _chair ??= ClosestTo(table, SitSchedule.ChairShapes, 4);
+            _chair ??= ClosestTo(Here(table), SitSchedule.ChairShapes, 4);
         }
-    }
-
-    /// <summary>Exult <c>Game_object::find_closest</c> from another object.</summary>
-    U7Object? ClosestTo(U7Object from, int[] shapes, int dist)
-    {
-        var here = Here(from);
-        return shapes.SelectMany(shape => Map.FindNearby(here, shape, dist))
-            .OrderBy(o => Here(o).Distance(here)).FirstOrDefault();
     }
 
     public override void NowWhat()
     {
         var delay = 100;
-        var cauldron = _cauldron is { Removed: false } c ? c : null;
-        var book = _book is { Removed: false } b ? b : null;
+        var cauldron = Valid(_cauldron);
+        var book = Valid(_book);
         switch (_state)
         {
             case State.WalkToCauldron:
@@ -165,7 +157,7 @@ public sealed class LabSchedule : Schedule
         }
 
         var (x, y, w, h) = ObjectGeometry.Footprint(table);
-        PerimeterTile(x, y, w, h, Rng.Next(2 * w + 2 * h + 4), out var spot, out _spotOnTable);
+        ObjectGeometry.PerimeterTile(x, y, w, h, Rng.Next(2 * w + 2 * h + 4), out var spot, out _spotOnTable);
         // (Exult's perimeter tiles are at lift 0, so this works on the ground floor.)
         if (PathWalk.Astar(Map, Npc, spot) is not { } walk)
         {
@@ -194,50 +186,5 @@ public sealed class LabSchedule : Schedule
 
         var dir = ObjectGeometry.Direction(Npc, _spotOnTable);
         SetAction(new FramesAction([ActorWalker.DirFrame(dir, 1), ActorWalker.DirFrame(dir, 0)])); // Reach out.
-    }
-
-    /// <summary>
-    /// Exult <c>Perimeter::get</c>: the i-th tile round a rectangle (from its
-    /// top left, clockwise), and the tile of the rectangle next to it.
-    /// </summary>
-    public static void PerimeterTile(int rx, int ry, int rw, int rh, int i, out TileCoord ptile, out TileCoord atile)
-    {
-        int x = rx - 1, y = ry - 1, w = rw + 2, h = rh + 2;
-        var size = 2 * rw + 2 * rh + 4;
-        while (true)
-        {
-            if (i < w - 1)
-            {
-                ptile = new TileCoord(x + i, y, 0);
-                atile = new TileCoord(ptile.Tx + (i == 0 ? 1 : 0), ptile.Ty + 1, 0);
-                return;
-            }
-
-            i -= w - 1;
-            if (i < h - 1)
-            {
-                ptile = new TileCoord(x + w - 1, y + i, 0);
-                atile = new TileCoord(ptile.Tx - 1, ptile.Ty + (i == 0 ? 1 : 0), 0);
-                return;
-            }
-
-            i -= h - 1;
-            if (i < w - 1)
-            {
-                ptile = new TileCoord(x + w - 1 - i, y + h - 1, 0);
-                atile = new TileCoord(ptile.Tx + (i == 0 ? -1 : 0), ptile.Ty - 1, 0);
-                return;
-            }
-
-            i -= w - 1;
-            if (i < h - 1)
-            {
-                ptile = new TileCoord(x, y + h - 1 - i, 0);
-                atile = new TileCoord(ptile.Tx + 1, ptile.Ty + (i == 0 ? -1 : 0), 0);
-                return;
-            }
-
-            i %= size; // Bad index.
-        }
     }
 }

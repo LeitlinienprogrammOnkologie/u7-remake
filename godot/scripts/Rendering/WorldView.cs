@@ -26,6 +26,8 @@ public partial class WorldView : Node2D
 
         // Row 0 the ambient palette, row 1 the lit one (SceneLighting).
         uniform sampler2D palette_tex : filter_nearest;
+        // The glow plane beside the drawn index plane: six bits of glow, a roof mark and a pane mark (IndexBuffer8).
+        uniform sampler2D glow_tex : filter_nearest;
         // Per light: xy centre in world pixels, z radius, w kind.
         uniform vec4 light_a[MAX_LIGHTS];
         // Per light: rgb colour times intensity, a phase.
@@ -132,10 +134,8 @@ public partial class WorldView : Node2D
         void fragment() {
             ivec2 size = textureSize(TEXTURE, 0);
             ivec2 at = min(ivec2(UV * vec2(size)), size - 1);
-            vec2 texel = texelFetch(TEXTURE, at, 0).rg;
-            int index = int(texel.r * 255.0 + 0.5);
-            // The glow plane: six bits of glow, a roof mark and a pane mark (IndexBuffer8).
-            int g = int(texel.g * 255.0 + 0.5);
+            int index = int(texelFetch(TEXTURE, at, 0).r * 255.0 + 0.5);
+            int g = int(texelFetch(glow_tex, at, 0).r * 255.0 + 0.5);
             float glow = float(g >> 2) / 63.0;
             bool roof = (g & 1) != 0;
             bool pane = (g & 2) != 0;
@@ -248,7 +248,8 @@ public partial class WorldView : Node2D
     ShaderMaterial _material = null!;
     Image? _image;
     ImageTexture? _texture;
-    byte[] _upload = [];
+    Image? _glowImage;
+    ImageTexture? _glowTexture;
     /// <summary>The world pixel at the buffer's top left.</summary>
     int _originX;
     int _originY;
@@ -264,8 +265,26 @@ public partial class WorldView : Node2D
         _palette = new WorldPalette(Shapes.DayPalette);
         _material = new ShaderMaterial { Shader = new Shader { Code = ShaderCode } };
         _material.SetShaderParameter("palette_tex", _palette.Texture);
+        // The user's look picks, fixed for the run.
+        _material.SetShaderParameter("glow_boost", GlowTable.Magic.Day);
+        _material.SetShaderParameter("window_spread", WindowLights.Look.Spread);
+        _material.SetShaderParameter("cloud_tint", WeatherLook.CloudTint);
+        _material.SetShaderParameter("cloud_scale", WeatherLook.Clouds.Scale);
+        _material.SetShaderParameter("cloud_soft", WeatherLook.Clouds.Softness);
+        _material.SetShaderParameter("mist_scale", WeatherLook.Fog.Scale);
         Material = _material;
     }
+
+    // Set every frame: cached, as a string would make a new StringName each time.
+    static readonly StringName LightA = "light_a";
+    static readonly StringName LightB = "light_b";
+    static readonly StringName LightCount = "light_count";
+    static readonly StringName CloudOffset = "cloud_offset";
+    static readonly StringName CloudCover = "cloud_cover";
+    static readonly StringName CloudShadow = "cloud_shadow";
+    static readonly StringName Mist = "mist";
+    static readonly StringName MistOffset = "mist_offset";
+    static readonly StringName MistColour = "mist_colour";
 
     public override void _Process(double delta)
     {
@@ -301,9 +320,8 @@ public partial class WorldView : Node2D
         var half = view / zoom / 2f;
         _originX = Mathf.FloorToInt(center.X - half.X);
         _originY = Mathf.FloorToInt(center.Y - half.Y);
+        // No clearing: the terrain below covers every pixel and its glow.
         _buffer.Resize(Mathf.CeilToInt(view.X / zoom.X) + 2, Mathf.CeilToInt(view.Y / zoom.Y) + 2);
-        _buffer.Fill8(0);
-        _buffer.ClearGlow();
 
         // Objects from chunks around the view can reach into it.
         var margin = 160f;
@@ -395,24 +413,16 @@ public partial class WorldView : Node2D
                 _palette.SetRows(Lighting.Ambient, Lighting.Lit);
             }
 
-            _material.SetShaderParameter("light_a", Lighting.LightA);
-            _material.SetShaderParameter("light_b", Lighting.LightB);
-            _material.SetShaderParameter("light_count", Lighting.LightCount);
-            _material.SetShaderParameter("glow_boost", GlowTable.Magic.Day);
-            _material.SetShaderParameter("window_spread", WindowLights.Look.Spread);
-            var clouds = WeatherLook.Clouds;
-            _material.SetShaderParameter("cloud_offset", Lighting.CloudOffset);
-            _material.SetShaderParameter("cloud_cover", Lighting.CloudCover);
-            _material.SetShaderParameter("cloud_shadow", Lighting.CloudShadow);
-            _material.SetShaderParameter("cloud_tint", WeatherLook.CloudTint);
-            _material.SetShaderParameter("cloud_scale", clouds.Scale);
-            _material.SetShaderParameter("cloud_soft", clouds.Softness);
-            var fog = WeatherLook.Fog;
-            _material.SetShaderParameter("mist", Lighting.Mist);
-            _material.SetShaderParameter("mist_offset", Lighting.MistOffset);
+            _material.SetShaderParameter(LightA, Lighting.LightA);
+            _material.SetShaderParameter(LightB, Lighting.LightB);
+            _material.SetShaderParameter(LightCount, Lighting.LightCount);
+            _material.SetShaderParameter(CloudOffset, Lighting.CloudOffset);
+            _material.SetShaderParameter(CloudCover, Lighting.CloudCover);
+            _material.SetShaderParameter(CloudShadow, Lighting.CloudShadow);
+            _material.SetShaderParameter(Mist, Lighting.Mist);
+            _material.SetShaderParameter(MistOffset, Lighting.MistOffset);
             // A little lighter than what the fog has made of the day.
-            _material.SetShaderParameter("mist_colour", (Lighting.AmbientMean * 1.2f).Clamp(Vector3.Zero, Vector3.One));
-            _material.SetShaderParameter("mist_scale", fog.Scale);
+            _material.SetShaderParameter(MistColour, (Lighting.AmbientMean * 1.2f).Clamp(Vector3.Zero, Vector3.One));
         }
 
         if (RotateColors)
@@ -424,34 +434,26 @@ public partial class WorldView : Node2D
         DrawTexture(_texture, new Vector2(_originX, _originY));
     }
 
-    /// <summary>The index and glow planes as one RG8 texture: red the index, green the glow byte with its marks.</summary>
+    /// <summary>The index and glow planes as two R8 textures: the index drawn, the glow byte with its marks as <c>glow_tex</c>.</summary>
     void Upload()
     {
         var w = _buffer.Width;
         var h = _buffer.Height;
-        var n = w * h;
-        if (_upload.Length != n * 2)
+        if (_image is null || _texture is null || _glowImage is null || _glowTexture is null ||
+            _image.GetWidth() != w || _image.GetHeight() != h)
         {
-            _upload = new byte[n * 2];
-        }
-
-        var pixels = _buffer.Pixels;
-        var glow = _buffer.Glow;
-        for (var i = 0; i < n; i++)
-        {
-            _upload[2 * i] = pixels[i];
-            _upload[2 * i + 1] = glow[i];
-        }
-
-        if (_image is null || _texture is null || _image.GetWidth() != w || _image.GetHeight() != h)
-        {
-            _image = Image.CreateFromData(w, h, false, Image.Format.Rg8, _upload);
+            _image = Image.CreateFromData(w, h, false, Image.Format.R8, _buffer.Pixels);
             _texture = ImageTexture.CreateFromImage(_image);
+            _glowImage = Image.CreateFromData(w, h, false, Image.Format.R8, _buffer.Glow);
+            _glowTexture = ImageTexture.CreateFromImage(_glowImage);
+            _material.SetShaderParameter("glow_tex", _glowTexture);
             return;
         }
 
-        _image.SetData(w, h, false, Image.Format.Rg8, _upload);
+        _image.SetData(w, h, false, Image.Format.R8, _buffer.Pixels);
         _texture.Update(_image);
+        _glowImage.SetData(w, h, false, Image.Format.R8, _buffer.Glow);
+        _glowTexture.Update(_glowImage);
     }
 
     /// <summary>

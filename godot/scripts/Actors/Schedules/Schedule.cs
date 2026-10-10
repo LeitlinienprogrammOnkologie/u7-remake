@@ -96,14 +96,58 @@ public abstract class Schedule(NpcBrain brain)
 
     protected static TileCoord Here(U7Object obj) => new(obj.Tx, obj.Ty, obj.Tz);
 
-    /// <summary>Exult <c>Game_object::find_closest</c>: objects of the shapes within <paramref name="dist"/>, closest first.</summary>
+    /// <summary>The lift on top of a thing (a table, an oven): Exult <c>get_lift() + get_info().get_3d_height()</c>.</summary>
+    protected int TopLift(U7Object obj) => obj.Tz + Map.Catalog[obj.Shape].DimZ;
+
+    /// <summary>The object while it is still in the game, else null.</summary>
+    protected static U7Object? Valid(U7Object? obj) => obj is { Removed: false } ? obj : null;
+
+    /// <summary>Exult's mask for <c>find_closest</c>, "finds anything": transparent and invisible things, eggs and barges too.</summary>
+    const int FindAnyMask = 0xb0;
+
+    /// <summary>
+    /// Exult <c>Game_object::find_closest(vec, shapes, dist)</c>: objects of the
+    /// shapes within <paramref name="dist"/>, closest first (for the callers
+    /// that go through them; one wanted is <see cref="Closest(int, int)"/>).
+    /// </summary>
     protected List<U7Object> FindClosest(int[] shapes, int dist)
     {
         var here = Here(Npc);
-        var found = shapes.SelectMany(shape => Map.FindNearby(here, shape, dist)).ToList();
+        var found = shapes.SelectMany(shape => Map.FindNearby(here, shape, dist, FindAnyMask)).ToList();
         found.Sort((a, c) => Here(a).Distance(here).CompareTo(Here(c).Distance(here)));
         return found;
     }
+
+    /// <summary>
+    /// Exult's single <c>Game_object::find_closest(pos, shapes, dist)</c>: of
+    /// the objects of the shapes within <paramref name="dist"/> of
+    /// <paramref name="pos"/>, the first found at the least tile distance (a
+    /// scan, no sort).
+    /// </summary>
+    protected U7Object? ClosestTo(TileCoord pos, ReadOnlySpan<int> shapes, int dist = 24)
+    {
+        U7Object? closest = null;
+        var best = 10000;
+        foreach (var shape in shapes)
+        {
+            foreach (var obj in Map.FindNearby(pos, shape, dist, FindAnyMask))
+            {
+                var d = Here(obj).Distance(pos);
+                if (d < best)
+                {
+                    closest = obj;
+                    best = d;
+                }
+            }
+        }
+
+        return closest;
+    }
+
+    /// <summary>Exult's <c>npc->find_closest(shapes, dist)</c>, from the NPC.</summary>
+    protected U7Object? Closest(ReadOnlySpan<int> shapes, int dist = 24) => ClosestTo(Here(Npc), shapes, dist);
+
+    protected U7Object? Closest(int shape, int dist = 24) => ClosestTo(Here(Npc), [shape], dist);
 
     /// <summary>Exult <c>Actor::get_attack_frames</c> for a weapon or tool (not shooting), facing <paramref name="dir"/>.</summary>
     protected int[] AttackFrames(int weaponShape, int dir) =>
@@ -207,7 +251,7 @@ public abstract class Schedule(NpcBrain brain)
             return carried;
         }
 
-        var found = FindNearest(Map.FindNearby(Here(Npc), shape, dist).Where(o => o.Frame == frame));
+        var found = FindNearest(Map.FindNearby(Here(Npc), shape, dist, frame: frame));
         if (found is not null && !SetPickupItemAction(found, Std))
         {
             found = null;

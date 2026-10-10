@@ -34,7 +34,20 @@ public abstract class WeatherEffect
     public double StartMs { get; }
     public double StopMs { get; }
     /// <summary>When its next event is due (its entry in Exult's time queue).</summary>
-    public double DueMs { get; protected set; }
+    public double DueMs
+    {
+        get => _dueMs;
+        protected set
+        {
+            _dueMs = value;
+            Seq = Effects.NextSeq();
+        }
+    }
+
+    double _dueMs;
+
+    /// <summary>When it went into the queue: equal times go first in, first out.</summary>
+    public long Seq { get; private set; }
 
     public abstract string Name { get; }
 

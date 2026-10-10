@@ -52,7 +52,17 @@ public sealed class NpcTimers
         }
 
         _now += delta * 1000;
-        foreach (var timer in _timers.Values.Where(t => t.Next <= _now).ToList())
+        // The due ones first: handling a timer starts and ends others.
+        _due.Clear();
+        foreach (var timer in _timers.Values)
+        {
+            if (timer.Next <= _now)
+            {
+                _due.Add(timer);
+            }
+        }
+
+        foreach (var timer in _due)
         {
             if (_timers.TryGetValue((timer.Npc, timer.Flag), out var live) && live == timer)
             {
@@ -60,6 +70,9 @@ public sealed class NpcTimers
             }
         }
     }
+
+    /// <summary>Scratch for <see cref="Update"/>, reused every frame.</summary>
+    readonly List<Timer> _due = new();
 
     /// <summary>Exult <c>Actor::read</c>: a saved invisible or mighty actor gets its timer again (the others don't).</summary>
     public void Restore(IEnumerable<U7Object?> actors)

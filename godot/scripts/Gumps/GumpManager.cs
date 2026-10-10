@@ -473,15 +473,9 @@ public sealed class GumpManager
             return;
         }
 
-        if (drag.FromWorld)
+        if (drag.FromWorld || obj.Container is not null)
         {
             Map.TakeFromWorld(obj);
-        }
-        else if (obj.Container is { } container)
-        {
-            container.Contents.Remove(obj);
-            obj.Container = null;
-            obj.ReadySlot = -1;
         }
     }
 

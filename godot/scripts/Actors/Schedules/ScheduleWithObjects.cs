@@ -19,7 +19,7 @@ public abstract class ScheduleWithObjects(NpcBrain brain) : Schedule(brain)
     /// <summary>Exult <c>current_item</c>: the one the NPC is using or walking to.</summary>
     protected U7Object? CurrentItem
     {
-        get => _currentItem is { Removed: false } item ? item : null;
+        get => Valid(_currentItem);
         set => _currentItem = value;
     }
 
@@ -75,18 +75,8 @@ public abstract class ScheduleWithObjects(NpcBrain brain) : Schedule(brain)
     /// </summary>
     protected bool DropItem(U7Object toDrop, U7Object table)
     {
-        var (fx, fy, fw, fh) = ObjectGeometry.Footprint(table);
-        int sx = Npc.Tx, sy = Npc.Ty;
-        if (sy >= fy && sy < fy + fh)
-        {
-            sx = sx <= fx ? fx : fx + fw - 1; // East or west of the table.
-        }
-        else
-        {
-            sy = sy <= fy ? fy : fy + fh - 1; // North or south.
-        }
-
-        var top = table.Tz + Map.Catalog[table.Shape].DimZ;
+        var (sx, sy) = ObjectGeometry.EdgeNearest(table, Npc.Tx, Npc.Ty);
+        var top = TopLift(table);
         if (Map.FindSpot(new TileCoord(sx, sy, top), 1, toDrop.Shape, toDrop.Frame) is not { } pos || pos.Tz != top ||
             !ObjectGeometry.InFootprint(table, pos.Tx, pos.Ty))
         {

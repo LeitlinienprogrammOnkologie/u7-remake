@@ -120,12 +120,44 @@ public sealed class ShapeRecord
 }
 
 /// <summary>
-/// Shape names, TFA flags, and per-frame hotspots from the extracted CSVs
-/// (Exult <c>TFA.DAT</c> / <c>SHPDIMS.DAT</c> / shape headers).
+/// Shape names and TFA flags from the extracted CSVs (Exult <c>TFA.DAT</c> /
+/// <c>SHPDIMS.DAT</c>), per-frame hotspots from SHAPES.VGA itself.
 /// </summary>
 public sealed class ShapeCatalog
 {
     public ShapeRecord[] Shapes { get; }
+
+    /// <summary>SHAPES.VGA, read once: the frames' extents here, the frames themselves for the painter (ShapeCache).</summary>
+    public VgaShapeFile ShapesVga { get; }
+
+    /// <summary>
+    /// Each shape's frame extents from SHAPES.VGA (Exult <c>Shape_frame</c>).
+    /// A raw 8x8 terrain frame is (0, 0, 7, 7) here, the convention paint
+    /// order and hit tests use, where Exult's is (8, 8, -1, -1).
+    /// </summary>
+    void LoadVgaFrames()
+    {
+        for (var s = 0; s < Shapes.Length && s < ShapesVga.ShapeCount; s++)
+        {
+            var count = ShapesVga.FrameCount(s);
+            if (count == 0)
+            {
+                continue;
+            }
+
+            var frames = new FrameInfo[count];
+            for (var f = 0; f < count; f++)
+            {
+                var fi = ShapesVga.Get(s, f);
+                frames[f] = fi.IsTile ? new FrameInfo(8, 8, 0, 0, 7, 7, true) : fi;
+            }
+
+            Shapes[s].Frames = frames;
+            Shapes[s].FrameCount = count;
+            Shapes[s].TileShape = frames[0].IsTile;
+        }
+    }
+
 
     public ShapeCatalog()
     {
@@ -138,7 +170,8 @@ public sealed class ShapeCatalog
         LoadNames();
         LoadTypeFlags();
         LoadMountainTops();
-        LoadFrames();
+        ShapesVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "SHAPES.VGA"));
+        LoadVgaFrames();
         ApplyContainerGumps();
         LoadReadyDat();
         LoadPaperdollInfo();
@@ -253,63 +286,6 @@ public sealed class ShapeCatalog
         foreach (var shape in new[] { 180, 182, 183, 324, 969, 983 })
         {
             Shapes[shape].MountainTop = 1;
-        }
-    }
-
-    void LoadFrames()
-    {
-        var path = Path.Combine(U7Paths.DataDir, "shape_frames.csv");
-        if (!File.Exists(path))
-        {
-            return;
-        }
-
-        var buckets = new List<FrameInfo>[U7Constants.MaxShapes];
-        using var reader = new StreamReader(path);
-        var header = reader.ReadLine();
-        if (header is null)
-        {
-            return;
-        }
-
-        var cols = SplitCsv(header);
-        var iShape = IndexOf(cols, "shape");
-        var iTile = IndexOf(cols, "is_tile");
-        var iW = IndexOf(cols, "width");
-        var iH = IndexOf(cols, "height");
-        var iOx = IndexOf(cols, "origin_x");
-        var iOy = IndexOf(cols, "origin_y");
-        var iHx = IndexOf(cols, "hotspot_x_from_left");
-        var iHy = IndexOf(cols, "hotspot_y_from_top");
-
-        while (reader.ReadLine() is { } line)
-        {
-            var c = SplitCsv(line);
-            if (c.Length <= iShape || !int.TryParse(c[iShape], out var shape) ||
-                (uint)shape >= (uint)Shapes.Length)
-            {
-                continue;
-            }
-
-            var isTile = Get(c, iTile).Equals("True", StringComparison.OrdinalIgnoreCase);
-            var w = ParseInt(Get(c, iW), 8);
-            var h = ParseInt(Get(c, iH), 8);
-            var xleft = ParseInt(Get(c, iHx), isTile ? 0 : Math.Max(0, w - 1));
-            var yabove = ParseInt(Get(c, iHy), isTile ? 0 : Math.Max(0, h - 1));
-            var xright = ParseInt(Get(c, iOx), Math.Max(0, w - xleft - 1));
-            var ybelow = ParseInt(Get(c, iOy), Math.Max(0, h - yabove - 1));
-            buckets[shape] ??= new List<FrameInfo>();
-            buckets[shape].Add(new FrameInfo(w, h, xleft, yabove, xright, ybelow, isTile));
-        }
-
-        for (var i = 0; i < Shapes.Length; i++)
-        {
-            if (buckets[i] is { Count: > 0 } list)
-            {
-                Shapes[i].Frames = list.ToArray();
-                Shapes[i].FrameCount = list.Count;
-                Shapes[i].TileShape = list[0].IsTile;
-            }
         }
     }
 
