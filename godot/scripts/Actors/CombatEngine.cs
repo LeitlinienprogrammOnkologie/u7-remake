@@ -63,6 +63,18 @@ public sealed class CombatEngine
     public Action? AvatarFlashRed { get; set; }
     /// <summary>Exult <c>Weapon_data::lightning_damage</c>.</summary>
     const int LightningDamage = 3;
+    /// <summary>Exult <c>Weapon_data::normal_damage</c>: only it makes wounds bleed.</summary>
+    const int NormalDamage = 0;
+    /// <summary>Exult <c>Weapon_data::fire_damage</c> and <c>ethereal_damage</c>.</summary>
+    const int FireDamage = 1, EtherealDamage = 4;
+    /// <summary>Exult <c>Weapon_data::Powers</c>: sleep, charm, curse, poison, paralyze, magebane; no_damage, the weapon does no harm (its powers and usecode do the rest).</summary>
+    const int SleepPower = 1, CharmPower = 2, CursePower = 4, PoisonPower = 8, ParalyzePower = 16, MagebanePower = 32, NoDamagePower = 128;
+    /// <summary>Exult <c>items.h</c>: TEXT.FLX's cries of one whose spells magebane took.</summary>
+    const int FirstMagebaneStruck = 0x9b, LastMagebaneStruck = 0x9d;
+    /// <summary>Exult <c>DestroyObjectsUsecode</c>: Black Gate's own function for a broken object (glass counters shatter, mirrors crack, the rest go).</summary>
+    const int DestroyObjectsUsecode = 0x626;
+    /// <summary>Exult <c>items.h</c>: TEXT.FLX's cries of an actor brought below half its strength.</summary>
+    const int FirstOuch = 0x29, LastOuch = 0x2c;
     public U7Object Avatar => _avatar;
     /// <summary>Exult <c>Actor::set_flag</c> with its timers (knocking out, sleep, poison).</summary>
     public NpcTimers? Timers { get; set; }
@@ -282,30 +294,44 @@ public sealed class CombatEngine
             return null;
         }
 
-        var align = caster is { IsActor: true } c && Party?.IsInParty(c) != true && c != _avatar ? c.Alignment : Alignment.Good;
+        var align = caster is { IsActor: true } c && Party?.IsInParty(c) != true && c != _avatar ? c.EffectiveAlignment : Alignment.Good;
         return Place(CreateMonster(shape, 0, ScheduleType.Combat, align, equip: true), dest);
     }
 
     /// <summary>
-    /// Exult <c>UI_clone(npc)</c> (<c>Actor::clone</c>): a monster of the NPC's
-    /// shape beside it (within its larger footprint side), equipped, then good
-    /// and fighting. Null if there is no room (where Exult would crash).
+    /// Exult <c>UI_clone(npc)</c>: <see cref="CloneActor"/>, then good and
+    /// fighting. Null if there is no room (where Exult would crash).
     /// </summary>
     public U7Object? Clone(U7Object npc)
+    {
+        if (CloneActor(npc) is not { } clone)
+        {
+            return null;
+        }
+
+        clone.Alignment = Alignment.Good;
+        SetSchedule(clone, ScheduleType.Combat);
+        return clone;
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::clone</c>: a monster of the actor's shape beside it
+    /// (within its larger footprint side), equipped, on its schedule and its
+    /// side. Null if there is no room.
+    /// </summary>
+    U7Object? CloneActor(U7Object npc)
     {
         var info = _catalog[npc.Shape];
         var reflected = (npc.Frame & 32) != 0;
         var xs = reflected ? info.DimY : info.DimX;
         var ys = reflected ? info.DimX : info.DimY;
-        if (_map.FindSpot(new TileCoord(npc.Tx, npc.Ty, npc.Tz), Math.Max(xs, ys), npc.Shape, 0, 1) is not { } pos)
+        if (_map.FindSpot(new TileCoord(npc.Tx, npc.Ty, npc.Tz), Math.Max(xs, ys), npc.Shape, 0, 1,
+                moverFlags: npc.TypeFlags & MoveFlags.All) is not { } pos)
         {
             return null;
         }
 
-        var clone = Place(CreateMonster(npc.Shape, 0, npc.ScheduleType, npc.Alignment, equip: true), pos);
-        clone.Alignment = Alignment.Good;
-        SetSchedule(clone, ScheduleType.Combat);
-        return clone;
+        return Place(CreateMonster(npc.Shape, 0, npc.ScheduleType, npc.EffectiveAlignment, equip: true), pos);
     }
 
     /// <summary>
@@ -429,7 +455,7 @@ public sealed class CombatEngine
     }
 
     /// <summary>Debug F3: heal avatar, spawn three chaotic rats, enter combat.</summary>
-    public void SpawnArena()
+    public void SpawnArena(int shape = 523)
     {
         ClearArena();
         _avatar.ClearFlag(ObjFlag.Dead);
@@ -443,7 +469,7 @@ public sealed class CombatEngine
         foreach (var (dx, dy) in spots)
         {
             var rat = SpawnMonster(
-                523, 0,
+                shape, 0,
                 _avatar.Tx + dx, _avatar.Ty + dy, _avatar.Tz,
                 ScheduleType.Combat, Alignment.Chaotic);
             if (rat is null)
@@ -455,7 +481,7 @@ public sealed class CombatEngine
             n++;
         }
 
-        LastMessage = $"arena: {n} rats  hp {maxHp}";
+        LastMessage = $"arena: {n} of shape {shape}  hp {maxHp}";
         GD.Print(LastMessage);
     }
 
@@ -909,8 +935,13 @@ public sealed class CombatEngine
         return roll + attacker - defender >= sides / 2 - 1;
     }
 
-    public int ApplyDamage(U7Object? attacker, U7Object victim, int str, int wpoints, int type)
+    public int ApplyDamage(U7Object? attacker, U7Object victim, int str, int wpoints, int type) =>
+        ApplyDamage(attacker, victim, str, wpoints, type, out _);
+
+    /// <summary><see cref="ApplyDamage(U7Object?, U7Object, int, int, int)"/>, with the experience a kill is worth (<see cref="ReduceHealth(U7Object, int, U7Object?, int, out int)"/>).</summary>
+    int ApplyDamage(U7Object? attacker, U7Object victim, int str, int wpoints, int type, out int exp)
     {
+        exp = 0;
         if (!victim.IsActor || victim.IsDead)
         {
             return 0;
@@ -965,15 +996,35 @@ public sealed class CombatEngine
             return 0;
         }
 
-        return ReduceHealth(victim, damage, attacker, type);
+        return ReduceHealth(victim, damage, attacker, type, out exp);
     }
 
-    public int ReduceHealth(U7Object victim, int delta, U7Object? attacker, int type = 0)
+    /// <summary>Exult <c>Actor::reduce_health</c> as usecode and traps call it: no experience for the kill.</summary>
+    public int ReduceHealth(U7Object victim, int delta, U7Object? attacker, int type = 0) =>
+        ReduceHealth(victim, delta, attacker, type, out _);
+
+    /// <summary>
+    /// Exult <c>Actor::reduce_health</c>: an immune actor or one that can't
+    /// die takes nothing but fights back; double for a damage type it is
+    /// vulnerable to; a slime may split; a defeat (dying, or knocked out from
+    /// awake health) of one awake is worth <see cref="KillExperience"/>.
+    /// </summary>
+    int ReduceHealth(U7Object victim, int delta, U7Object? attacker, int type, out int exp)
     {
+        exp = 0;
         var inf = _monsters[victim.Shape];
-        if (!victim.IsActor || victim.IsDead || inf.CantDie ||
-            (inf.Immune & (1 << type)) != 0)
+        if (!victim.IsActor || victim.IsDead)
         {
+            return 0;
+        }
+
+        if (inf.CantDie || (inf.Immune & (1 << type)) != 0)
+        {
+            if (attacker is not null)
+            {
+                FightBack(victim, attacker); // Exult: "Attack back."
+            }
+
             return 0;
         }
 
@@ -999,7 +1050,18 @@ public sealed class CombatEngine
             delta = oldhp + 50;
         }
 
+        // Exult: slimes split, not when hit by what they are vulnerable to.
+        if (inf.Splits && hp > 0 && (inf.Vulnerable & (1 << type)) == 0 && _rng.Next(2) == 0)
+        {
+            CloneActor(victim);
+        }
+
         victim.SetProp(ActorProp.Health, hp);
+        if ((hp < -(maxhp / 3) || (hp <= 0 && oldhp > 0)) && !victim.GetFlag(ObjFlag.Asleep))
+        {
+            exp = KillExperience(victim); // Verified by Exult: none for killing sleepers.
+        }
+
         // Exult Actor::reduce_health (exact thresholds): a badly hurt avatar,
         // or one hit by lightning, flashes the screen red; anyone else shows
         // the red outline.
@@ -1011,6 +1073,21 @@ public sealed class CombatEngine
         {
             FlashHit(victim);
         }
+
+        // Exult: "A little oomph." One time in two, falling below half its strength, an actor that can speak cries out.
+        if (oldhp >= maxhp / 2 && hp < maxhp / 2 && _rng.Next(2) != 0 && !inf.CantYell)
+        {
+            Schedules?.Say?.Invoke(victim, TextMessages.Random(FirstOuch, LastOuch));
+        }
+
+        // Exult: normal damage may make the wound bleed, delta in ten ("10 or more hits *always* cause
+        // bleeding"), unless the creature can't bleed or two pools of blood are about already.
+        if (type == NormalDamage && !inf.CantBleed && _rng.Next(10) < delta &&
+            _map.FindNearby(new TileCoord(victim.Tx, victim.Ty, victim.Tz), NpcTimers.BloodShape, 1).Count < 2)
+        {
+            Timers?.StartBleeding(victim);
+        }
+
         // Exult: dead below a third of the strength under zero; at zero or below knocked out (asleep),
         // and the sleep timer mends it.
         if (hp < -(maxhp / 3))
@@ -1058,7 +1135,7 @@ public sealed class CombatEngine
     /// </summary>
     void FightBack(U7Object victim, U7Object attacker)
     {
-        if (!attacker.IsActor || victim.Alignment == attacker.Alignment)
+        if (!attacker.IsActor || victim.EffectiveAlignment == attacker.EffectiveAlignment)
         {
             return; // Friendly fire doesn't cause a fight.
         }
@@ -1139,7 +1216,7 @@ public sealed class CombatEngine
     static bool IsHostileIn(NpcBrain b, int x0, int y0, int w, int h)
     {
         var npc = b.Npc;
-        return !npc.IsDead && !npc.Removed && npc.Alignment >= Alignment.Evil &&
+        return !npc.IsDead && !npc.Removed && npc.EffectiveAlignment >= Alignment.Evil &&
                b.Schedule is CombatSchedule { StartedBattle: true } or ArrestAvatarSchedule &&
                U7Constants.TileDelta(x0, npc.Tx) is var dx && dx >= 0 && dx < w &&
                U7Constants.TileDelta(y0, npc.Ty) is var dy && dy >= 0 && dy < h;
@@ -1196,7 +1273,7 @@ public sealed class CombatEngine
 
         foreach (var npc in Schedules?.NearbyNpcs() ?? [])
         {
-            if (!npc.IsDead && npc.AttackMode != AttackMode.Flee && npc.Alignment >= Alignment.Evil)
+            if (!npc.IsDead && npc.AttackMode != AttackMode.Flee && npc.EffectiveAlignment >= Alignment.Evil)
             {
                 return; // Still possible enemies.
             }
@@ -1257,7 +1334,7 @@ public sealed class CombatEngine
     }
 
     bool TryToHit(U7Object target, int attval) =>
-        !target.IsActor || RollToWin(attval, target.GetProp(ActorProp.Combat) + (target.GetFlag(ObjFlag.Protection) ? 3 : 0));
+        !target.IsActor || RollToWin(attval, target.EffectiveProp(ActorProp.Combat) + (target.GetFlag(ObjFlag.Protection) ? 3 : 0));
 
     /// <summary>
     /// Exult <c>Combat_schedule::attack_target</c>: the blow itself (the
@@ -1267,9 +1344,19 @@ public sealed class CombatEngine
     /// flies; in melee a roll to hit, damage, and the target may back off.
     /// False if it could not attack or missed.
     /// </summary>
-    public bool AttackTarget(U7Object attacker, U7Object target, int weaponShape, bool combat)
+    public bool AttackTarget(U7Object attacker, U7Object target, int weaponShape, bool combat) =>
+        AttackTarget(attacker, target, null, weaponShape, combat);
+
+    /// <summary>
+    /// <see cref="AttackTarget(U7Object, U7Object, int, bool)"/> at an
+    /// object or, with none, at a tile (usecode's <c>set_to_attack</c> on a
+    /// <c>click_on_item</c> that hit the ground): at range a missile flies to
+    /// the tile at its own height, stopping at what it runs into; in melee a
+    /// tile takes nothing (the ammunition is spent all the same).
+    /// </summary>
+    public bool AttackTarget(U7Object attacker, U7Object? target, TileCoord? tile, int weaponShape, bool combat)
     {
-        if (attacker.IsActor && attacker.IsDead)
+        if ((target is null && tile is null) || (attacker.IsActor && attacker.IsDead))
         {
             return false;
         }
@@ -1291,7 +1378,7 @@ public sealed class CombatEngine
             family = wpn.Ammo;
         }
 
-        var dist = ObjectGeometry.Distance(attacker, target);
+        var dist = target is not null ? ObjectGeometry.Distance(attacker, target) : ObjectGeometry.Distance(attacker, tile!.Value);
         var ranged = wpn is null ? dist > reach : wpn.Uses == WeaponRecord.UsesRanged || dist > reach;
         if (EffectiveRange(attacker, wpn, reach) < dist)
         {
@@ -1353,7 +1440,7 @@ public sealed class CombatEngine
             ConsumeAmmo(attacker, wpn, ammoObj, needAmmo, returns, combat);
         }
 
-        var attval = attacker.IsActor ? attacker.GetProp(ActorProp.Combat) : 0;
+        var attval = attacker.IsActor ? attacker.EffectiveProp(ActorProp.Combat) : 0;
         if (wpn is { Lucky: true })
         {
             attval += 3;
@@ -1376,8 +1463,13 @@ public sealed class CombatEngine
                 attval -= dist / 2;
             }
 
-            LaunchProjectile(attacker, target, wpn, weaponShape, ammoShape, proj, attval, returns);
+            LaunchProjectile(attacker, target, tile, wpn, weaponShape, ammoShape, proj, attval, returns);
             return true;
+        }
+
+        if (target is null)
+        {
+            return false; // Exult: nothing when attacking tiles in melee.
         }
 
         var autohit = wpn is { Autohit: true } || ainf is { Autohit: true };
@@ -1419,12 +1511,12 @@ public sealed class CombatEngine
     /// <summary>Exult <c>Usecode_machine::do_speech</c>.</summary>
     public Action<int>? DoSpeech { get; set; }
 
-    /// <summary>Runs a weapon's usecode on what it hit (function, target), with the weapon event.</summary>
-    public Action<int, U7Object>? WeaponUsecode { get; set; }
+    /// <summary>Runs a weapon's usecode on what it hit (function, target; none for a missile that reached nothing), with the weapon event.</summary>
+    public Action<int, U7Object?>? WeaponUsecode { get; set; }
 
-    /// <summary>Exult <c>Actor::usecode_attack</c>: the attack usecode's <c>set_to_attack</c> set up (at an object; attacks on tiles are not ported).</summary>
+    /// <summary>Exult <c>Actor::usecode_attack</c>: the attack usecode's <c>set_to_attack</c> set up, at an object or a tile.</summary>
     public bool UsecodeAttack(U7Object actor) =>
-        actor.AttackTargetObj is { } target && AttackTarget(actor, target, actor.AttackWeapon, combat: false);
+        AttackTarget(actor, actor.AttackTargetObj, actor.AttackTargetObj is null ? actor.AttackTargetTile : null, actor.AttackWeapon, combat: false);
 
     static TileCoord Centre(U7Object obj) => new(obj.Tx, obj.Ty, obj.Tz + obj.DimZ / 2);
 
@@ -1490,8 +1582,14 @@ public sealed class CombatEngine
 
         if (!defender.IsActor)
         {
-            // Exult Game_object::figure_hit_points (breakable objects are not ported), then the weapon's usecode.
+            // Exult Game_object::attacked and figure_hit_points: the damage (objects take no weapon powers), then the weapon's usecode.
             ObjectAttacked(defender, ammoShape);
+            if (wpn is not null && (wpn.Powers & NoDamagePower) == 0)
+            {
+                var objType = ainf is { DamageType: not NormalDamage } ? ainf.DamageType : wpn.DamageType;
+                ApplyObjectDamage(attacker, defender, wpoints + (ainf?.Damage ?? 0), objType);
+            }
+
             if (wpn is { Usecode: > 0 })
             {
                 WeaponUsecode?.Invoke(wpn.Usecode, defender);
@@ -1512,6 +1610,7 @@ public sealed class CombatEngine
         }
 
         var type = wpn?.DamageType ?? 0;
+        var powers = wpn?.Powers ?? 0;
         if (ainf is not null)
         {
             wpoints += ainf.Damage;
@@ -1519,13 +1618,36 @@ public sealed class CombatEngine
             {
                 type = ainf.DamageType;
             }
+
+            powers |= ainf.Powers;
         }
 
-        var hits = ApplyDamage(attacker, defender, attacker?.GetProp(ActorProp.Strength) ?? 0, wpoints, type);
-        if (hits > 0 && !defender.IsDead)
+        // Exult Actor::figure_hit_points: the damage may kill, before the powers; no damage, no powers,
+        // except where the weapon does none (the spells that only charm, curse, paralyse...).
+        var noDamage = (powers & NoDamagePower) != 0;
+        var hits = 0;
+        var exp = 0;
+        if (wpoints != 0 && !noDamage)
         {
-            defender.Bark($"{hits}");
-            LastMessage = $"{NameOf(attacker)} hits {NameOf(defender)} for {hits}";
+            var str = attacker is { IsActor: true } ? attacker.EffectiveProp(ActorProp.Strength) : 0;
+            hits = ApplyDamage(attacker, defender, str, wpoints, type, out exp);
+            if (hits > 0 && !defender.IsDead)
+            {
+                defender.Bark($"{hits}");
+                LastMessage = $"{NameOf(attacker)} hits {NameOf(defender)} for {hits}";
+            }
+        }
+
+        var powersOnly = wpoints == 0 || noDamage;
+        if (powers != 0 && (hits > 0 || powersOnly) && !defender.IsDead)
+        {
+            ApplyPowers(attacker, defender, powers, powersOnly);
+        }
+
+        if (exp > 0 && attacker is { IsActor: true })
+        {
+            ActorProp.Set(attacker, ActorProp.Exp, attacker.GetProp(ActorProp.Exp) + exp);
+            GD.Print($"{NameOf(attacker)} gains {exp} experience");
         }
 
         // Exult Actor::figure_hit_points: the weapon's usecode comes last of all.
@@ -1543,9 +1665,219 @@ public sealed class CombatEngine
     }
 
     /// <summary>
-    /// Exult <c>Game_object::attacked</c> for things: arrows in the archery
-    /// target (735) stick in it, frame by frame. (Breakable objects are not
-    /// ported.)
+    /// Exult <c>Actor::figure_hit_points</c>' weapon powers, none on the
+    /// protected. Each is a roll of the attacker's effective intelligence (16
+    /// if the weapon also hurt, or there's no attacker) against the
+    /// defender's strength for poison and paralysis, else its intelligence:
+    /// poisoned, cursed, charmed (to the attacker's side, chaotic with no
+    /// attacker), asleep, paralysed. Magebane takes all its mana and every
+    /// spell it carries; if there were any it can't cast any more, cries out
+    /// and looks for a weapon.
+    /// </summary>
+    void ApplyPowers(U7Object? attacker, U7Object defender, int powers, bool powersOnly)
+    {
+        if (defender.GetFlag(ObjFlag.Protection) || Timers is not { } timers)
+        {
+            return;
+        }
+
+        var attint = powersOnly && attacker is { IsActor: true } ? attacker.EffectiveProp(ActorProp.Intelligence) : 16;
+        var defstr = defender.EffectiveProp(ActorProp.Strength);
+        var defint = defender.EffectiveProp(ActorProp.Intelligence);
+        if ((powers & PoisonPower) != 0 && RollToWin(attint, defstr))
+        {
+            timers.SetFlag(defender, ObjFlag.Poisoned);
+        }
+
+        if ((powers & CursePower) != 0 && RollToWin(attint, defint))
+        {
+            timers.SetFlag(defender, ObjFlag.Cursed);
+        }
+
+        if ((powers & CharmPower) != 0 && RollToWin(attint, defint))
+        {
+            timers.SetFlag(defender, ObjFlag.Charmed);
+            defender.CharmAlignment = attacker is { IsActor: true } ? attacker.EffectiveAlignment : Alignment.Chaotic;
+        }
+
+        if ((powers & SleepPower) != 0 && RollToWin(attint, defint))
+        {
+            timers.SetFlag(defender, ObjFlag.Asleep);
+        }
+
+        if ((powers & ParalyzePower) != 0 && RollToWin(attint, defstr))
+        {
+            timers.SetFlag(defender, ObjFlag.Paralyzed);
+        }
+
+        if ((powers & MagebanePower) == 0)
+        {
+            return;
+        }
+
+        defender.SetProp(ActorProp.Mana, 0);
+        var spells = new List<U7Object>();
+        void Gather(U7Object holder)
+        {
+            foreach (var obj in holder.Contents)
+            {
+                if (_catalog[obj.Shape].IsSpell)
+                {
+                    spells.Add(obj);
+                }
+
+                Gather(obj);
+            }
+        }
+
+        Gather(defender);
+        foreach (var spell in spells)
+        {
+            _map.RemoveObject(spell);
+        }
+
+        if (spells.Count == 0)
+        {
+            return;
+        }
+
+        defender.SetFlag(ObjFlag.NoSpellCasting);
+        if (CanSpeak(defender))
+        {
+            defender.BarkUntilMsec = 0;
+            Schedules?.Say?.Invoke(defender, TextMessages.Random(FirstMagebaneStruck, LastMagebaneStruck));
+        }
+
+        if (Equipment.GetReadied(defender, ReadySpot.Lhand) is null && Schedules?.BrainOf(defender)?.Schedule is CombatSchedule schedule)
+        {
+            schedule.WeaponChanged();
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>reduce_health</c>'s experience for a defeat ("an exact match
+    /// to what the originals give"): strength, combat, a third of dexterity
+    /// and a fifth of intelligence, the monster's own worth, and for each
+    /// thing it holds its armour and weapon worth by the weapon's use; one per
+    /// immunity, less one per vulnerability; halved.
+    /// </summary>
+    int KillExperience(U7Object victim)
+    {
+        var combat = victim.GetProp(ActorProp.Combat);
+        var exp = victim.GetProp(ActorProp.Strength) + combat + (victim.GetProp(ActorProp.Dexterity) + 1) / 3 +
+                  victim.GetProp(ActorProp.Intelligence) / 5;
+        var immune = 0;
+        var vuln = 0;
+        if (_monsters.Contains(victim.Shape))
+        {
+            var minf = _monsters[victim.Shape];
+            immune = minf.Immune;
+            vuln = minf.Vulnerable;
+            exp += minf.BaseXpValue;
+        }
+
+        foreach (var obj in victim.Contents)
+        {
+            if (obj.Removed)
+            {
+                continue;
+            }
+
+            if (_armor[obj.Shape] is { } armour)
+            {
+                exp += armour.Protection;
+                immune |= armour.Immunity;
+            }
+
+            if (_weapons[obj.Shape] is not { } winf)
+            {
+                continue;
+            }
+
+            exp += winf.BaseXpValue;
+            exp += winf.Uses switch
+            {
+                WeaponRecord.UsesMelee => winf.Range > 5 ? 2 : winf.Range > 3 ? 1 : 0,
+                WeaponRecord.UsesPoorThrown => combat / 5,
+                WeaponRecord.UsesGoodThrown => combat / 3,
+                _ => winf.Range / 2
+            };
+        }
+
+        vuln &= ~immune;
+        exp += System.Numerics.BitOperations.PopCount((uint)immune) - System.Numerics.BitOperations.PopCount((uint)vuln);
+        return exp / 2;
+    }
+
+    /// <summary>
+    /// Exult <c>Game_object::apply_damage</c>: a third of the attacker's
+    /// strength (not for lightning) and the weapon's points, each rolled,
+    /// 127 points killing outright; then <see cref="ReduceObjectHealth"/>.
+    /// </summary>
+    int ApplyObjectDamage(U7Object? attacker, U7Object obj, int wpoints, int type)
+    {
+        var damage = 0;
+        if (wpoints == 127)
+        {
+            damage = 127;
+        }
+        else
+        {
+            var str = attacker is { IsActor: true } ? attacker.EffectiveProp(ActorProp.Strength) / 3 : 0;
+            if (type != LightningDamage && str > 0)
+            {
+                damage = 1 + _rng.Next(str);
+            }
+
+            if (wpoints > 0)
+            {
+                damage += 1 + _rng.Next(wpoints);
+            }
+        }
+
+        return damage <= 0 ? 0 : ReduceObjectHealth(obj, damage, type, attacker);
+    }
+
+    /// <summary>
+    /// Exult <c>Game_object::reduce_health</c>: nothing for an indestructible
+    /// object or lightning and ethereal damage; a powder keg hit by fire or
+    /// for all it has blows up (marked indestructible first, so the chain
+    /// can't set it off twice); else the hit points go down, and at none
+    /// Black Gate's <see cref="DestroyObjectsUsecode"/> breaks it.
+    /// </summary>
+    int ReduceObjectHealth(U7Object obj, int delta, int type, U7Object? attacker)
+    {
+        var hp = ObjectHitPoints.Get(obj, _catalog);
+        if (hp == 0 || type is LightningDamage or EtherealDamage)
+        {
+            return 0;
+        }
+
+        if (IsVolatile(obj.Shape) && (type == FireDamage || delta >= hp))
+        {
+            obj.Quality = 1;
+            Explode(Centre(obj), obj, obj.Shape, -1, attacker);
+            return delta;
+        }
+
+        if (delta < hp)
+        {
+            ObjectHitPoints.Set(obj, hp - delta, _catalog);
+        }
+        else
+        {
+            LastMessage = $"{NameOf(obj)} destroyed";
+            GD.Print(LastMessage);
+            obj.BarkUntilMsec = 0; // Exult remove_text_effect.
+            WeaponUsecode?.Invoke(DestroyObjectsUsecode, obj);
+        }
+
+        return delta;
+    }
+
+    /// <summary>
+    /// Exult <c>Game_object::attacked</c> for things, before the damage:
+    /// arrows in the archery target (735) stick in it, frame by frame.
     /// </summary>
     static void ObjectAttacked(U7Object obj, int ammoShape)
     {
@@ -1565,7 +1897,7 @@ public sealed class CombatEngine
             return reach;
         }
 
-        var eff = Math.Min(actor.GetProp(ActorProp.Strength), actor.GetProp(ActorProp.Combat));
+        var eff = Math.Min(actor.EffectiveProp(ActorProp.Strength), actor.EffectiveProp(ActorProp.Combat));
         if (uses == WeaponRecord.UsesGoodThrown)
         {
             eff *= 2;
@@ -1759,12 +2091,15 @@ public sealed class CombatEngine
     // ------------------------------------------------------------------ projectiles
 
     /// <summary>Exult <c>Projectile_effect::init</c>: path from the attacker's missile tile to the target's centre tile.</summary>
-    void LaunchProjectile(U7Object attacker, U7Object target, WeaponRecord? wpn, int weaponShape, int ammoShape, int spriteShape, int attval, bool returns)
+    void LaunchProjectile(U7Object attacker, U7Object? target, TileCoord? tile, WeaponRecord? wpn, int weaponShape, int ammoShape,
+        int spriteShape, int attval, bool returns)
     {
-        var pr = NewMissile(attacker, target, MissileTile(attacker), ObjectGeometry.CenterTile(target), wpn, weaponShape, ammoShape,
-            spriteShape, attval);
+        // Exult Projectile_effect::init: at an object's centre, else at the tile at the missile's own height.
+        var start = MissileTile(attacker);
+        var dest = target is not null ? ObjectGeometry.CenterTile(target) : tile!.Value with { Tz = start.Tz };
+        var pr = NewMissile(attacker, target, start, dest, wpn, weaponShape, ammoShape, spriteShape, attval);
         pr.Returns = returns;
-        LastMessage = $"{NameOf(attacker)} fires at {NameOf(target)}";
+        LastMessage = $"{NameOf(attacker)} fires at {(target is not null ? NameOf(target) : $"{dest.Tx},{dest.Ty}")}";
         GD.Print($"{LastMessage} (weapon {weaponShape}, ammo {ammoShape}, sprite {spriteShape}, {pr.Path.Count} tiles)");
     }
 
@@ -1986,6 +2321,11 @@ public sealed class CombatEngine
                 LastMessage = $"{NameOf(attacker)} misses {NameOf(target)}";
             }
         }
+        else if (pr.Weapon is { Usecode: > 0 } spell)
+        {
+            // Exult's own hack (for SI's Mind Blast): a missile that reached no target runs its weapon's usecode on nothing.
+            WeaponUsecode?.Invoke(spell.Usecode, null);
+        }
 
         if (pr.Returns && attacker is { Removed: false } && new TileCoord(attacker.Tx, attacker.Ty, attacker.Tz).Distance(pr.Pos) < 50)
         {
@@ -2027,7 +2367,7 @@ public sealed class CombatEngine
             drop = false;
         }
 
-        if (drop && pr.SpriteShape >= 0 && _map.FindSpot(pr.Pos.Tx, pr.Pos.Ty, pr.Pos.Tz, 3) is { } spot)
+        if (drop && pr.SpriteShape >= 0 && _map.FindSpot(pr.Pos, 3, pr.SpriteShape, 0, maxDrop: 1) is { } spot)
         {
             var item = _map.CreateIregObject(pr.SpriteShape, 0);
             if (attacker is null || attacker.GetFlag(ObjFlag.Temporary))
@@ -2127,7 +2467,7 @@ public sealed class CombatEngine
             var best = 100000;
             foreach (var npc in _map.FindNearby(h.Pos, U7Constants.AnyShape, 30, 8))
             {
-                if (IsPartyOrAvatar(npc) || npc.IsDead || npc.Alignment < Alignment.Evil)
+                if (IsPartyOrAvatar(npc) || npc.IsDead || npc.EffectiveAlignment < Alignment.Evil)
                 {
                     continue;
                 }
@@ -2462,7 +2802,12 @@ public sealed class CombatEngine
         }
 
         var inParty = Party?.IsInParty(victim) == true;
-        Party?.RemoveFromParty(victim);
+        Party?.UpdatePartyStatus(victim); // Exult: a member goes to the dead list.
+        if ((victim.Frame & 0xf) != ActorWalker.SleepFrame)
+        {
+            Timers?.FallDown(victim); // Exult lay_down(true): a flyer falls to die.
+        }
+
         LeaveBody(victim);
         _map.RemoveObject(victim);
         MonsterDied();
@@ -2504,7 +2849,7 @@ public sealed class CombatEngine
                 continue;
             }
 
-            var spot = _map.FindSpot(victim.Tx, victim.Ty, victim.Tz, 5);
+            var spot = _map.FindSpot(new TileCoord(victim.Tx, victim.Ty, victim.Tz), 5, item.Shape, item.Frame, maxDrop: 1);
             if (spot is { } s)
             {
                 item.SetFlagWithContents(ObjFlag.OkayToTake);

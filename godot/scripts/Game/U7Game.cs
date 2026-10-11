@@ -20,6 +20,7 @@ public partial class U7Game : Node2D
 {
     WorldView _world = null!;
     GumpView _gumpView = null!;
+    MapView _mapView = null!;
     GumpManager _gumps = null!;
     Camera2D _camera = null!;
     Label _hud = null!;
@@ -47,11 +48,12 @@ public partial class U7Game : Node2D
     SceneLighting _lighting = null!;
     ScreenFx _screenFx = null!;
     MouseCursor _cursor = null!;
-    /// <summary>Exult <c>run_endgame</c>: once it runs, the game is over.</summary>
-    Endgame? _endgame;
+    /// <summary>A show on the endgame's screen: the endgame (once it runs, the game is over), or the menu's shows.</summary>
+    Show? _endgame;
     /// <summary>Exult <c>BG_Game::new_game</c>'s screen while it is shown: the game waits for the avatar's name.</summary>
     NewGameView? _newGame;
     MusicPlayer _music = null!;
+    SpeechPlayer _speech = null!;
     PartyManager _party = null!;
     CombatEngine _combat = null!;
     NpcTimers _timers = null!;
@@ -108,33 +110,53 @@ public partial class U7Game : Node2D
             _party = new PartyManager(_map, avatar, _npcs) { Schedules = _schedules };
             _party.LinkParty(usecodeDat?.Party);
             _schedules.Party = _party;
-            _schedules.AvatarMoving = () => _avatar.IsPlayerMoving;
+            _schedules.AvatarWalk = () => _avatar.Walk;
             _combat = new CombatEngine(_map, avatar, _catalog);
             _music = new MusicPlayer();
+            _speech = new SpeechPlayer { Name = "Speech" };
+            AddChild(_speech);
             _eggs = new EggHatcher(_map, _clock) { Combat = _combat, Music = _music, Party = _party };
             _avatar.WalkStarted = () =>
             {
                 _cameraTile = null;
-                _party.CallFollowers();
+                _party.CallFollowers(follow: false);
+            };
+            _avatar.FollowersCalled = () =>
+            {
+                // Exult stop_actor leaves the party be in gump mode.
+                if (!_gumps.GumpMode)
+                {
+                    _party.CallFollowers();
+                }
             };
             _avatar.Moved = (actor, fromTx, fromTy) =>
             {
                 _eggs.Activate(actor, fromTx, fromTy);
-                _party.AvatarStepped(fromTx, fromTy);
+                if (_avatar.LeadsParty)
+                {
+                    _party.AvatarStepped(fromTx, fromTy);
+                }
             };
             _combat.Schedules = _schedules;
             _schedules.Combat = _combat;
-            _schedules.AvatarMoved = _avatar.Moved;
+            _schedules.AvatarMoved = (actor, fromTx, fromTy) => _eggs.Activate(actor, fromTx, fromTy);
+            _schedules.AvatarLedParty = (fromTx, fromTy) => _party.AvatarStepped(fromTx, fromTy);
+            _schedules.AvatarWalkEnded = () => _party.CallFollowers();
             _schedules.AvatarBusy = () => _avatar.IsPlayerMoving;
             _combat.Party = _party;
             _combat.Music = _music;
             var monsters = NpcDat.LoadMonsters(_map);
             _combat.AdoptMonsters(monsters);
-            _timers = new NpcTimers(_schedules, _combat);
+            _timers = new NpcTimers(_schedules, _combat, _clock);
+            _clock.HourTicked += () => _timers.HourPassed(_npcs);
             _timers.Restore(_npcs.Concat(monsters));
             _combat.Timers = _timers;
             _fields = new Fields(_map, _combat, _timers, _schedules);
-            ActorWalker.Stepped = _fields.Stepped;
+            ActorWalker.Stepped = actor =>
+            {
+                _fields.Stepped(actor);
+                _timers.SteppedOn(actor);
+            };
             if (gwin is { } g1)
             {
                 _combat.Armageddon = g1.Armageddon;
@@ -167,8 +189,11 @@ public partial class U7Game : Node2D
                 Missiles = _combat.Missiles,
                 HomingMissiles = _combat.HomingMissiles,
                 TextureFilter = TextureFilterEnum.Nearest,
-                Animators = new Animators(_map, _clock)
+                Animators = new Animators(_map, _clock),
+                Art = new HiresArt(_shapes)
             };
+            _world.Art.UsePack(ArtLook.Pack, ArtLook.Scale);
+            _shapes.Hires = _world.Art;
             AddChild(_world);
             _lighting = new SceneLighting(_clock, _map, _catalog, avatar, _effects, _party, new GlowColours(_shapes, _catalog))
             {
@@ -197,6 +222,8 @@ public partial class U7Game : Node2D
             _gumps.PossibleTheft = _combat.Guards.PossibleTheft;
             _gumps.ToggleCombat = ToggleCombat;
             _gumps.OpenFileMenu = OpenSaveLoad;
+            _gumps.AskQuantity = AskQuantity;
+            _gumps.AlternateDrop = () => Input.IsKeyPressed(Key.Ctrl);
             _gumps.IsCombatOn = () => _combat.InCombat;
             _gumps.GumpsVga = _shapes.GumpsVga;
 
@@ -214,6 +241,9 @@ public partial class U7Game : Node2D
                 TextureFilter = TextureFilterEnum.Nearest
             };
             gumpLayer.AddChild(_gumpView);
+            // The painted map over the gumps, drawn smooth (the gumps stay pixel-crisp).
+            _mapView = new MapView { Name = "MapView" };
+            gumpLayer.AddChild(_mapView);
 
             _camera = new Camera2D
             {
@@ -285,6 +315,7 @@ public partial class U7Game : Node2D
             _usecode.Clock = _clock;
             _usecode.Schedules = _schedules;
             _usecode.Party = _party;
+            _usecode.Speech = _speech;
             _usecode.Combat = _combat;
             _usecode.Music = _music;
             _usecode.Eggs = _eggs;
@@ -420,6 +451,8 @@ public partial class U7Game : Node2D
                 return true;
             };
             _schedules.CallUsecode = (fun, item) => TryCallUsecode(fun, item, UsecodeEvent.DoubleClick);
+            _schedules.CastBookmark = CastBookmark;
+            _schedules.ScriptLength = npc => _usecode.Scripts.LastOrDefault(s => s.Obj == npc)?.Count ?? 0;
             _schedules.IsInUsecode = () => _usecode.InUsecode;
             _schedules.Say = _usecode.Bark;
             SitAction.Say = _usecode.Bark;
@@ -444,7 +477,9 @@ public partial class U7Game : Node2D
             _usecode.ActorFlags = _timers;
             _conversation.Machine = _usecode;
             _gumpView.ShownBook = () => _usecode is { Wait: UsecodeWait.BookPage } vm ? vm.Book : null;
-            _gumpView.ShownPicture = () => _usecode is { Wait: UsecodeWait.Picture or UsecodeWait.WizardEye } vm ? vm.Picture : null;
+            _gumpView.ShownPicture = () => _usecode is { Wait: UsecodeWait.Picture or UsecodeWait.WizardEye, Picture: { } shown } &&
+                                           !_mapView.Paints(shown) ? shown : null;
+            _mapView.ShownPicture = () => _usecode is { Wait: UsecodeWait.Picture } vm ? vm.Picture : null;
             _gumpView.ShownSign = () => _usecode is { Wait: UsecodeWait.Picture } vm ? vm.Sign : null;
             _usecode.ViewTile = tile =>
             {
@@ -456,11 +491,12 @@ public partial class U7Game : Node2D
             _usecode.AnswersChanged += _conversation.Refresh;
             _usecode.FacesChanged += _conversation.Refresh;
 
-            // Exult BG_Game::new_game: a new game asks for the avatar's name and sex first, and the
-            // opening (the eggs round the avatar) waits for them. The console names it itself (avatar).
+            // Exult Game::show_menu: a start without a game to load shows the main menu, whose new game
+            // asks for the avatar's name and sex first; the opening (the eggs round the avatar) waits for
+            // them. The console names it itself (avatar), and opens the menu with `menu`.
             if (U7Paths.GameDatOverride is null && string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("U7_AGENT")))
             {
-                ShowNewGame();
+                ShowIntroThenMenu();
             }
             else
             {
@@ -498,16 +534,16 @@ public partial class U7Game : Node2D
             return;
         }
 
-        // Exult BG_Game::new_game: nothing else runs until the avatar is named.
-        if (_newGame is not null)
+        // Exult BG_Game::new_game and the main menu: nothing else runs meanwhile.
+        if (_newGame is not null || _mainMenu is not null)
         {
             Vector2I? noWalk = null;
             AgentUpdate(delta, ref noWalk);
             return;
         }
 
-        // Exult Newfile_gump: a modal gump; the time queue is paused while it shows.
-        if (_saveLoad is not null)
+        // Exult Newfile_gump and Slider_gump: modal gumps; the time queue is paused while they show.
+        if (_saveLoad is not null || _quantityView is not null)
         {
             Vector2I? noWalk = null;
             AgentUpdate(delta, ref noWalk);
@@ -520,9 +556,9 @@ public partial class U7Game : Node2D
             endgame.Update(delta);
             Vector2I? noWalk = null;
             AgentUpdate(delta, ref noWalk);
-            if (endgame.Done && _agentDir is null)
+            if (endgame.Done)
             {
-                GetTree().Quit();
+                ShowDone(endgame);
             }
 
             return;
@@ -842,6 +878,12 @@ public partial class U7Game : Node2D
             _newGame = null;
             _eggs.Activate(_avatar.Avatar, -1, -1);
         };
+        _newGame.Cancelled = () =>
+        {
+            layer.QueueFree();
+            _newGame = null;
+            ShowMainMenu();
+        };
         layer.AddChild(_newGame);
         _cursor.Shape = MouseShape.Hand;
     }
@@ -869,35 +911,38 @@ public partial class U7Game : Node2D
             return;
         }
 
-        var layer = new CanvasLayer { Name = "Endgame", Layer = 25 };
-        AddChild(layer);
-        var view = new EndgameView { Name = "EndgameView" };
-        layer.AddChild(view);
-        _cursor.HideCursor = true;
-        _endgame = new Endgame(view, _music, _clock.TotalHours, success)
+        if (success)
         {
-            Log = _agentDir is null ? null : AgentLog
-        };
+            // Exult run_endgame: a win earns the menu's View Endgame.
+            WriteFlag(EndgameFlag);
+        }
+
+        PlayShow(view => new Endgame(view, _music, _clock.TotalHours, success), null);
     }
 
     /// <summary>
-    /// Exult's endgame input: in the movies <c>wait_delay</c> (Esc, Space,
-    /// Enter, a double-click) skips; in the credits any key but Shift, or a
-    /// click, ends them (<c>TextScroller::run</c>).
+    /// Exult <c>Spellbook_object::do_spell(act, true)</c> and
+    /// <c>execute_spell</c> in combat: the mana and reagents paid, the spell's
+    /// usecode run with the weapon event (Black Gate's combat spells, Douse to
+    /// Sword Strike, take it), its click answered with the caster's target
+    /// (<c>intercept_click_on_item</c>, the old intercept kept and restored).
+    /// Not while other usecode runs.
     /// </summary>
-    static void EndgameInput(Endgame endgame, InputEvent @event)
+    bool CastBookmark(U7Object caster, U7Object book)
     {
-        switch (@event)
+        if (_usecode is not { } vm || UsecodeRunning)
         {
-            case InputEventKey { Pressed: true, Echo: false } key when endgame.InCredits
-                ? key.Keycode != Key.Shift
-                : key.Keycode is Key.Escape or Key.Space or Key.Enter or Key.KpEnter:
-            case InputEventMouseButton { ButtonIndex: MouseButton.Left or MouseButton.Right } button when endgame.InCredits
-                ? !button.Pressed
-                : button is { Pressed: true, DoubleClick: true }:
-                endgame.Skip();
-                break;
+            return false;
         }
+
+        return Spellbook.DoSpell(book, caster, book.SpellBookmark, false, _combat.Quantities, (fun, who) =>
+        {
+            var saved = vm.InterceptItem;
+            vm.InterceptItem = caster.CombatTarget;
+            vm.Call(fun, who, UsecodeEvent.Weapon);
+            vm.InterceptItem = saved;
+            _conversation.Refresh();
+        });
     }
 
     /// <summary>Usecode runs or waits for an answer (Exult's conversations hold its event loop).</summary>
@@ -988,6 +1033,7 @@ public partial class U7Game : Node2D
         }
 
         U7Paths.GameDatOverride = SaveGame.SlotDir(slot);
+        SaveGame.SetLast(slot);
         GD.Print("loading " + U7Paths.GameDatOverride);
         GetTree().ReloadCurrentScene();
         return true;

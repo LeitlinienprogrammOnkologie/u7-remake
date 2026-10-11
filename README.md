@@ -60,6 +60,29 @@ scripts, `scripts/extract_endgame_flics.py` and `scripts/render_map.py`,
 produce the endgame frames and a full-map render and are not needed to
 play.
 
+### Redrawn art (optional): `assets/hires/`
+
+The world, gumps and faces can be shown in art redrawn at four times the
+resolution by an AI upscaler, made locally from your own game files
+(`scripts/upscale/`). It needs a DirectX 12 graphics card (AMD or NVIDIA,
+through DirectML) and about 1 GB of disk:
+
+```bash
+python -m venv scripts/upscale/.venv
+scripts/upscale/.venv/Scripts/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+scripts/upscale/.venv/Scripts/python -m pip install onnxruntime-directml numpy pillow spandrel onnx
+for f in sprites gumps faces shapes; do
+  scripts/upscale/.venv/Scripts/python scripts/upscale/generate.py --model nxbrz --file $f
+  scripts/upscale/.venv/Scripts/python scripts/upscale/pack.py --model nxbrz --file $f
+done
+```
+
+`generate.py` downloads the model into `assets/hires/models/` on first use
+(the models and their licences are listed in `scripts/upscale/models.py`;
+most are free for non-commercial use only) and takes about ten minutes per
+model on a recent card. Without `assets/hires/` the game shows the
+original art.
+
 Music plays through the Windows built-in MIDI synth from the MT-32 export
 in `assets/audio/music_mt32/`, converted to General MIDI at load with
 Exult's patch table; no soundfont or extra software is needed. On other platforms music is silent for now.

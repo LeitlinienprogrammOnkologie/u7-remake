@@ -48,10 +48,10 @@ public sealed class StatsGump : Gump
         {
             stats =
             [
-                Owner.GetProp(U7.Actors.ActorProp.Strength),
-                Owner.GetProp(U7.Actors.ActorProp.Dexterity),
-                Owner.GetProp(U7.Actors.ActorProp.Intelligence),
-                Owner.GetProp(U7.Actors.ActorProp.Combat),
+                Owner.EffectiveProp(U7.Actors.ActorProp.Strength),
+                Owner.EffectiveProp(U7.Actors.ActorProp.Dexterity),
+                Owner.EffectiveProp(U7.Actors.ActorProp.Intelligence),
+                Owner.EffectiveProp(U7.Actors.ActorProp.Combat),
                 Owner.GetProp(U7.Actors.ActorProp.Magic),
                 Owner.GetProp(U7.Actors.ActorProp.Health),
                 Owner.GetProp(U7.Actors.ActorProp.Mana),

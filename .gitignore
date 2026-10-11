@@ -23,3 +23,5 @@ Thumbs.db
 /poster/
 # Python bytecode
 __pycache__/
+# Hi-res art generator venv (scripts/upscale; see README)
+.venv/

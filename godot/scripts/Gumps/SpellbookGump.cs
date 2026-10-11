@@ -165,6 +165,65 @@ public sealed class SpellbookGump : Gump
         }
     }
 
+    public override bool HandlesKeys => true;
+
+    /// <summary>
+    /// Exult <c>Spellbook_gump::handle_kbd_event</c>: Enter turns to the
+    /// bookmark's page, Home and End to the first and last, Page Up and Down
+    /// by one; Left and Right mark the spell in the bookmark's row on this
+    /// page's left or right half, Up and Down the one above or below it.
+    /// </summary>
+    public override bool HandleKey(Godot.Key key)
+    {
+        var mark = Book.SpellBookmark;
+        switch (key)
+        {
+            case Godot.Key.Enter or Godot.Key.KpEnter:
+                if (mark >= 0)
+                {
+                    ChangePage(mark / 8 - Page);
+                }
+
+                break;
+            case Godot.Key.Home:
+                ChangePage(-Page);
+                break;
+            case Godot.Key.End:
+                ChangePage(8 - Page);
+                break;
+            case Godot.Key.Pageup:
+                ChangePage(-1);
+                break;
+            case Godot.Key.Pagedown:
+                ChangePage(1);
+                break;
+            case Godot.Key.Left:
+                SelectSpell((Page * 8) | (mark & 3));
+                break;
+            case Godot.Key.Right:
+                SelectSpell((Page * 8) | (mark & 3) | 4);
+                break;
+            case Godot.Key.Up:
+                if ((mark & 3) != 0)
+                {
+                    SelectSpell((Page * 8) | (mark & 4) | ((mark & 3) - 1));
+                }
+
+                break;
+            case Godot.Key.Down:
+                if ((mark & 3) != 3)
+                {
+                    SelectSpell((Page * 8) | (mark & 4) | ((mark & 3) + 1));
+                }
+
+                break;
+            default:
+                return false;
+        }
+
+        return true;
+    }
+
     /// <summary>
     /// Exult <c>Spellbook_gump::do_spell</c>: the avatar casts it, closing the
     /// gumps so the spell's animations can play. False if it cannot, and the

@@ -70,27 +70,50 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
   - **Crystal ball and Wizard Eye:** Exult's frame (SPRITES.VGA sprite 10)
     at the world's zoom over the original 320x200 screen, black outside it
     (not redrawn smooth, not the view filling the window).
+  - **The map** (`UI/MapView`, 2026-10-10): the user's painting of
+    Britannia (`godot/data/map/britannia.png`) instead of sprite 22, smooth
+    to fit the window; the sextant's mark (Exult's rules) a pulsing gold
+    ring, placed through a warp fitted to the painting's towns and coasts
+    (`scripts/painted_map_warp.py`; rerun it for a new painting).
   - **New game** (`UI/NewGameView`): the original title from MAINSHP.FLX
     over a dark wood & gold panel (name, Male / Female with the portrait,
     Journey Onward).
+  - **Main menu** (`UI/MainMenuView`, Exult's `Game::show_menu`): look B
+    of the mock-ups (2026-10-10): the same title with the new game
+    screen's dark wood & gold panel of MedievalSharp buttons (Journey
+    Onward, Start New Game, View Credits, View Quotes / View Endgame once
+    earned, Quit), the chosen one lit.
   - **Save/load screen** (`UI/SaveLoadView`, Exult's `Newfile_gump`):
     layout A of the mock-ups (2026-10-10): the list of names on the left,
     the chosen game's picture, details and party faces on the right, Save /
     Load / Delete / Cancel and Quit below, dark wood & gold. Opened by Esc
     when no gumps are open (Exult's Esc opens its menu) and by the
     paperdoll's disk; F5/F9 stay the quick save and load.
+  - **Hi-res art** (`ArtLook`, 2026-10-10): the art redrawn at 4x by the
+    4x-NXbrz model everywhere (world, gumps, items, portraits), from the
+    original and five models side by side (`scripts/upscale/compare.py`);
+    turned back into palette art, its colours mixed between two entries,
+    the sharp fill on. Made locally into `assets/hires/` (README); without
+    it the original art shows.
   - **Mouse:** Exult's right-button walking, and the left button walks on
     open ground too (hold to steer, a quick click for a path).
   - **Cursors** (`UI/MouseCursor`): Exult's POINTERS.SHP frames at the
     world's zoom (crisp, the day palette) as the system cursor; the flashed
     words (Too heavy, Out of range, Out of ammo, Won't fit, Blocked) in
     MedievalSharp, gold on dark wood, centred on the cursor.
-  - **Endgame** (`Game/Endgame`, `UI/EndgameView`): the movies and the
+  - **Endgame** (`Game/Endgame`, `UI/EndgameView`; the intro, `Game/Intro`,
+    in the same look): the movies and the
     credits' picture as they are (320x200 scaled to fit, black around);
     every word in MedievalSharp at the window's size where Exult paints its
     fonts: the Guardian's red with a dark outline, the narration,
     congratulations and credits gold; the credits glide between Exult's
     steps. After the end the game quits (as the original did).
+  - **Quantity dialog** (`UI/QuantityView`, Exult's `Slider_gump` for
+    part of a stack): look B (2026-10-10): a small dark wood & gold panel,
+    "How many?", the count in words, a gold slider, OK and Cancel.
+  - **Speech:** the Guardian's voice (U7SPEECH.SPC, INTROSND.DAT,
+    ENDGAME.DAT) with subtitles: Exult's `speech_with_subs` on
+    (2026-10-10), so his words still show while he speaks.
   - **Red flash:** a badly hurt avatar (Exult's rule) gets a faint red pulse
     at the screen's edges, 0.35 strong and 0.12 wide, not the RED palette.
   - **Weather look** (`WeatherLook`): rain as streaks with faint splashes,
@@ -116,7 +139,10 @@ godot/scripts/
               AvatarController (player walking), SaveGame (Exult GAMEDAT layout;
               GwinState: gamewin.dat; SaveInfo: saveinfo.dat), U7Game.SaveLoad
               (quick save, the save/load screen, the world's picture),
-              Endgame (Exult end_game and the credits)
+              U7Game.Menu (the main menu and the shows it starts),
+              Show (the shows on the endgame's screen: clock, fades,
+              palettes, lettering), Endgame (Exult end_game and the
+              credits), Intro (Exult play_intro)
   Data/       GameMap (chunks, IREG, eggs index, paint order), U7Object,
               ShapeCatalog, FlexFile, VgaShapeFile + ShapeFrame (Exult Shape_frame:
               SHAPES/SPRITES/GUMPS/FONTS/FACES.VGA frames by palette index),
@@ -124,7 +150,8 @@ godot/scripts/
               VgaFont (FONTS.VGA metrics, Exult paint_text_box), ObjectNames
               (Exult get_name: what a click shows), ChunkBlocking
               (Exult Chunk_cache blocked flags + is_blocked), IffFile and
-              FlicFile (ENDGAME.DAT and its movies, Exult playfli)
+              FlicFile (ENDGAME.DAT and its movies, Exult playfli),
+              HiresPack (the redrawn art's packs, scripts/upscale)
   Gumps/      GumpManager, GumpView (paints gumps and the open book), container,
               actor and stats gumps, TextGump (Exult Book/Scroll_gump page layout),
               SignGump (Exult Sign_gump: signs, tombstones, plaques)
@@ -161,15 +188,25 @@ godot/scripts/
               (whole-screen effects: usecode's fades and the red edge pulse,
               over the gumps and the conversation too), ShapeCache (frames by
               index; RGBA shape textures for the gumps; gump, font and face
-              frames)
+              frames), HiresArt (the art at 4x: a pack's frames or the
+              original blown up, for the world and the gumps' textures),
+              ArtLook (the user's picks for it)
   UI/         ConversationPanel, BarkOverlay, UiTheme, MouseCursor (Exult
               Mouse: POINTERS.SHP cursors and their flashes), EndgameView
               (the endgame's 320x200 picture and words), NewGameView (Exult
-              BG_Game::new_game: the avatar's name and sex), SaveLoadView
-              (Exult Newfile_gump: the save/load screen)
+              BG_Game::new_game: the avatar's name and sex), MainMenuView
+              (Exult Game::show_menu), QuantityView (Exult Slider_gump: how
+              many of a stack), SaveLoadView
+              (Exult Newfile_gump: the save/load screen), MapView and
+              PaintedMap (display_map's painted map, the tile -> pixel warp)
+  Audio/      MusicPlayer (MIDI through the Windows synth), SpeechPlayer
+              (Exult's speech) and VocFile (Exult VocAudioSample)
   Core/       U7Paths (data paths, ReadGameDat), U7Constants, TileCoord,
               Directions (Exult dir.cc: the 8 directions, steps, frame rotation)
-scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers)
+scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers),
+              painted_map_warp.py (fits godot/data/map/britannia_warp.txt),
+              upscale/ (the art redrawn by AI models into assets/hires, in its
+              own venv: generate.py, pack.py, compare.py; see README)
 ```
 
 ## Building and testing
@@ -329,7 +366,11 @@ Alagner and the Time Lord's mission, and the Black Gate confrontation.
 `setflag npc:0 invisible 0`) and has no barges (`scripts/repair_barges.py`).
 
 Also done: Exult's NPC timers (poison, sleep, invisibility and the other
-flags wear off), knockouts (dead only below -strength/3), fields (fire,
+flags wear off), hunger and the hourly mending, the swamps' poison, bleeding
+and its blood, weapon powers (poison, sleep, curse, charm with its change of
+sides, paralysis, magebane), might and curse on the stats, experience for
+kills, slimes splitting, breakable objects and powder kegs' chains, attacks
+on tiles, knockouts (dead only below -strength/3), fields (fire,
 sleep, poison, caltrops, campfires) and voice eggs; Hook's and
 Dracothraxus's death usecode. Saves from the dungeon play-tests are local
 (`sphere_*`, `tetra_*`, `cube_*`, `gate_*`, `sweep_*`, `fire_*`, `isle_*`,
@@ -355,7 +396,8 @@ now ported), and the agent console.
 
 The visual overhaul is done: the world painted as Exult's 8-bit buffer
 (SHAPES.VGA decoded at runtime, XFORM.TBL translucency, invisible actors,
-status outlines, colour cycling) through one world shader with Exult's time,
+status outlines, weapons in hand and casting frames from WIHH.DAT, colour
+cycling) through one world shader with Exult's time,
 lightning, invisible, overcast and fog palettes; the light spell, light
 sources and carried lights as flickering pools, magic glows, Exult's fades,
 missiles as effects (homing missiles, missile eggs), the red edge pulse, and
@@ -374,8 +416,9 @@ Next, in priority order:
    route). Nothing known is left; much of it was reached with shortcuts
    (`tp`, `create`, flags), so a new game played through would be the
    next test.
-2. **Walking follow-ups:** Exult's dormancy and `Actor::follow` if the
-   32-tile activity range or the follow schedule ever show their seams.
+2. **Walking follow-ups:** Exult's dormancy if the 32-tile activity range
+   ever shows its seams (`Actor::follow` and the follow schedule are
+   ported, 2026-10-11).
 
 Known small gaps:
 - Picked-up items are readied into free slots, as in Exult `Actor::add`.

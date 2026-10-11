@@ -23,6 +23,9 @@ public abstract class Schedule(NpcBrain brain)
     /// <summary>Exult <c>blocked</c>: the tile a step of the schedule's was blocked at, if any.</summary>
     protected TileCoord? Blocked;
 
+    /// <summary>Exult <c>Schedule::set_blocked</c>, from a step of the NPC's that was blocked.</summary>
+    public void SetBlocked(TileCoord tile) => Blocked = tile;
+
     int _streetMaintenanceFailures;
     double _streetMaintenanceTime;
 
@@ -216,7 +219,7 @@ public abstract class Schedule(NpcBrain brain)
                 continue;
             }
 
-            if (CombatEngine.IsEnemy(Npc.Alignment, actor.Alignment))
+            if (CombatEngine.IsEnemy(Npc.EffectiveAlignment, actor.EffectiveAlignment))
             {
                 Runner.Fight(Npc, actor);
                 return true;
@@ -506,8 +509,9 @@ public sealed class NpcBrain(ScheduleRunner runner, U7Object npc)
     /// <summary>Seconds until the action's next step, or until <see cref="Schedule.NowWhat"/>.</summary>
     public double StepTimer;
     /// <summary>
-    /// Exult <c>in_queue()</c>, kept for the avatar only: its time event is
-    /// pending, so it will step or ask its schedule what now. NPCs are still
+    /// Exult <c>in_queue()</c>, kept for the avatar and those following it:
+    /// its time event is pending, so it will step or ask its schedule what
+    /// now (a follower left out walks in formation). Other NPCs are still
     /// asked at every idle step.
     /// </summary>
     public bool Queued = true;

@@ -27,13 +27,26 @@ public sealed class AvatarController
     double _restMs;
     int _steerDir = -1;
     int _steerSpeed;
+    /// <summary>Exult <c>set_get_party</c>: the walk leads the party in formation.</summary>
+    bool _getParty;
 
-    /// <summary>The avatar stepped (from x, y): eggs and followers react.</summary>
+    /// <summary>The avatar stepped (from x, y): eggs react, and in formation the party.</summary>
     public Action<U7Object, int, int>? Moved;
     /// <summary>The player set the avatar walking (Exult <c>start_actor</c>, which calls the party along).</summary>
     public Action? WalkStarted;
+    /// <summary>
+    /// Exult <c>Main_actor::get_followers</c> after a walk of the player's:
+    /// a path set off on, the avatar stopped, or a walk in formation ended.
+    /// </summary>
+    public Action? FollowersCalled;
 
     public bool IsPlayerMoving => _walk is not null;
+
+    /// <summary>The player's walk under way, if any (Exult's avatar <c>action</c>).</summary>
+    public PathWalk? Walk => _walk;
+
+    /// <summary>The walk under way steps the party in formation (a held walk: Exult <c>start_actor_alt</c>).</summary>
+    public bool LeadsParty => _walk is not null && _getParty;
 
     public AvatarController(U7Object avatar, GameMap map)
     {
@@ -51,7 +64,7 @@ public sealed class AvatarController
     /// Exult <c>Game_window::start_actor_alt</c>: walk straight toward
     /// <paramref name="target"/> (world pixels), sidestepping one direction
     /// if that way is blocked, aiming <see cref="StepTileDelta"/> tiles ahead.
-    /// Only re-aims when the direction or speed changes.
+    /// Only re-aims when the direction or speed changes, or the avatar stopped.
     /// </summary>
     public void Steer(Vector2 target, int speed)
     {
@@ -90,7 +103,9 @@ public sealed class AvatarController
             }
         }
 
-        if (_walk is not null && dir == _steerDir && speed == _steerSpeed)
+        // Exult re-aims on every mouse move and whenever the avatar isn't moving (a blocked
+        // step stops it: the next walk starts from the lift it stepped up or down to).
+        if (_walk is not null && dir == _steerDir && speed == _steerSpeed && Avatar.FrameTime != 0)
         {
             return;
         }
@@ -98,7 +113,7 @@ public sealed class AvatarController
         var aim = start.Neighbor(dir);
         var dest = new TileCoord(start.Tx + StepTileDelta * U7Constants.TileDelta(start.Tx, aim.Tx),
             start.Ty + StepTileDelta * U7Constants.TileDelta(start.Ty, aim.Ty), start.Tz).Wrapped();
-        Start(PathWalk.Line(_map, Avatar, dest), speed);
+        Start(PathWalk.Line(_map, Avatar, dest), speed, getParty: true);
         _steerDir = dir;
         _steerSpeed = speed;
     }
@@ -120,7 +135,8 @@ public sealed class AvatarController
 
     /// <summary>
     /// Exult <c>Game_window::start_actor_along_path</c>: an A* walk to the
-    /// tile at the avatar's lift; false if there is no way there.
+    /// tile at the avatar's lift, the party following on its own (Exult
+    /// <c>get_followers</c>, no formation); false if there is no way there.
     /// </summary>
     public bool PathTo(TileCoord dest, int speed)
     {
@@ -128,20 +144,22 @@ public sealed class AvatarController
         if (walk is null)
         {
             GD.Print("Couldn't find path for Avatar.");
-            Stop();
+            Halt();
             return false;
         }
 
-        Start(walk, speed);
+        Start(walk, speed, getParty: false);
         _steerDir = -1;
+        FollowersCalled?.Invoke();
         return true;
     }
 
     /// <summary>Exult <c>Actor::start(speed, 0)</c>: the walk takes over; a running step timer is kept.</summary>
-    void Start(PathWalk? walk, int speed)
+    void Start(PathWalk? walk, int speed, bool getParty)
     {
         var moving = _walk is not null;
         _walk = walk;
+        _getParty = getParty;
         if (walk is null)
         {
             return;
@@ -160,8 +178,15 @@ public sealed class AvatarController
         }
     }
 
-    /// <summary>Exult <c>Game_window::stop_actor</c>: stop and stand.</summary>
+    /// <summary>Exult <c>Game_window::stop_actor</c>: stop and stand; the party follows on (<c>get_followers</c>).</summary>
     public void Stop()
+    {
+        Halt();
+        FollowersCalled?.Invoke();
+    }
+
+    /// <summary>Exult <c>Actor::stop</c>: not moving, the resting frame.</summary>
+    void Halt()
     {
         if (_walk is { } walk)
         {
@@ -221,6 +246,12 @@ public sealed class AvatarController
                 // Finished: the next walk waits one step (Exult keeps frame_time).
                 _walk = null;
                 _steerDir = -1;
+                if (_getParty && walk.ReachedEnd)
+                {
+                    // Exult Path_walking_actor_action: the last step of a walk in formation, still moving.
+                    FollowersCalled?.Invoke();
+                }
+
                 _waitMs += Avatar.FrameTime > 0 ? Avatar.FrameTime : U7Constants.StandardDelayMs;
                 Avatar.FrameTime = 0;
                 break;

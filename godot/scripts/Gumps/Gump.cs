@@ -65,6 +65,12 @@ public class Gump
 
     public virtual void Close() => Manager.Close(this);
 
+    /// <summary>Exult <c>Gump::handle_kbd_event</c>, for a gump with the keyboard: false if the key isn't its (it goes on to the game).</summary>
+    public virtual bool HandleKey(Godot.Key key) => false;
+
+    /// <summary>Exult <c>can_handle_kbd</c>: the gump takes the keyboard when it opens or comes to the top.</summary>
+    public virtual bool HandlesKeys => false;
+
     /// <summary>Exult <c>Gump::get_cont_or_actor</c>: what a click on the gump itself names.</summary>
     public virtual U7Object? ContOrActor => Owner;
 

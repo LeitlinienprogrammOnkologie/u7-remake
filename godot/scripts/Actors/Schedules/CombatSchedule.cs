@@ -37,6 +37,8 @@ public class CombatSchedule : Schedule
     protected U7Object? PracticeTarget;
     protected int WeaponShape = -1;
     bool _noBlocking;
+    /// <summary>Exult <c>Combat_schedule::spellbook</c>: the readied spellbook fought with, its bookmarked spell for a weapon.</summary>
+    U7Object? _spellbook;
     int _yelled;
     int _fleed;
     protected int Failures;
@@ -57,7 +59,7 @@ public class CombatSchedule : Schedule
         : base(brain)
     {
         _prevSchedule = prevSchedule;
-        _alignment = brain.Npc.Alignment;
+        _alignment = brain.Npc.EffectiveAlignment;
         SetWeapon();
         _canYell = CanSpeak;
         _summonTime = Runner.Ticks + 4000;
@@ -88,7 +90,7 @@ public class CombatSchedule : Schedule
         var sleeping = new List<U7Object>();
         var avatar = Runner.Avatar;
         var inParty = IsInParty(Npc);
-        var npcAlign = Npc.Alignment;
+        var npcAlign = Npc.EffectiveAlignment;
         var seeInvisible = Combat.CanSeeInvisible(Npc);
         foreach (var actor in Runner.NearbyNpcs().Append(avatar))
         {
@@ -98,7 +100,7 @@ public class CombatSchedule : Schedule
                 continue;
             }
 
-            if (CombatEngine.IsEnemy(npcAlign, actor.Alignment))
+            if (CombatEngine.IsEnemy(npcAlign, actor.EffectiveAlignment))
             {
                 if (actor.GetFlag(ObjFlag.Asleep))
                 {
@@ -117,13 +119,13 @@ public class CombatSchedule : Schedule
                     continue;
                 }
 
-                if (IsInParty(t) && t.IsActor && CombatEngine.IsEnemy(npcAlign, t.Alignment))
+                if (IsInParty(t) && t.IsActor && CombatEngine.IsEnemy(npcAlign, t.EffectiveAlignment))
                 {
                     Opponents.Add(actor);
                 }
 
                 // Being attacked by a party member?
-                if (actor.Oppressor is { } oppr && IsInParty(oppr) && CombatEngine.IsEnemy(npcAlign, oppr.Alignment))
+                if (actor.Oppressor is { } oppr && IsInParty(oppr) && CombatEngine.IsEnemy(npcAlign, oppr.EffectiveAlignment))
                 {
                     Opponents.Add(actor);
                 }
@@ -131,7 +133,7 @@ public class CombatSchedule : Schedule
         }
 
         // None found? The avatar's, if of the same alignment.
-        if (Opponents.Count == 0 && inParty && avatar.Alignment == npcAlign &&
+        if (Opponents.Count == 0 && inParty && avatar.EffectiveAlignment == npcAlign &&
             avatar.CombatTarget is { IsActor: true } opp && opp != Npc && opp.ScheduleType == ScheduleType.Combat)
         {
             Opponents.Add(opp);
@@ -142,6 +144,8 @@ public class CombatSchedule : Schedule
         {
             Opponents.InsertRange(0, sleeping);
         }
+
+        Godot.GD.Print($"OPPTRACE {Npc.NpcName}: nearby={Runner.NearbyNpcs().Count()} opps={Opponents.Count} sleeping={sleeping.Count} [{string.Join(",", Opponents.Select(o => o.NpcName))}]"); // TMPTRACE
     }
 
     U7Object? Weakest() => Opponents.Where(o => !o.Removed).MinBy(o => o.GetProp(ActorProp.Strength));
@@ -203,7 +207,7 @@ public class CombatSchedule : Schedule
         {
             var dist = Dist(opp);
             if (opp.Oppressor is not { } oppr || oppr == Npc ||
-                (oppr.Alignment == Npc.Alignment && oppr.CombatTarget != opp))
+                (oppr.EffectiveAlignment == Npc.EffectiveAlignment && oppr.CombatTarget != opp))
             {
                 dist += 16; // Not being attacked by an ally.
             }
@@ -250,10 +254,10 @@ public class CombatSchedule : Schedule
     /// <summary>Exult <c>Combat_schedule::find_foe(mode)</c>.</summary>
     protected U7Object? FindFoe(int mode)
     {
-        if (Npc.Alignment != _alignment)
+        if (Npc.EffectiveAlignment != _alignment)
         {
             Opponents.Clear(); // Alignment changed.
-            _alignment = Npc.Alignment;
+            _alignment = Npc.EffectiveAlignment;
         }
 
         // Remove any that died (and, for the avatar, sleepers).
@@ -281,7 +285,7 @@ public class CombatSchedule : Schedule
             AttackMode.Random => RandomOpponent(),
             AttackMode.Berserk => Rng.Next(2) == 0 ? RandomOpponent() : Nearest(),
             // Exult's guess: nearest when above half health, else the weakest.
-            AttackMode.Defend => Npc.GetProp(ActorProp.Strength) <= 2 * Npc.GetProp(ActorProp.Health)
+            AttackMode.Defend => Npc.EffectiveProp(ActorProp.Strength) <= 2 * Npc.GetProp(ActorProp.Health)
                 ? Nearest()
                 : Weakest(),
             AttackMode.Flank => Attacked(),
@@ -424,19 +428,22 @@ public class CombatSchedule : Schedule
         var dist = Dist(opponent);
         var reach = winf?.Range ?? Combat.MonsterReach(Npc.Shape);
         var ranged = NotInMeleeRange(winf, dist, reach);
-        if (Combat.EffectiveRange(Npc, winf, reach) < dist)
+        if (_spellbook is null && Combat.EffectiveRange(Npc, winf, reach) < dist)
         {
             CurState = State.Approach; // Out of range: get a path.
             ApproachFoe();
             return;
         }
 
-        if (ranged)
+        if (_spellbook is not null || ranged)
         {
-            // Out of ammunition or charges?
-            if (winf is not null &&
-                Combat.GetWeaponAmmo(Npc, winf, WeaponShape, winf.Ammo, winf.Projectile, true, out var ammo) > 0 &&
-                ammo is null && !Combat.ReadyAmmo(Npc))
+            // Out of mana or reagents for the spell, or of ammunition or charges?
+            var weaponDead = _spellbook is not null
+                ? !Spellbook.CanDoBookmark(_spellbook, Npc, Combat.Quantities)
+                : winf is not null &&
+                  Combat.GetWeaponAmmo(Npc, winf, WeaponShape, winf.Ammo, winf.Projectile, true, out var ammo) > 0 &&
+                  ammo is null && !Combat.ReadyAmmo(Npc);
+            if (weaponDead)
             {
                 if (Npc.ScheduleType != ScheduleType.Duel)
                 {
@@ -588,14 +595,20 @@ public class CombatSchedule : Schedule
         Start(Std, Std);
     }
 
-    /// <summary>Exult <c>Combat_schedule::set_weapon</c>: what it fights with, readying the best weapon if it has none.</summary>
+    /// <summary>
+    /// Exult <c>Combat_schedule::set_weapon</c>: what it fights with,
+    /// readying the best weapon if it has none, unless a readied spellbook's
+    /// bookmarked spell can be cast: then it fights with that, which needs no
+    /// clear line.
+    /// </summary>
     protected void SetWeapon(bool removed = false)
     {
+        _spellbook = null;
         var info = Combat.GetWeapon(Npc, out _, out WeaponShape);
-        // (Exult also skips this while the player drags something; spellbooks are not ported.)
+        // (Exult also skips this while the player drags something.)
         if (!removed && Npc.ScheduleType != ScheduleType.Duel && CurState != State.WaitReturn)
         {
-            if (info is null)
+            if (info is null && (_spellbook = ReadiedSpellbook()) is null)
             {
                 Combat.ReadyBestWeapon(Npc);
                 info = Combat.GetWeapon(Npc, out _, out WeaponShape);
@@ -608,7 +621,14 @@ public class CombatSchedule : Schedule
 
         if (info is null)
         {
-            SetHandToHand();
+            if (_spellbook is not null)
+            {
+                _noBlocking = true;
+            }
+            else
+            {
+                SetHandToHand();
+            }
         }
         else
         {
@@ -619,6 +639,21 @@ public class CombatSchedule : Schedule
         {
             CurState = State.Approach; // Got to restart the attack.
         }
+    }
+
+    /// <summary>Exult <c>Combat_schedule::readied_spellbook</c>: a spellbook in either hand whose bookmarked spell can be cast.</summary>
+    U7Object? ReadiedSpellbook()
+    {
+        foreach (var spot in new[] { ReadySpot.Lhand, ReadySpot.Rhand })
+        {
+            if (Equipment.GetReadied(Npc, spot) is { SpellCircles: not null } book &&
+                Spellbook.CanDoBookmark(book, Npc, Combat.Quantities))
+            {
+                return book;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Where <see cref="SetHandToHand"/> puts the weapon, in Exult's order.</summary>
@@ -731,7 +766,7 @@ public class CombatSchedule : Schedule
                 }
                 else if (_dexPoints >= DexToAttack)
                 {
-                    var effint = Npc.GetProp(ActorProp.Intelligence);
+                    var effint = Npc.EffectiveProp(ActorProp.Intelligence);
                     if (!Npc.GetFlag(ObjFlag.Invisible) && CanCast(ActorFlags.CanBeInvisible(Npc.Shape)) &&
                         Rng.Next(300) < effint)
                     {
@@ -772,15 +807,27 @@ public class CombatSchedule : Schedule
 
                 break;
             case State.Fire:
+            {
                 Failures = 0;
                 CurState = State.Approach;
-                if (opponent is not null)
+                var delay = 1;
+                if (_spellbook is not null)
+                {
+                    // Exult: cast the spell; it waits out the casting script (taken to be the newest on the caster).
+                    if (Runner.CastBookmark?.Invoke(Npc, _spellbook) != true)
+                    {
+                        SetWeapon();
+                    }
+
+                    delay += (Runner.ScriptLength?.Invoke(Npc) ?? 0) + 2;
+                }
+                else if (opponent is not null)
                 {
                     Combat.AttackTarget(Npc, opponent, WeaponShape, true);
                 }
 
-                StartAction(new FramesAction([ActorWalker.DirFrame(ActorWalker.FacingOfFrame(Npc.Frame), 3)], Std), Std,
-                    Std);
+                StartAction(new FramesAction([ActorWalker.DirFrame(ActorWalker.FacingOfFrame(Npc.Frame), 3)], delay * Std), Std,
+                    delay * Std);
                 // Strike but once at objects.
                 if (Npc.CombatTarget is { IsActor: false })
                 {
@@ -789,6 +836,7 @@ public class CombatSchedule : Schedule
                 }
 
                 break;
+            }
             case State.WaitReturn: // The boomerang should be back.
                 CurState = State.Approach;
                 _dexPoints += Npc.GetProp(ActorProp.Dexterity);
@@ -852,6 +900,9 @@ public class CombatSchedule : Schedule
 
     /// <summary>Exult <c>set_weapon(true)</c>: the weapon in hand was used up.</summary>
     public void WeaponRemoved() => SetWeapon(true);
+
+    /// <summary>Exult <c>set_weapon()</c>: look again at what to fight with (magebane took its spells).</summary>
+    public void WeaponChanged() => SetWeapon();
 }
 
 /// <summary>

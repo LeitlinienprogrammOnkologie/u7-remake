@@ -1,3 +1,5 @@
+using U7.Data;
+
 namespace U7.Actors;
 
 /// <summary>Exult <c>Actor::Item_properties</c>.</summary>
@@ -16,6 +18,62 @@ public static class ActorProp
     public const int SexFlag = 10;
     public const int MissileWeapon = 11;
     public const int Count = 12;
+
+    /// <summary>The originals' caps: experience and the training points a level gives.</summary>
+    const int MaxExp = 999999, MaxTraining = 255;
+
+    /// <summary>
+    /// Exult <c>Actor::set_property</c>, which the game's and usecode's
+    /// writes go through: experience capped, each level gained worth 3
+    /// training points; food kept to 0-31; combat and magic to 30; training
+    /// to 255 and never below 0; health rising stops the bleeding; the sex
+    /// flag is the type flag. (Loading and new actors set the raw values.)
+    /// </summary>
+    public static void Set(U7Object npc, int prop, int value)
+    {
+        switch (prop)
+        {
+            case Exp:
+            {
+                var oldLevel = npc.GetLevel();
+                npc.SetProp(Exp, Math.Min(value, MaxExp));
+                var gained = npc.GetLevel() - oldLevel;
+                if (gained > 0)
+                {
+                    npc.SetProp(Training, npc.GetProp(Training) + Math.Min(3 * gained, MaxTraining));
+                }
+
+                break;
+            }
+            case FoodLevel:
+                npc.SetProp(prop, Math.Clamp(value, 0, 31)); // "Never seems to get above this."
+                break;
+            case Combat:
+            case Magic:
+                npc.SetProp(prop, Math.Min(value, 30));
+                break;
+            case Training:
+                if (value >= 0)
+                {
+                    npc.SetProp(prop, Math.Min(value, MaxTraining));
+                }
+
+                break;
+            case SexFlag:
+                AvatarLook.SetFemale(npc, value != 0);
+                break;
+            case Health:
+                NpcTimers.SetHealth(npc, value);
+                break;
+            default:
+                if (prop is >= 0 and < MissileWeapon)
+                {
+                    npc.SetProp(prop, value);
+                }
+
+                break;
+        }
+    }
 }
 
 /// <summary>Exult <c>Actor::Alignment</c>.</summary>

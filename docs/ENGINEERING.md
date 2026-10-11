@@ -123,7 +123,7 @@ This is the highest-value single change and it is *more* faithful, not less.
 
 **Batching.** With atlases, the existing immediate-mode paint in dependency order becomes cheap because consecutive draws share a texture. Keep the algorithm; drop the per-object `ImageTexture`.
 
-**Optional modern layer.** All off by default: Godot `PointLight2D` on `LightSource` shapes at night, a subtle CRT / scanline filter, and a soft-scale filter for non-integer zoom. Explicitly *not* offered: HD sprite packs, AI upscaling, a 3D camera.
+**Optional modern layer.** All off by default: Godot `PointLight2D` on `LightSource` shapes at night, a subtle CRT / scanline filter, and a soft-scale filter for non-integer zoom. The art redrawn at 4x by an AI upscaler, generated locally and painted as palette art (2026-10-10, PROGRESS.md "Hi-res art"). Explicitly *not* offered: a 3D camera.
 
 ### 5.2 Game shell
 
@@ -228,7 +228,7 @@ M0 and M1 are prerequisites for everything else and should not be skipped or reo
 
 - Serpent Isle, the Forge of Virtue and Silver Seed add-ons, and any SI-only feature (`PAPERDOL.VGA`, spellbook gump variants). The SI paths in Exult are ignored during porting.
 - New content, rebalanced combat, new quests, remixed music.
-- HD or AI-upscaled art. The palette renderer is the "remaster".
+- Shipped HD art: AI-upscaled art is made on the player's machine (it derives from the game's files) and still goes through the palette renderer.
 - Multiplayer, mobile, web export.
 - Redistributing any Origin, GOG or Exult data. The engine ships empty.
 

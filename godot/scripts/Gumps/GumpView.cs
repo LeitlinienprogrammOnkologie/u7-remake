@@ -174,8 +174,9 @@ public partial class GumpView : Node2D
         var x = ((int)(view.X / scale) - w) / 2;
         var y = ((int)(view.Y / scale) - h) / 2;
         DrawTexture(tex, new Vector2(x, y));
-        if (picture.Mark is { } mark)
+        if (picture.Mark is { } tile)
         {
+            var mark = U7.Usecode.UsecodePicture.MapSpritePixel(tile);
             var pal = Shapes.DayPalette;
             var colour = Color.Color8(pal[MapMarkColour * 3], pal[MapMarkColour * 3 + 1], pal[MapMarkColour * 3 + 2]);
             DrawRect(new Rect2(x + mark.X, y + mark.Y - 2, 1, 5), colour);

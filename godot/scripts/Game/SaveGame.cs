@@ -25,6 +25,8 @@ public static class SaveGame
     const string ShotFile = "SCRNSHOT.PNG";
     /// <summary>The slots the save/load screen makes, numbered as Exult's exultNNbg.sav are.</summary>
     const string NumberedPrefix = "save";
+    /// <summary>The slot last saved or loaded: Exult's GAMEDAT, which Journey Onward goes on with.</summary>
+    const string LastFile = "LAST.TXT";
     const string TmpSuffix = ".tmp";
     const string OldSuffix = ".old";
 
@@ -93,6 +95,7 @@ public static class SaveGame
 
         KeepUnwritten(dir, tmp, keepShot: false);
         Swap(dir, tmp);
+        SetLast(slot);
         GD.Print($"saved to {dir}");
     }
 
@@ -220,6 +223,44 @@ public static class SaveGame
             .ThenByDescending(e => e.Info?.Details.Real)
             .ThenBy(e => e.Slot, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    /// <summary>Exult: every save and restore goes through GAMEDAT, so it holds the game last saved or loaded.</summary>
+    public static void SetLast(string slot)
+    {
+        try
+        {
+            Directory.CreateDirectory(U7Paths.SavesDir);
+            File.WriteAllText(Path.Combine(U7Paths.SavesDir, LastFile), slot);
+        }
+        catch (IOException ex)
+        {
+            GD.PushError($"{LastFile}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>init_gamedat(false)</c> for Journey Onward: the game last
+    /// saved or loaded; without that note, the newest saved game; null when
+    /// there is none (Exult's "You must start a new game first.").
+    /// </summary>
+    public static string? JourneySlot()
+    {
+        var last = Path.Combine(U7Paths.SavesDir, LastFile);
+        if (File.Exists(last) && File.ReadAllText(last).Trim() is { Length: > 0 } slot && Exists(slot))
+        {
+            return slot;
+        }
+
+        var games = List().Where(e => e.Readable).ToList();
+        if (Exists(QuickSlot))
+        {
+            games.Add(Describe(QuickSlot));
+        }
+
+        return games.OrderByDescending(e => e.Info?.Details.Real ?? Directory.GetLastWriteTime(SlotDir(e.Slot)))
+            .Select(e => e.Slot)
+            .FirstOrDefault();
     }
 
     /// <summary>Exult's <c>first_free</c>: the lowest numbered slot not taken.</summary>

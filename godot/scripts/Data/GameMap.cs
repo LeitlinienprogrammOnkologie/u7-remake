@@ -1088,7 +1088,8 @@ public sealed class GameMap
     /// under a roof (true) or not (false), Exult's <c>Find_spot_where</c>.
     /// Null if there is none.
     /// </summary>
-    public TileCoord? FindSpot(TileCoord pos, int dist, int shape, int frame, int maxDrop = 0, int dir = -1, bool? inside = null)
+    public TileCoord? FindSpot(TileCoord pos, int dist, int shape, int frame, int maxDrop = 0, int dir = -1, bool? inside = null,
+        int moverFlags = 0)
     {
         var info = Catalog[shape];
         var reflected = (frame & 32) != 0;
@@ -1097,7 +1098,8 @@ public sealed class GameMap
         var zs = info.DimZ;
         // MOVE_FLY here means: look upwards by max_drop too.
         const int flags = MoveFlags.Walk | MoveFlags.Fly;
-        if (!Blocking.IsBlockedArea(zs, pos.Tz, pos.Tx - xs + 1, pos.Ty - ys + 1, xs, ys, out var lift, flags, maxDrop))
+        if (!Blocking.IsBlockedArea(zs, pos.Tz, pos.Tx - xs + 1, pos.Ty - ys + 1, xs, ys, out var lift, flags, maxDrop) &&
+            Holds(pos, lift))
         {
             return pos.Wrapped() with { Tz = lift };
         }
@@ -1116,7 +1118,7 @@ public sealed class GameMap
             {
                 var p = SquareTile(pos, d, index % count);
                 if (!Blocking.IsBlockedArea(zs, p.Tz, p.Tx - xs + 1, p.Ty - ys + 1, xs, ys, out lift, flags, maxDrop) &&
-                    (inside is not { } want || want == (RoofHeight(p.Tx, p.Ty, lift) < InsideBelow)))
+                    (inside is not { } want || want == (RoofHeight(p.Tx, p.Ty, lift) < InsideBelow)) && Holds(p, lift))
                 {
                     return p with { Tz = lift };
                 }
@@ -1124,11 +1126,40 @@ public sealed class GameMap
         }
 
         return null;
+
+        // For an actor (moverFlags): at lift 0 its footprint's flats must hold it. Exult looks with
+        // MOVE_FLY, which lets any terrain through, so it can put a walker in water or inside a cave's
+        // solid rock, where it never moves again (its bug, fixed, not ported).
+        bool Holds(TileCoord p, int at)
+        {
+            if (moverFlags == 0 || at != 0)
+            {
+                return true;
+            }
+
+            for (var y = 0; y < ys; y++)
+            {
+                for (var x = 0; x < xs; x++)
+                {
+                    if (!Blocking.TerrainHolds(U7Constants.WrapTile(p.Tx - x), U7Constants.WrapTile(p.Ty - y), moverFlags))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
     }
 
-    /// <summary>Exult <c>find_spot(pos, dist, obj)</c>: a spot near <paramref name="pos"/> for the object, preferring the side it comes from.</summary>
-    public TileCoord? FindSpot(TileCoord pos, int dist, U7Object obj, int maxDrop = 0) =>
-        FindSpot(pos, dist, obj.Shape, obj.Frame, maxDrop, Directions.Of(pos.Ty - obj.Ty, obj.Tx - pos.Tx));
+    /// <summary>
+    /// Exult <c>find_spot(pos, dist, obj)</c>: a spot near <paramref name="pos"/>
+    /// for the object, preferring the side it comes from; for an actor one
+    /// whose flats it can stand on.
+    /// </summary>
+    public TileCoord? FindSpot(TileCoord pos, int dist, U7Object obj, int maxDrop = 0, bool? inside = null) =>
+        FindSpot(pos, dist, obj.Shape, obj.Frame, maxDrop, Directions.Of(pos.Ty - obj.Ty, obj.Tx - pos.Tx), inside,
+            obj.IsActor ? obj.TypeFlags & MoveFlags.All : 0);
 
     /// <summary>
     /// Exult <c>Get_square</c>: the i-th of the 8·<paramref name="dist"/> tiles
@@ -2327,11 +2358,21 @@ public sealed class GameMap
         }
     }
 
-    /// <summary>Exult <c>Game_map::create_ireg_object</c>: a new item that is not in the world yet.</summary>
+    /// <summary>
+    /// Exult <c>Game_map::create_ireg_object</c>: a new item that is not in
+    /// the world yet; a spellbook with no spells, its bookmark at 0 (Exult's
+    /// <c>Spellbook_object</c> made with zeroed circles and bookmark 0).
+    /// </summary>
     public U7Object CreateIregObject(int shape, int frame)
     {
         var obj = MakeObject(0, 0, 0, shape, frame, 0, ObjectKind.Ireg);
         obj.Removed = true;
+        if (Catalog[shape].IsSpellbookClass)
+        {
+            obj.SpellCircles = new byte[9];
+            obj.SpellBookmark = 0;
+        }
+
         return obj;
     }
 

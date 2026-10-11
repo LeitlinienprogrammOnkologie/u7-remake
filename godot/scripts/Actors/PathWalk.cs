@@ -190,8 +190,16 @@ public sealed class PathWalk : IActorAction
     public bool ReachedEnd { get; private set; }
     public TileCoord Dest => _path.Dest;
     public int StepsLeft => _path.StepsLeft;
+    /// <summary>Exult <c>following_smart_path</c>: an A* path, not a straight line.</summary>
+    public bool FollowingSmartPath => _path is AstarSteps;
     /// <summary>Called after every step the actor takes (from x, y).</summary>
     public Action<U7Object, int, int>? Stepped { get; set; }
+    /// <summary>Called after the walk's last step, the actor still moving (Exult's <c>get_party</c> walks call the party then).</summary>
+    public Action? LastStep { get; set; }
+    /// <summary>Exult <c>set_get_party</c>: the avatar's walk leads the party in formation.</summary>
+    public bool GetParty { get; set; }
+    /// <summary>Exult <c>Npc_actor::step</c>'s <c>schedule->set_blocked</c>: a step onto the tile was blocked.</summary>
+    public static Action<U7Object, TileCoord>? StepBlocked { get; set; }
 
     PathWalk(GameMap map, PathSteps path, int maxBlocked, int persistence = 0)
     {
@@ -275,6 +283,15 @@ public sealed class PathWalk : IActorAction
     public static PathWalk? CreatePath(GameMap map, TileCoord src, TileCoord dest, PathClient client,
         int maxBlocked = 3) =>
         AstarSteps.Find(client, src, dest) is { } path ? new PathWalk(map, path, maxBlocked) : null;
+
+    /// <summary>
+    /// Exult <c>Path_walking_actor_action::walk_to_tile</c> on a walk the
+    /// actor already has: a new walk to <paramref name="dest"/> with the same
+    /// kind of path (A* or a straight line) and the same retries; null if
+    /// there is no way (or, straight, already there).
+    /// </summary>
+    public PathWalk? WalkToTile(U7Object actor, TileCoord dest) =>
+        FollowingSmartPath ? Astar(_map, actor, dest, 0, _maxBlocked) : Line(_map, actor, dest, _maxBlocked);
 
     /// <summary>
     /// Exult <c>walk_to_tile(actor, here, dest, 0, true)</c> on the walk under
@@ -395,7 +412,13 @@ public sealed class PathWalk : IActorAction
 
         if (Step(actor, tile))
         {
-            return done ? 0 : curSpeed;
+            if (done)
+            {
+                LastStep?.Invoke();
+                return 0;
+            }
+
+            return curSpeed;
         }
 
         ReachedEnd = false;
@@ -428,6 +451,7 @@ public sealed class PathWalk : IActorAction
         var dy = Math.Sign(U7Constants.TileDelta(actor.Ty, tile.Ty));
         if (!ActorWalker.CanStep(_map, actor, ref tile))
         {
+            StepBlocked?.Invoke(actor, tile);
             Stop(actor);
             return false;
         }
@@ -456,11 +480,14 @@ public sealed class PathWalk : IActorAction
     /// <summary>
     /// Exult <c>Path_walking_actor_action::open_door</c>: open the door, then
     /// walk to the tile past its middle and face onwards; the door is closed
-    /// again when that is done. Only one door per walk.
+    /// again when that is done. Each door once per walk: Exult 1.12.1 never
+    /// clears its <c>door_sequence_complete</c>, so only a walk's first door
+    /// opens and a walk across town stops at the second (its bug, fixed here,
+    /// not ported).
     /// </summary>
     bool OpenDoor(U7Object actor, U7Object door)
     {
-        if (_handlingDoor || _doorSequenceComplete || ActivateDoor is null)
+        if (_handlingDoor || (_doorSequenceComplete && door == _door) || ActivateDoor is null)
         {
             return false;
         }

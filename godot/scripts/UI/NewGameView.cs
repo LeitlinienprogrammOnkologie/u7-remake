@@ -26,6 +26,8 @@ public sealed partial class NewGameView : Control
 
     /// <summary>The choice: the name and whether the avatar is a woman.</summary>
     public Action<string, bool>? Finished;
+    /// <summary>Esc: Exult's <c>new_game</c> gives up and the main menu shows again.</summary>
+    public Action? Cancelled;
 
     readonly ShapeCache _shapes;
     Texture2D? _title;
@@ -97,7 +99,7 @@ public sealed partial class NewGameView : Control
     }
 
     /// <summary>MAINSHP.FLX's title through INTROPAL.DAT's palette 6 (16-bit entries, 6-bit values).</summary>
-    static Texture2D? LoadTitle()
+    internal static Texture2D? LoadTitle()
     {
         var palette = new FlexFile(Path.Combine(U7Paths.StaticDir, "INTROPAL.DAT")).Get(MenuPalette);
         var raw6 = new byte[768];
@@ -108,6 +110,17 @@ public sealed partial class NewGameView : Control
 
         var menu = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "MAINSHP.FLX"));
         return menu.Decode(TitleShape, 0, U7Palette.ToRgb(raw6)) is { } image ? ImageTexture.CreateFromImage(image) : null;
+    }
+
+    public override void _Input(InputEvent @event)
+    {
+        if (@event is InputEventKey { Pressed: true, Echo: false, Keycode: Key.Escape } && Cancelled is { } cancelled)
+        {
+            Cancelled = null;
+            Finished = null;
+            GetViewport().SetInputAsHandled();
+            cancelled();
+        }
     }
 
     void ShowPortrait() => _portrait.Texture = _shapes.GetFace(AvatarLook.FaceShape, AvatarLook.FaceFrame(Female));

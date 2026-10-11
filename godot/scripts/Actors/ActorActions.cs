@@ -172,6 +172,32 @@ public sealed class IfElsePathAction : IActorAction
         }
     }
 
+    /// <summary>Exult <c>set_get_party</c> (<see cref="PathWalk.GetParty"/>).</summary>
+    public bool GetParty
+    {
+        get => _walk?.GetParty ?? false;
+        set
+        {
+            if (_walk is not null)
+            {
+                _walk.GetParty = value;
+            }
+        }
+    }
+
+    /// <summary>Called after the walk's last step (<see cref="PathWalk.LastStep"/>).</summary>
+    public Action? LastStep
+    {
+        get => _walk?.LastStep;
+        set
+        {
+            if (_walk is not null)
+            {
+                _walk.LastStep = value;
+            }
+        }
+    }
+
     /// <summary>Exult <c>set_failure</c>: also run when the path could not be found.</summary>
     public void SetFailure(IActorAction failure)
     {

@@ -37,6 +37,10 @@ public sealed class WeaponRecord
 
     public bool UsesCharges => Ammo == -2;
 
+    /// <summary>Exult <c>Weapon_info::get_base_xp_value</c> ("this formula is exact").</summary>
+    public int BaseXpValue =>
+        Damage + 2 * System.Numerics.BitOperations.PopCount((uint)Powers) + (Explodes ? 1 : 0) + (Autohit ? 10 : 0) + (NoBlocking ? 1 : 0);
+
     /// <summary>Exult <c>Weapon_info::get_base_strength</c> (its own "utter guesses"), for <c>ready_best_weapon</c>.</summary>
     public int BaseStrength
     {

@@ -20,99 +20,55 @@ namespace U7.Game;
 /// user's look (<see cref="Lettering"/>): MedievalSharp where Exult paints
 /// its fonts, the Guardian's red with a dark outline, the rest gold.
 /// </summary>
-public sealed class Endgame
+public sealed class Endgame : Show
 {
-    const int FadeTime = 30; // Exult c_fade_in_time, c_fade_out_time.
-    const int CreditsMidi = 4;
-    /// <summary>MedievalSharp's size, in picture pixels, for Exult's 14-pixel fonts and its 9-pixel menu font.</summary>
-    const float LineSize = 12.5f, MenuSize = 10f;
-
-    /// <summary>
-    /// The user's look for one of Exult's fonts: MedievalSharp at
-    /// <see cref="Size"/> picture pixels in its place, the lines as far apart
-    /// as the font's (<see cref="Layout"/>).
-    /// </summary>
-    sealed record Lettering(VgaFont Layout, float Size, Color Color, bool Outline)
-    {
-        public int TextHeight => Layout.TextHeight;
-
-        public EndgameView.Words Words(string text, float x, float y, int align) =>
-            new(text, x, y, Size, align, Color, Outline);
-    }
-
-    readonly EndgameView _view;
-    readonly MusicPlayer _music;
+    const int CreditsMidi = 4, QuotesMidi = 5;
     readonly int _totalHours;
     readonly IffFile _data = new(Path.Combine(U7Paths.StaticDir, "ENDGAME.DAT"));
-    readonly string _mainshpPath = Path.Combine(U7Paths.StaticDir, "MAINSHP.FLX");
-    readonly VgaShapeFile _mainshp;
-    readonly IEnumerator<double> _steps;
-    double _clock;
-    double _due;
-    bool _skip;
     /// <summary>Exult <c>playfli::play</c>'s ticks: when the next frame shows.</summary>
     double _ticks;
-    /// <summary>The credits' step under way: when it began and how long it lasts (0: no glide).</summary>
-    double _riseFrom;
-    double _riseMs;
+    /// <param name="credits">After a win, the credits (Exult <c>run_endgame</c>); the menu's View Endgame has none.</param>
+    public Endgame(EndgameView view, MusicPlayer music, int totalHours, bool success, bool credits = true) : this(view, music, totalHours) =>
+        _steps = (success ? Won(credits) : Lost()).GetEnumerator();
 
-    public bool Done { get; private set; }
+    Endgame(EndgameView view, MusicPlayer music, int totalHours) : base(view, music) => _totalHours = totalHours;
 
-    /// <summary>The credits roll: any key but Shift, or a click, ends them (Exult <c>TextScroller::run</c>).</summary>
-    public bool InCredits { get; private set; }
-
-    /// <summary>What shows, for the agent console.</summary>
-    public Action<string>? Log { get; set; }
-
-    public Endgame(EndgameView view, MusicPlayer music, int totalHours, bool success)
+    /// <summary>The main menu's View Credits or View Quotes (Exult <c>BG_Game::show_credits</c>, <c>show_quotes</c>).</summary>
+    public static Endgame Scroll(EndgameView view, MusicPlayer music, bool quotes)
     {
-        _view = view;
-        _music = music;
-        _totalHours = totalHours;
-        _mainshp = new VgaShapeFile(_mainshpPath);
-        _steps = (success ? Won() : Lost()).GetEnumerator();
+        var shown = new Endgame(view, music, 0);
+        shown._steps = (quotes ? shown.Quotes() : shown.Credits()).GetEnumerator();
+        return shown;
     }
 
-    /// <summary>The sequence's own time, at the step running (ms).</summary>
-    double Now => _due;
-
-    /// <summary>A key or click: Exult's <c>wait_delay</c> saw it.</summary>
-    public void Skip() => _skip = true;
-
-    public void Update(double delta)
+    /// <summary>
+    /// Exult's endgame input: in the movies <c>wait_delay</c> (Esc, Space,
+    /// Enter, a double-click) skips; in the credits any key but Shift, or a
+    /// click, ends them (<c>TextScroller::run</c>).
+    /// </summary>
+    public override void Input(InputEvent @event)
     {
-        if (Done)
+        switch (@event)
         {
-            return;
+            case InputEventKey { Pressed: true, Echo: false } key when InCredits
+                ? key.Keycode != Key.Shift
+                : key.Keycode is Key.Escape or Key.Space or Key.Enter or Key.KpEnter:
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left or MouseButton.Right } button when InCredits
+                ? !button.Pressed
+                : button is { Pressed: true, DoubleClick: true }:
+                Skip();
+                break;
         }
-
-        _clock += delta * 1000;
-        for (var guard = 0; guard < 100000 && _clock >= _due; guard++)
-        {
-            if (!_steps.MoveNext())
-            {
-                Done = true;
-                _music.Stop();
-                Log?.Invoke("ENDGAME over");
-                return;
-            }
-
-            _due += Math.Max(0, _steps.Current);
-        }
-
-        _view.Rise = _riseMs > 0 ? (float)Math.Clamp((_clock - _riseFrom) / _riseMs, 0, 1) : 0;
-    }
-
-    bool TakeSkip()
-    {
-        var skip = _skip;
-        _skip = false;
-        return skip;
     }
 
     /// <summary>Exult <c>run_endgame(true)</c>: the movies (skippable as a whole), then the credits.</summary>
-    IEnumerable<double> Won()
+    IEnumerable<double> Won(bool credits)
     {
+        foreach (var w in WaitForSpeech())
+        {
+            yield return w;
+        }
+
         _music.Stop();
         using (var movie = EndGame().GetEnumerator())
         {
@@ -139,6 +95,11 @@ public sealed class Endgame
         _music.Stop();
         _view.Clear();
         _view.Present();
+        if (!credits)
+        {
+            yield break;
+        }
+
         foreach (var w in Credits())
         {
             yield return w;
@@ -183,12 +144,14 @@ public sealed class Endgame
             }
         }
 
+        Voice(7);
         foreach (var w in Subtitled(fli1, 150, 204, end2, TextMessages.YouCannotDoThat))
         {
             yield return w;
         }
 
         StartScore(2);
+        Voice(8);
         foreach (var w in Subtitled(fli2, 0, 100, end2, TextMessages.DamnAvatar))
         {
             yield return w;
@@ -221,6 +184,8 @@ public sealed class Endgame
             yield return w;
         }
 
+        Voice(9);
+
         // The Guardian's threat over the last movie, round and round for 28 s.
         var starty = (EndgameView.ScreenHeight - end3.TextHeight * 8) / 2;
         Log?.Invoke("ENDGAME " + Lines(TextMessages.TextScreen0, 8));
@@ -235,7 +200,7 @@ public sealed class Endgame
                     yield return w;
                 }
 
-                for (var m = 0; m < 8; m++)
+                for (var m = 0; Subtitles && m < 8; m++)
                 {
                     Center(end3, TextMessages.Get(TextMessages.TextScreen0 + m), starty + end3.TextHeight * m);
                 }
@@ -400,6 +365,11 @@ public sealed class Endgame
     /// </summary>
     IEnumerable<double> Lost()
     {
+        foreach (var w in WaitForSpeech())
+        {
+            yield return w;
+        }
+
         Log?.Invoke("ENDGAME lost");
         _music.Stop();
         var menu = MenuFont();
@@ -475,17 +445,22 @@ public sealed class Endgame
     /// every 120 ms (Shift held: as fast as it can) until it is gone or a key
     /// or click ends it.
     /// </summary>
-    IEnumerable<double> Credits()
+    IEnumerable<double> Credits() => Scroller(0x0E, CreditsMidi, "credits");
+
+    /// <summary>Exult <c>BG_Game::show_quotes</c>: MAINSHP.FLX text 0x10 the same way, to the quotes' music.</summary>
+    IEnumerable<double> Quotes() => Scroller(0x10, QuotesMidi, "quotes");
+
+    IEnumerable<double> Scroller(int textEntry, int midi, string name)
     {
-        Log?.Invoke("ENDGAME credits");
+        Log?.Invoke("ENDGAME " + name);
         InCredits = true;
-        var text = MainshpText(0x0E);
+        var text = MainshpText(textEntry);
         var menu = MenuFont();
         _view.Brightness = 100;
         var (credits, creditsFrom) = IntroPalette(6);
         _view.SetPalette(credits, creditsFrom);
         _view.SetFade(1, 1);
-        _music.StartFile(Path.Combine(U7Paths.AssetsDir, "intro_endgame", "music_mt32", $"{CreditsMidi:D4}_INTRORDM.MID"),
+        _music.StartFile(Path.Combine(U7Paths.AssetsDir, "intro_endgame", "music_mt32", $"{midi:D4}_INTRORDM.MID"),
             -1, false);
         if (text.Count == 0)
         {
@@ -519,6 +494,7 @@ public sealed class Endgame
                     if (startline >= text.Count)
                     {
                         looping = false;
+                        WatchedThrough = true;
                         break;
                     }
                 }
@@ -544,7 +520,7 @@ public sealed class Endgame
 
             // Exult holds the first picture 200 ms, then rises a pixel every 120 ms (Shift held:
             // as fast as the screen shows); here everything glides up towards the next step meanwhile.
-            var step = first ? 200 : Input.IsKeyPressed(Key.Shift) ? 10 : 120;
+            var step = first ? 200 : Godot.Input.IsKeyPressed(Key.Shift) ? 10 : 120;
             first = false;
             _riseFrom = Now;
             _riseMs = step;
@@ -711,7 +687,11 @@ public sealed class Endgame
                 yield return w;
             }
 
-            _view.Paint(font.Words(text, EndgameView.ScreenWidth / 2f, y, 0));
+            if (Subtitles)
+            {
+                _view.Paint(font.Words(text, EndgameView.ScreenWidth / 2f, y, 0));
+            }
+
             _view.Present();
         }
     }
@@ -750,22 +730,6 @@ public sealed class Endgame
         }
     }
 
-    /// <summary>Exult <c>Palette::fade_in</c> / <c>fade_out</c>: a step every 20 ms, from black or to it.</summary>
-    IEnumerable<double> Fade(int cycles, bool fadeIn, byte[]? palette)
-    {
-        if (palette is not null)
-        {
-            _view.SetPalette(palette);
-        }
-
-        for (var i = 0; i <= cycles; i++)
-        {
-            _view.SetFade(fadeIn ? i : cycles - i, cycles);
-            _view.Present();
-            yield return 20;
-        }
-    }
-
     void Center(Lettering font, string text, int y) => _view.Paint(font.Words(text, EndgameView.ScreenWidth / 2f, y, 0));
 
     static string Lines(int first, int count) =>
@@ -776,75 +740,13 @@ public sealed class Endgame
 
     FlicFile Flic(int index) => new(_data.Get(index));
 
+    /// <summary>Exult <c>ExVoiceBuffer::play_it</c>: the Guardian's voice from ENDGAME.DAT (7-9), past its IFF header.</summary>
+    void Voice(int index) => Speech?.Play(_data.Get(index));
+
     /// <summary>Exult <c>Font::load</c> of an ENDGAME.DAT font (after its 8-byte name).</summary>
     VgaFont EndgameFont(int index, int horLead)
     {
         var entry = _data.Get(index);
         return VgaFont.FromShape(VgaShapeFile.SingleShape(entry.Length > 8 ? entry[8..] : entry), 0, horLead);
-    }
-
-    /// <summary>Exult's MENU_FONT (MAINSHP.FLX shape 9, lead 1), in the user's look.</summary>
-    Lettering MenuFont() => new(VgaFont.FromShape(_mainshp, 9, 1), MenuSize, UiTheme.GoldBright, false);
-
-    /// <summary>A text of MAINSHP.FLX, its lines (Exult's <c>TextScroller</c>: LF ends a line, a CR before it goes).</summary>
-    List<string> MainshpText(int index)
-    {
-        var lines = new List<string>();
-        if (!File.Exists(_mainshpPath))
-        {
-            return lines;
-        }
-
-        var text = Encoding.Latin1.GetString(new FlexFile(_mainshpPath).Get(index));
-        var start = 0;
-        int lf;
-        while ((lf = text.IndexOf('\n', start)) >= 0)
-        {
-            var end = lf > start && text[lf - 1] == '\r' ? lf - 1 : lf;
-            lines.Add(text[start..end]);
-            start = lf + 1;
-        }
-
-        return lines;
-    }
-
-    /// <summary>PALETTES.FLX 0, index 255 the border's black (Exult <c>border255</c>).</summary>
-    static byte[] DayPalette()
-    {
-        var pal = U7Palette.Raw6(0) ?? new byte[768];
-        pal[765] = pal[766] = pal[767] = 0;
-        return pal;
-    }
-
-    /// <summary>
-    /// A palette of INTROPAL.DAT, Exult <c>Palette::set_loaded</c>: a double
-    /// palette, the colours in the even bytes and what fades start from in
-    /// the odd ones.
-    /// </summary>
-    static (byte[] Palette, byte[] FadeFrom) IntroPalette(int index)
-    {
-        var path = Path.Combine(U7Paths.StaticDir, "INTROPAL.DAT");
-        var pal = new byte[768];
-        var from = new byte[768];
-        if (!File.Exists(path))
-        {
-            return (pal, from);
-        }
-
-        var entry = new FlexFile(path).Get(index);
-        if (entry.Length >= 1536)
-        {
-            for (var i = 0; i < 768; i++)
-            {
-                pal[i] = entry[i * 2];
-                from[i] = entry[i * 2 + 1];
-            }
-        }
-        else
-        {
-            entry[..Math.Min(768, entry.Length)].CopyTo(pal);
-        }
-
-        return (pal, from);
     }
 }

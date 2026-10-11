@@ -300,6 +300,11 @@ public sealed class SceneLighting
                             Add(obj, obj.Shape, obj.Frame, own, FigureCentre(obj), false, mid);
                         }
 
+                        if (obj.Casting == CastingMode.Show)
+                        {
+                            AddCastingLight(obj, mid);
+                        }
+
                         continue;
                     }
 
@@ -374,6 +379,20 @@ public sealed class SceneLighting
         var radius = MagicRadius(Mathf.Max(fi.Width, fi.Height)) / U7Constants.TileSize;
         var glow = new Glow(GlowKind.Magic, radius, MagicIntensity * look.Light, _colours.OfShape(obj.Shape));
         Add(obj, obj.Shape, frame, 0, FrameCentre(obj, frame), false, mid, glow);
+    }
+
+    /// <summary>The casting frames in a caster's hand light round it as magic does (cosmetic, the user's magic glows), in their own colour.</summary>
+    void AddCastingLight(U7Object caster, Vector2 mid)
+    {
+        if (_colours is null)
+        {
+            return;
+        }
+
+        var fi = _catalog[caster.CastingShape].GetFrame(1);
+        var radius = MagicRadius(Mathf.Max(fi.Width, fi.Height)) / U7Constants.TileSize;
+        var glow = new Glow(GlowKind.Magic, radius, MagicIntensity * GlowTable.Magic.Light, _colours.OfShape(caster.CastingShape));
+        Add(caster, caster.CastingShape, 1, 0, FigureCentre(caster), false, mid, glow);
     }
 
     /// <summary>

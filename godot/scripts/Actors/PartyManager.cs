@@ -42,21 +42,62 @@ public sealed class PartyManager
     public IReadOnlyList<U7Object> Members => _members;
 
     /// <summary>
-    /// Exult <c>Main_actor::get_followers</c>: when the avatar sets off,
-    /// members not fighting, waiting or loitering follow again (those sitting
-    /// on a barge or a chair get up).
+    /// Exult <c>Party_manager::dead_party</c> (16 at most): members who died,
+    /// in order, back in the party if raised. Exult saves only the living, so
+    /// a load forgets them.
     /// </summary>
-    public void CallFollowers()
+    readonly List<U7Object> _dead = new();
+    const int MaxDeadParty = 16;
+    public IReadOnlyList<U7Object> DeadMembers => _dead;
+
+    /// <summary>
+    /// Exult <c>Party_manager::update_party_status</c> for an actor that died
+    /// or was raised: a dead member goes to the dead list, a raised one on it
+    /// back into the party.
+    /// </summary>
+    public void UpdatePartyStatus(U7Object npc)
+    {
+        if (npc.IsDead)
+        {
+            if (RemoveFromParty(npc) && _dead.Count < MaxDeadParty && !_dead.Contains(npc))
+            {
+                _dead.Add(npc);
+            }
+        }
+        else if (_dead.Remove(npc))
+        {
+            AddToParty(npc);
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Main_actor::get_followers</c> (when the avatar sets off on a
+    /// path, stops, ends a walk in formation or is teleported): members not
+    /// fighting, waiting or loitering follow again (those sitting on a barge
+    /// or a chair get up), and those already following set off after the
+    /// avatar (<see cref="FollowAvatarSchedule.Follow"/>). With
+    /// <paramref name="follow"/> false only the first: as a held walk starts,
+    /// which Exult leaves to the formation (the remake calls the party along
+    /// then too, as Exult's walk without formation does).
+    /// </summary>
+    public void CallFollowers(bool follow = true)
     {
         foreach (var npc in _members)
         {
             if (npc.GetFlag(ObjFlag.Asleep) || npc.IsDead ||
-                npc.ScheduleType is ScheduleType.Combat or ScheduleType.Wait or ScheduleType.Loiter or ScheduleType.FollowAvatar)
+                npc.ScheduleType is ScheduleType.Combat or ScheduleType.Wait or ScheduleType.Loiter)
             {
                 continue;
             }
 
-            Schedules?.SetScheduleType(npc, ScheduleType.FollowAvatar);
+            if (npc.ScheduleType != ScheduleType.FollowAvatar)
+            {
+                Schedules?.SetScheduleType(npc, ScheduleType.FollowAvatar);
+            }
+            else if (follow && Schedules?.ScheduleOf(npc) is FollowAvatarSchedule schedule)
+            {
+                schedule.Follow(_avatar);
+            }
         }
     }
     public int Count => _members.Count;
@@ -81,6 +122,7 @@ public sealed class PartyManager
             return false;
         }
 
+        _dead.Remove(npc); // Exult: "Just to be sure."
         npc.Alignment = Alignment.Good;
         npc.SetFlag(ObjFlag.InParty);
         npc.SetFlagWithContents(ObjFlag.OkayToTake);
@@ -111,13 +153,23 @@ public sealed class PartyManager
         if (saved is not null)
         {
             // Exult: the members saved in usecode.dat, in their order; bad entries are skipped
-            // and the dead go to the dead-party list (not kept here).
+            // and the dead go to the dead-party list.
             _members.Clear();
+            _dead.Clear();
             foreach (var num in saved)
             {
-                if (num <= 0 || num >= _npcs.Count || _npcs[num] is not { } member || _members.Contains(member) ||
-                    member.IsDead)
+                if (num <= 0 || num >= _npcs.Count || _npcs[num] is not { } member || _members.Contains(member))
                 {
+                    continue;
+                }
+
+                if (member.IsDead)
+                {
+                    if (_dead.Count < MaxDeadParty && !_dead.Contains(member))
+                    {
+                        _dead.Add(member);
+                    }
+
                     continue;
                 }
 
@@ -168,7 +220,8 @@ public sealed class PartyManager
             }
 
             var sched = npc.ScheduleType;
-            if (sched is ScheduleType.Combat or ScheduleType.Wait or ScheduleType.Loiter)
+            if (sched is ScheduleType.Combat or ScheduleType.Wait or ScheduleType.Loiter ||
+                Schedules?.InQueue(npc) == true) // Already walking?
             {
                 continue;
             }
@@ -307,19 +360,32 @@ public sealed class PartyManager
         return difftz * difftz <= 1;
     }
 
-    /// <summary>Exult <c>Get_cost</c>: squared distance to the leader, plus a penalty when the way on is blocked.</summary>
-    int Cost(U7Object npc, U7Object leader, int tx, int ty, out int nz)
+    /// <summary>
+    /// Exult <c>Get_cost</c>: squared distance to the leader, plus a penalty
+    /// when the way on is blocked. A tile a member later in the party stands
+    /// on costs a point more, to swap places with it (<paramref name="inWay"/>).
+    /// </summary>
+    int Cost(U7Object npc, U7Object leader, int tx, int ty, out int nz, out U7Object? inWay)
     {
+        inWay = null;
+        var cost = 0;
         if (!ActorWalker.ResolveStep(_map, npc, tx, ty, npc.Tz, out nz))
         {
-            return MaxCost;
+            inWay = MemberBlocking(tx, ty, PartyId(npc) + 1);
+            if (inWay is null)
+            {
+                return MaxCost;
+            }
+
+            nz = inWay.Tz;
+            cost += 1; // One point to swap.
         }
 
         var dz = nz - leader.Tz;
         var dtx = U7Constants.TileDelta(tx, leader.Tx);
         var dty = U7Constants.TileDelta(ty, leader.Ty);
         var xy2 = dtx * dtx + dty * dty;
-        var cost = dz * dz + xy2;
+        cost += dz * dz + xy2;
         if (xy2 > 2 && !ClearToLeader(npc, leader, tx, ty, nz))
         {
             cost += 16;
@@ -328,7 +394,28 @@ public sealed class PartyManager
         return cost;
     }
 
-    /// <summary>Exult <c>Take_best_step</c>: try the wanted direction and its neighbours, cheapest wins.</summary>
+    /// <summary>Exult <c>Find_member_blocking</c>: the member, from party id <paramref name="first"/> on, standing on the tile.</summary>
+    U7Object? MemberBlocking(int tx, int ty, int first)
+    {
+        for (var i = Math.Max(0, first); i < _members.Count; i++)
+        {
+            var member = _members[i];
+            var dx = U7Constants.TileDelta(tx, member.Tx);
+            var dy = U7Constants.TileDelta(ty, member.Ty);
+            if (dx >= 0 && dx < Math.Max(1, member.DimX) && dy >= 0 && dy < Math.Max(1, member.DimY))
+            {
+                return member;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Exult <c>Take_best_step</c>: try the wanted direction and its
+    /// neighbours, cheapest wins; a member in the way of the best swaps
+    /// places with the walker.
+    /// </summary>
     bool TakeBestStep(U7Object npc, U7Object leader, int dir, out int moved)
     {
         var bestCost = MaxCost + 8;
@@ -336,12 +423,13 @@ public sealed class PartyManager
         var bestTx = 0;
         var bestTy = 0;
         var bestTz = 0;
+        U7Object? bestInWay = null;
         foreach (var i in DeltaDir)
         {
             var diri = (dir + i) % 8;
             var tx = U7Constants.WrapTile(npc.Tx + Directions.Dx[diri]);
             var ty = U7Constants.WrapTile(npc.Ty + Directions.Dy[diri]);
-            var cost = Cost(npc, leader, tx, ty, out var nz);
+            var cost = Cost(npc, leader, tx, ty, out var nz, out var inWay);
             if (cost < bestCost)
             {
                 bestCost = cost;
@@ -349,6 +437,7 @@ public sealed class PartyManager
                 bestTx = tx;
                 bestTy = ty;
                 bestTz = nz;
+                bestInWay = inWay;
             }
         }
 
@@ -358,26 +447,40 @@ public sealed class PartyManager
             return false;
         }
 
-        ActorWalker.MoveTo(_map, npc, bestTx, bestTy, bestTz, bestDir);
+        if (bestInWay is null)
+        {
+            ActorWalker.MoveTo(_map, npc, bestTx, bestTy, bestTz, bestDir);
+            return true;
+        }
+
+        // Swap positions.
+        var (px, py, pz) = (npc.Tx, npc.Ty, npc.Tz);
+        ActorWalker.MoveTo(_map, npc, bestInWay.Tx, bestInWay.Ty, bestInWay.Tz, bestDir);
+        _map.MoveObject(bestInWay, px, py, pz);
         return true;
     }
 
-    /// <summary>Exult <c>Game_window::teleport_party</c>: bring the party along, each to a free spot nearby.</summary>
+    /// <summary>
+    /// Exult <c>Game_window::teleport_party</c>: bring the party along, each
+    /// to a free spot nearby; those waiting stay, and so do those who can't
+    /// act (asleep, paralysed, knocked out: Exult's <c>can_act</c>).
+    /// </summary>
     public void FollowTeleport()
     {
-        var i = 0;
+        var t = new TileCoord(_avatar.Tx, _avatar.Ty, _avatar.Tz);
         foreach (var npc in _members)
         {
-            if (npc.IsDead || npc.ScheduleType == ScheduleType.Wait)
+            if (npc.ScheduleType == ScheduleType.Wait || !CombatSchedule.CanAct(npc))
             {
                 continue;
             }
 
-            var ox = XOffs[i % XOffs.Length];
-            var oy = YOffs[i % YOffs.Length];
-            i++;
-            var spot = _map.FindSpot(_avatar.Tx + ox, _avatar.Ty + oy, _avatar.Tz, 8)
-                       ?? new TileCoord(_avatar.Tx, _avatar.Ty, _avatar.Tz);
+            // Exult: a spot within 8 tiles, up to a lift lower or higher; with none the member stays.
+            if (_map.FindSpot(t, 8, npc.Shape, npc.Frame, 1, moverFlags: npc.TypeFlags & MoveFlags.All) is not { } spot)
+            {
+                continue;
+            }
+
             if (Schedules is { } s)
             {
                 s.TeleportNpc(npc, spot);
@@ -388,5 +491,7 @@ public sealed class PartyManager
                 ActorWalker.Stand(npc, 4);
             }
         }
+
+        CallFollowers();
     }
 }

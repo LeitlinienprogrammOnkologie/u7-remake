@@ -47,12 +47,29 @@ public sealed class GumpManager
     public VgaShapeFile? GumpsVga { get; set; }
     /// <summary>Runs a spell's usecode (function, caster) as a double-click.</summary>
     public Action<int, U7Object>? CastSpell { get; set; }
+    /// <summary>
+    /// Exult <c>Gump_manager::prompt_for_number</c> for a stack's drop: asks
+    /// how many of its quantity (the stack named), then calls back with the
+    /// number (0: none). Null drops whole stacks.
+    /// </summary>
+    public Action<int, U7Object, Action<int>>? AskQuantity { get; set; }
+    /// <summary>Exult's Ctrl at a drop: the other of <c>alternate_drop</c> (off), here the whole stack without asking.</summary>
+    public Func<bool> AlternateDrop { get; set; } = () => false;
     /// <summary>Exult <c>failed_copy_protection</c>: the stats say "Oink!".</summary>
     public Func<bool> FailedCopyProtection { get; set; } = () => false;
     ItemQuantity? _quantities;
     public ItemQuantity Quantities => _quantities ??= new ItemQuantity(Catalog, Map, null, null);
 
     public IReadOnlyList<Gump> Open => _open;
+
+    /// <summary>
+    /// Exult <c>Gump_manager::kbd_focus</c>: the gump keys go to first, set
+    /// as a gump opens or is raised (none if that gump takes no keys) and
+    /// cleared when it closes.
+    /// </summary>
+    public Gump? KeyboardFocus { get; private set; }
+
+    void SetKeyboardFocus(Gump gump) => KeyboardFocus = gump.HandlesKeys ? gump : null;
     public bool ShowingGumps => _open.Count > 0;
     public bool GumpMode => _nonPersistent > 0;
     public bool IsDragging => Drag is { Moved: true } || Drag?.Button is not null;
@@ -148,6 +165,7 @@ public sealed class GumpManager
 
         gump.Manager = this;
         _open.Add(gump);
+        SetKeyboardFocus(gump);
         if (!gump.Persistent)
         {
             _nonPersistent++;
@@ -160,6 +178,7 @@ public sealed class GumpManager
     {
         _open.Remove(gump);
         _open.Add(gump);
+        SetKeyboardFocus(gump);
     }
 
     public void Close(Gump gump)
@@ -173,6 +192,11 @@ public sealed class GumpManager
         if (!_open.Remove(gump))
         {
             return;
+        }
+
+        if (KeyboardFocus == gump)
+        {
+            KeyboardFocus = null;
         }
 
         if (!gump.Persistent && _nonPersistent > 0)
@@ -436,35 +460,98 @@ public sealed class GumpManager
         }
 
         var obj = drag.Object;
-        var okayToMove = obj.GetFlag(ObjFlag.OkayToTake);
         var dest = FindGump(mx, my, view);
-        if (dest is not null)
+        var quantity = Inventory.GetQuantity(obj, Catalog);
+        // Exult Dragging_info::drop: a stack dropped anywhere but its own gump asks how many (Ctrl: all of it).
+        if (quantity > 1 && (dest is null || dest != drag.SourceGump) && !AlternateDrop() && AskQuantity is { } ask)
         {
-            if (RefuseDrop(dest, obj) is { } why)
-            {
-                FlashMouse?.Invoke(why);
-                PutBack(drag);
-            }
-            else if (!dest.Add(view, obj, mx, my))
-            {
-                FlashMouse?.Invoke(MouseShape.WontFit);
-                PutBack(drag);
-            }
-            else
-            {
-                if (dest != drag.SourceGump && !okayToMove)
-                {
-                    PossibleTheft?.Invoke();
-                }
-
-                Dropped(obj, drag);
-            }
-
+            ask(quantity, obj, count => DropCount(drag, view, mx, my, dest, count));
             return true;
         }
 
-        DropInWorld(drag);
+        DropCount(drag, view, mx, my, dest, quantity);
         return true;
+    }
+
+    /// <summary>
+    /// Exult <c>Dragging_info::drop</c> with the number chosen: none puts the
+    /// stack back; fewer than all drops a copy of that many (okay to take and
+    /// temporary as the stack), and if it lands, the stack, so many fewer, goes
+    /// back; refused, the stack goes back whole (less what a gump took of the
+    /// copy). <paramref name="dest"/> is the gump under the mouse, null for the map.
+    /// </summary>
+    public void DropCount(DragState drag, GumpView view, int mx, int my, Gump? dest, int count)
+    {
+        if (drag.Object is not { } obj)
+        {
+            return;
+        }
+
+        var quantity = Inventory.GetQuantity(obj, Catalog);
+        if (count <= 0)
+        {
+            PutBack(drag);
+            return;
+        }
+
+        var piece = obj;
+        if (count < quantity)
+        {
+            piece = Map.CreateIregObject(obj.Shape, obj.Frame);
+            Quantities.Modify(piece, count - 1, out _);
+            if (obj.GetFlag(ObjFlag.OkayToTake))
+            {
+                piece.SetFlag(ObjFlag.OkayToTake);
+            }
+
+            if (obj.GetFlag(ObjFlag.Temporary))
+            {
+                piece.SetFlag(ObjFlag.Temporary);
+            }
+        }
+
+        if (dest is not null)
+        {
+            if (RefuseDrop(dest, piece) is { } why)
+            {
+                FlashMouse?.Invoke(why);
+                PutBack(drag);
+                return;
+            }
+
+            if (!dest.Add(view, piece, mx, my))
+            {
+                // Exult: watch for a partial drop (what of the copy a stack in the gump took in is gone from the stack).
+                var taken = piece == obj ? 0 : count - Inventory.GetQuantity(piece, Catalog);
+                if (taken > 0)
+                {
+                    Quantities.Modify(obj, -taken, out _);
+                }
+
+                FlashMouse?.Invoke(MouseShape.WontFit);
+                PutBack(drag);
+                return;
+            }
+
+            if (dest != drag.SourceGump && !obj.GetFlag(ObjFlag.OkayToTake))
+            {
+                PossibleTheft?.Invoke();
+            }
+        }
+        else if (DropInWorld(drag, piece) == MapDrop.Refused)
+        {
+            return;
+        }
+
+        if (piece == obj)
+        {
+            Dropped(obj, drag);
+            return;
+        }
+
+        // Exult: subtract the quantity moved and put back the rest.
+        Quantities.Modify(obj, -count, out _);
+        PutBack(drag);
     }
 
     /// <summary>The dragged thing leaves the world or its container (the drag's first move).</summary>
@@ -486,9 +573,10 @@ public sealed class GumpManager
     /// taken by what it was dropped on, or moved more than 2 tiles in the
     /// world, it may be a theft.
     /// </summary>
-    public MapDrop DropInWorld(DragState drag)
+    /// <param name="piece">What is dropped: the dragged thing, or a part of its stack split off (then the stack is left to the caller).</param>
+    public MapDrop DropInWorld(DragState drag, U7Object? piece = null)
     {
-        var obj = drag.Object!;
+        var obj = piece ?? drag.Object!;
         var result = DropOnMap?.Invoke(obj, drag) ?? MapDrop.Refused;
         if (result == MapDrop.Refused)
         {
@@ -503,7 +591,11 @@ public sealed class GumpManager
             PossibleTheft?.Invoke();
         }
 
-        Dropped(obj, drag);
+        if (obj == drag.Object)
+        {
+            Dropped(obj, drag);
+        }
+
         return result;
     }
 
@@ -514,6 +606,9 @@ public sealed class GumpManager
             LiftedFromWorld?.Invoke(obj, drag);
         }
     }
+
+    /// <summary>The cursor's flash if a thing in the world can't be picked up (<see cref="RefuseDrag"/>), or null.</summary>
+    public int? RefuseWorldDrag(U7Object obj) => RefuseDrag(new DragState { Object = obj, FromWorld = true }, obj);
 
     /// <summary>
     /// Exult <c>Dragging_info::start</c>: the cursor's flash if the thing can't

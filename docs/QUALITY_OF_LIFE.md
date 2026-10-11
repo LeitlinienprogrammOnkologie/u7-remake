@@ -45,7 +45,7 @@ The current remake tints the daytime art blue at night. The modernized game brin
 
 ### Optional touches
 
-Off by default, each a single checkbox: soft glow from torches, fireplaces and lamps at night; a gentle CRT scanline filter; a smoothing filter for the in-between zoom levels. Nothing redraws the art. There are no HD sprites and no AI upscale, and there will not be.
+Off by default, each a single checkbox: soft glow from torches, fireplaces and lamps at night; a gentle CRT scanline filter; a smoothing filter for the in-between zoom levels. The art redrawn at four times the resolution by an AI upscaler, made on the player's machine from their own files and turned back into palette art, so Exult's palettes, colour cycling and translucency still apply (decided 2026-10-10; PROGRESS.md, "Hi-res art").
 
 ## 4. Moving around
 

@@ -36,8 +36,8 @@ public sealed class ScheduleRunner
     public Random Rng { get; } = new();
     /// <summary>Party ids for follower spacing (Exult <c>Actor::follow</c>).</summary>
     public PartyManager? Party { get; set; }
-    /// <summary>True while the avatar is walking; formation stepping drives followers then.</summary>
-    public Func<bool>? AvatarMoving { get; set; }
+    /// <summary>The player's walk of the avatar, if one is under way (Exult's avatar <c>action</c>).</summary>
+    public Func<IActorAction?>? AvatarWalk { get; set; }
     /// <summary>Exult <c>Actor::in_usecode_control</c>: the schedule waits while a script runs the NPC.</summary>
     public Func<U7Object, bool>? InUsecodeControl { get; set; }
     /// <summary>Queues the NPC's usecode with the npc_proximity event (Exult runs it from a script).</summary>
@@ -62,13 +62,26 @@ public sealed class ScheduleRunner
     public EffectsManager? Effects { get; set; }
     /// <summary>Exult <c>call_usecode(fun, item, double_click)</c>; false if usecode cannot run now.</summary>
     public Func<int, U7Object, bool>? CallUsecode { get; set; }
+    /// <summary>
+    /// Exult <c>Spellbook_object::do_spell(act, true)</c>: the caster casts
+    /// the book's bookmarked spell at its combat target (the spell's usecode
+    /// with the weapon event, its click answered with the target); false if
+    /// it couldn't.
+    /// </summary>
+    public Func<U7Object, U7Object, bool>? CastBookmark { get; set; }
+    /// <summary>Exult <c>Usecode_script::find(npc)->get_length()</c>: the newest script on the actor's length, 0 for none.</summary>
+    public Func<U7Object, int>? ScriptLength { get; set; }
     /// <summary>Whether usecode is running (Exult <c>in_usecode</c>).</summary>
     public Func<bool>? IsInUsecode { get; set; }
     public bool InUsecode => IsInUsecode?.Invoke() ?? false;
     /// <summary>True while the player is walking the avatar (an action of the player's).</summary>
     public Func<bool>? AvatarBusy { get; set; }
-    /// <summary>The avatar stepped (from x, y): eggs and the party follow.</summary>
+    /// <summary>The avatar stepped (from x, y): eggs react.</summary>
     public Action<U7Object, int, int>? AvatarMoved { get; set; }
+    /// <summary>The avatar stepped (from x, y) on a walk leading the party: the formation steps (Exult <c>Party_manager::get_followers</c>).</summary>
+    public Action<int, int>? AvatarLedParty { get; set; }
+    /// <summary>A <c>path_run_usecode</c> walk of the avatar's took its last step: the party is called along (Exult <c>Main_actor::get_followers</c>).</summary>
+    public Action? AvatarWalkEnded { get; set; }
     /// <summary>Exult <c>Game_object::activate</c>: the object's usecode as a double-click; false if usecode cannot run now.</summary>
     public Func<U7Object, bool>? Activate { get; set; }
     /// <summary>Milliseconds of game play (Exult <c>Game::get_ticks</c>, for schedule timers).</summary>
@@ -97,6 +110,7 @@ public sealed class ScheduleRunner
         }
 
         clock.SlotChanged += _ => ApplySlot(pathIfNearby: true);
+        PathWalk.StepBlocked = (npc, tile) => BrainOf(npc)?.Schedule?.SetBlocked(tile);
     }
 
     /// <summary>
@@ -271,7 +285,6 @@ public sealed class ScheduleRunner
             else
             {
                 BeginType(b, npc.ScheduleType, dest, alreadyThere: true);
-                b.Center = new TileCoord(npc.Tx, npc.Ty, npc.Tz);
             }
 
             b.WasNearby = nearby;
@@ -587,7 +600,7 @@ public sealed class ScheduleRunner
     /// <summary>Exult <c>Npc_proximity_handler::add</c>: the wait until the next look, in seconds.</summary>
     double ProximityDelay(U7Object npc, int extraTicks)
     {
-        var msecs = npc.Alignment >= Alignment.Evil ? Rng.Next(2000) : 2000 + Rng.Next(4000);
+        var msecs = npc.EffectiveAlignment >= Alignment.Evil ? Rng.Next(2000) : 2000 + Rng.Next(4000);
         return (msecs * U7Constants.StandardDelayMs / 100 + extraTicks * U7Constants.StandardDelayMs) / 1000.0;
     }
 
@@ -902,10 +915,11 @@ public sealed class ScheduleRunner
     /// <summary>Exult <c>Npc_actor::handle_event</c>: the action's next step, or the schedule's <c>now_what</c>.</summary>
     void RunBrain(NpcBrain b, double delta)
     {
-        if (b == _avatarBrain && b.CurrentAction is null && !b.Queued)
+        var queuedOnly = KeptInQueue(b);
+        if (queuedOnly && b.CurrentAction is null && !b.Queued)
         {
-            // Exult Main_actor::handle_event: out of the time queue, the avatar waits for a start
-            // (a sitter moved to another throne stays seated there).
+            // Exult: out of the time queue, the avatar waits for a start (a sitter moved to
+            // another throne stays seated there) and a follower for one or a formation step.
             return;
         }
 
@@ -916,6 +930,15 @@ public sealed class ScheduleRunner
             return;
         }
 
+        if (b != _avatarBrain && CannotAct(b.Npc))
+        {
+            // Exult Npc_actor::handle_event: paralysed, dead, knocked out, or asleep outside
+            // the sleep schedule, an NPC does nothing and looks again after a standard delay
+            // (a sleep-safe monster beaten to 0 isn't asleep, but still knocked out).
+            b.StepTimer = _stepInterval;
+            return;
+        }
+
         if (InUsecodeControl?.Invoke(b.Npc) ?? false)
         {
             // Exult Actor::handle_event: keep trying every standard delay.
@@ -923,21 +946,15 @@ public sealed class ScheduleRunner
             return;
         }
 
-        if (b.CurrentAction is not null && b.Npc.ScheduleType == ScheduleType.FollowAvatar &&
-            (AvatarMoving?.Invoke() ?? false))
-        {
-            // The avatar walks again: formation stepping takes over.
-            b.StopAction();
-        }
-
         if (b.CurrentAction is { } action)
         {
             if (b == _avatarBrain)
             {
-                // The avatar's own steps set off eggs and lead the party.
+                // The avatar's own steps set off eggs; usecode's walks with the companions
+                // (Exult path_run_usecode's set_get_party) lead the party in formation.
                 if (action is PathWalk { Stepped: null } walk)
                 {
-                    walk.Stepped = AvatarMoved;
+                    walk.Stepped = (a, fx, fy) => AvatarStepped(a, fx, fy, walk.GetParty);
                 }
                 else if (action is ApproachAction { Stepped: null } approach)
                 {
@@ -945,7 +962,7 @@ public sealed class ScheduleRunner
                 }
                 else if (action is IfElsePathAction { Stepped: null } ifElse)
                 {
-                    ifElse.Stepped = AvatarMoved;
+                    ifElse.Stepped = (a, fx, fy) => AvatarStepped(a, fx, fy, ifElse.GetParty);
                 }
             }
 
@@ -967,13 +984,84 @@ public sealed class ScheduleRunner
         }
 
         b.StepTimer = _stepInterval;
-        if (b == _avatarBrain)
+        if (queuedOnly)
         {
-            // Exult Main_actor::handle_event asks the schedule once; only a start queues the avatar again.
+            // Exult handle_event asks the schedule once; only a start queues the actor again.
             b.Queued = false;
         }
 
         (b.Schedule ??= Create(b, b.Npc.ScheduleType)).NowWhat();
+    }
+
+    void AvatarStepped(U7Object avatar, int fromTx, int fromTy, bool getParty)
+    {
+        AvatarMoved?.Invoke(avatar, fromTx, fromTy);
+        if (getParty)
+        {
+            AvatarLedParty?.Invoke(fromTx, fromTy);
+        }
+    }
+
+    static bool CannotAct(U7Object npc) =>
+        npc.GetFlag(ObjFlag.Paralyzed) || npc.IsDead || npc.GetProp(ActorProp.Health) <= 0 ||
+        (npc.GetFlag(ObjFlag.Asleep) && npc.ScheduleType != ScheduleType.Sleep);
+
+    /// <summary>
+    /// Whether the brain keeps Exult's time queue (<see cref="NpcBrain.Queued"/>):
+    /// the avatar, and the party members following it, whom the formation
+    /// steps move while they are out of it (Exult <c>Party_manager::get_followers</c>)
+    /// and the avatar's walks call along (<c>Main_actor::get_followers</c>).
+    /// Others following are asked at every idle step, as nothing else would
+    /// set them off again.
+    /// </summary>
+    bool KeptInQueue(NpcBrain b) =>
+        b == _avatarBrain || (b.Npc.ScheduleType == ScheduleType.FollowAvatar && Party?.IsInParty(b.Npc) == true);
+
+    /// <summary>
+    /// Exult <c>in_queue()</c> for a party member: walking on its own or
+    /// about to look again, so the formation leaves it alone.
+    /// </summary>
+    public bool InQueue(U7Object npc) =>
+        BrainOf(npc) is { } b && (b.CurrentAction is not null || (b.Queued && KeptInQueue(b)));
+
+    /// <summary>The NPC's schedule object (made for its schedule type if it has none yet).</summary>
+    public Schedule? ScheduleOf(U7Object npc) => BrainOf(npc) is { } b ? b.Schedule ??= Create(b, b.Npc.ScheduleType) : null;
+
+    /// <summary>Exult <c>Actor::action</c>: the player's walk of the avatar, else what its schedule or usecode has it do.</summary>
+    public IActorAction? ActionOf(U7Object actor) =>
+        actor == Avatar ? AvatarWalk?.Invoke() ?? _avatarBrain?.CurrentAction : BrainOf(actor)?.CurrentAction;
+
+    /// <summary>Exult <c>Actor::get_dest</c>: where the actor's walk goes, else where it stands.</summary>
+    public TileCoord DestOf(U7Object actor) =>
+        ActionOf(actor) is PathWalk walk ? walk.Dest : new TileCoord(actor.Tx, actor.Ty, actor.Tz);
+
+    /// <summary>
+    /// Exult <c>Actor::approach_another</c>: a free spot within 8 tiles of the
+    /// other, walked to at twice the usual speed, coming on from off the screen
+    /// if the walker is off it. False if there is no spot or way.
+    /// </summary>
+    public bool ApproachAnother(U7Object actor, U7Object other)
+    {
+        if (Map.FindSpot(new TileCoord(other.Tx, other.Ty, other.Tz), 8, actor.Shape, actor.Frame,
+                moverFlags: actor.TypeFlags & MoveFlags.All) is not { } dest)
+        {
+            return false;
+        }
+
+        var window = WindowTiles;
+        var src = new TileCoord(actor.Tx, actor.Ty, actor.Tz);
+        if (!Pathfinder.HasTile(window, src.Tx - src.Tz / 2, src.Ty - src.Tz / 2))
+        {
+            src = new TileCoord(-1, -1, 0);
+        }
+
+        if (PathWalk.ToTile(Map, actor, src, dest, window) is not { } walk)
+        {
+            return false;
+        }
+
+        StartAction(actor, walk, U7Constants.StandardDelayMs / 2, 0);
+        return true;
     }
 
     /// <summary>
@@ -1002,7 +1090,6 @@ public sealed class ScheduleRunner
     public void BeginType(NpcBrain b, int type, TileCoord dest, bool alreadyThere)
     {
         b.Dest = dest;
-        b.Center = dest;
         b.Npc.ScheduleDestTx = dest.Tx;
         b.Npc.ScheduleDestTy = dest.Ty;
         b.Npc.ScheduleDestTz = dest.Tz;
@@ -1032,6 +1119,10 @@ public sealed class ScheduleRunner
         b.Schedule?.Ending(type);
         if (schedule is null)
         {
+            // Exult's schedules keep the tile the NPC stands on as their centre (Loiter_schedule's
+            // center(n->get_tile())): usecode's loiter for the sleeping party's members strolls round
+            // where each one is, not round an old schedule spot.
+            b.Center = new TileCoord(b.Npc.Tx, b.Npc.Ty, b.Npc.Tz);
             schedule = Create(b, type, prev);
             schedule.Begin();
         }

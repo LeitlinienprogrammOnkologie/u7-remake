@@ -100,6 +100,9 @@ public static class TextMessages
     /// <summary>A party member, when the avatar would nap in someone's bed (Exult <c>first_bed_occupied</c>).</summary>
     public const int FirstBedOccupied = 0x10a;
     public const int LastBedOccupied = 0x10c;
+    /// <summary>A party member left far behind, put back beside the avatar (Exult <c>first_catchup</c>).</summary>
+    public const int FirstCatchup = 0x10d;
+    public const int LastCatchup = 0x10f;
 
     /// <summary>Exult's own messages (data/exultmsg.txt, 0x500 on), as far as they are used here.</summary>
     static readonly Dictionary<int, string> ExultMessages = new()
@@ -117,6 +120,9 @@ public static class TextMessages
         [0x10a] = "Avatar!  Please restrain thyself!",
         [0x10b] = "Hast thou noticed that this bed is occupied?",
         [0x10c] = "The resident of this bed may not be desirouth of company at the moment.",
+        [0x10d] = "Thou shan't lose me so easily!",
+        [0x10e] = "Ah, there thou art!",
+        [0x10f] = "Found ye!",
         // The endgame (Exult end_game, show_congratulations).
         [0x113] = "THE END OF ULTIMA VII",
         [0x114] = "THE END OF BRITANNIA AS YOU KNOW IT...",

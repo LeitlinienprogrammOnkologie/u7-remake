@@ -35,6 +35,29 @@ public partial class U7Game
         Book
     }
 
+    /// <summary>The "how many?" prompt while it shows (Exult's <c>Slider_gump</c> is modal: the game waits).</summary>
+    QuantityView? _quantityView;
+
+    /// <summary>
+    /// Exult <c>prompt_for_number</c> for a stack's drop: the dialog over
+    /// everything, the hand for the cursor; the number goes to <paramref name="done"/>.
+    /// </summary>
+    void AskQuantity(int max, U7Object stack, Action<int> done)
+    {
+        var layer = new CanvasLayer { Name = "Quantity", Layer = 26 };
+        AddChild(layer);
+        var view = new QuantityView(max, ObjectNames.OfThing(stack, _catalog)) { Name = "QuantityView" };
+        view.Done = count =>
+        {
+            layer.QueueFree();
+            _quantityView = null;
+            done(count);
+        };
+        layer.AddChild(view);
+        _quantityView = view;
+        _cursor.Shape = MouseShape.Hand;
+    }
+
     /// <summary>The right button went down to walk: holding it steers (Exult's main loop calls <c>start_actor</c>).</summary>
     bool _rightWalk;
     /// <summary>Exult <c>right_on_gump</c>: the right button went down on a gump in gump mode, which closes it when let go.</summary>
@@ -52,14 +75,14 @@ public partial class U7Game
     {
         // Exult's flash_shape holds the game (SDL_Delay): nothing answers the mouse or keys meanwhile.
         // The save/load screen takes its own input, as Exult's modal gumps do.
-        if (!_ready || _cursor.Holding || _newGame is not null || _saveLoad is not null)
+        if (!_ready || _cursor.Holding || _newGame is not null || _saveLoad is not null || _mainMenu is not null || _quantityView is not null)
         {
             return;
         }
 
-        if (_endgame is { } endgame)
+        if (_endgame is { } show)
         {
-            EndgameInput(endgame, @event);
+            show.Input(@event);
             return;
         }
 
@@ -217,6 +240,13 @@ public partial class U7Game
                     _conversation.Refresh();
                 }
 
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            // Exult: the gump with the keyboard (the spellbook) has the keys first, unless something is dragged.
+            if (_gumps is { Drag: null, KeyboardFocus: { } focus } && focus.HandleKey(key.Keycode))
+            {
                 GetViewport().SetInputAsHandled();
                 return;
             }

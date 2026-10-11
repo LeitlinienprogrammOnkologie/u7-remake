@@ -162,7 +162,7 @@ public sealed class Fields
 
                 break;
             case Caltrops:
-                if (actor.GetProp(ActorProp.Intelligence) < _rng.Next(40))
+                if (actor.EffectiveProp(ActorProp.Intelligence) < _rng.Next(40))
                 {
                     _combat.ReduceHealth(actor, 1 + _rng.Next(2), null);
                 }

@@ -88,12 +88,45 @@ public sealed partial class EndgameView : Control
         _fadeCycles = Math.Max(1, cycles);
     }
 
+    /// <summary>
+    /// Exult <c>Image_window8::rotate_colors</c>: the palette's colours from
+    /// <paramref name="first"/> turned round by one, the last to the front
+    /// for a positive <paramref name="count"/>, the first to the back for a
+    /// negative one (seen at the next <see cref="Present"/>).
+    /// </summary>
+    public void RotateColors(int first, int count)
+    {
+        var n = Math.Abs(count);
+        if (n < 2 || first < 0 || first + n > 256)
+        {
+            return;
+        }
+
+        var span = _palette.AsSpan(first * 3, n * 3);
+        Span<byte> one = stackalloc byte[3];
+        if (count > 0)
+        {
+            span[^3..].CopyTo(one);
+            span[..^3].CopyTo(span[3..]);
+            one.CopyTo(span);
+        }
+        else
+        {
+            span[..3].CopyTo(one);
+            span[3..].CopyTo(span);
+            one.CopyTo(span[^3..]);
+        }
+    }
+
     /// <summary>Exult <c>fill8(0)</c>: the picture black, its words gone.</summary>
     public void Clear()
     {
         Array.Clear(Pixels);
         _painted.Clear();
     }
+
+    /// <summary>Exult <c>win->put</c> of the strip under some words: they are gone, the picture stays.</summary>
+    public void ClearWords() => _painted.Clear();
 
     /// <summary>Exult <c>win->put</c> of a movie frame: the picture replaced, words and all.</summary>
     public void PutPicture(ReadOnlySpan<byte> pixels)

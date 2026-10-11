@@ -107,7 +107,7 @@ public static class Inventory
             return 0;
         }
 
-        return 2 * Math.Max(1, top.GetProp(ActorProp.Strength));
+        return 2 * Math.Max(1, top.EffectiveProp(ActorProp.Strength));
     }
 
     public static bool WouldNest(U7Object obj, U7Object container)

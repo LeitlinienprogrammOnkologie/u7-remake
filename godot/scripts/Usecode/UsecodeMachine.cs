@@ -34,11 +34,20 @@ public enum UsecodeWait
 /// <summary>
 /// A picture usecode shows until a click: a SPRITES.VGA frame centred on the
 /// screen (Exult <c>Paint_centered</c>), with the map's location mark
-/// (<c>Paint_map</c>) at a pixel of the frame from its top left, or none;
+/// (<c>Paint_map</c>) on the avatar's tile <paramref name="Mark"/>, or none;
 /// with an <paramref name="Area"/>, the world round that tile is seen through
 /// it (<c>display_area</c>).
 /// </summary>
-public sealed record UsecodePicture(int Sprite, int Frame, Godot.Vector2I? Mark, U7.Core.TileCoord? Area = null);
+public sealed record UsecodePicture(int Sprite, int Frame, U7.Core.TileCoord? Mark, U7.Core.TileCoord? Area = null)
+{
+    /// <summary>
+    /// Exult <c>Paint_map</c>: where a tile's mark goes on Black Gate's map
+    /// sprite, a pixel from its top left (rounded as <c>lround</c> does).
+    /// </summary>
+    public static Godot.Vector2I MapSpritePixel(U7.Core.TileCoord t) =>
+        new((int)Math.Round(t.Tx / 16.05 + 5, MidpointRounding.AwayFromZero),
+            (int)Math.Round(t.Ty / 15.95 + 4, MidpointRounding.AwayFromZero));
+}
 
 /// <summary>
 /// Black Gate usecode interpreter. Opcode loop ports Exult
@@ -417,6 +426,8 @@ public sealed class UsecodeMachine
             return;
         }
 
+        TickCastingClears(delta);
+
         // Scripts started in this pass wait for the next one (Exult's time queue runs only what was due):
         // a script that starts itself again (the Black Sword's 0x70B) would otherwise run forever.
         var due = _scripts.Count;
@@ -434,20 +445,72 @@ public sealed class UsecodeMachine
                 continue;
             }
 
+            // Exult Usecode_script::handle_event: an actor about to cast shows its casting frames.
+            if (s.Obj.Casting == CastingMode.Init)
+            {
+                s.Obj.Casting = CastingMode.Show;
+            }
+
             s.Wait = s.Exec(finish: false);
+            if (s.Done)
+            {
+                EndCasting(s.Obj, s.Wait);
+            }
+
             if (InUsecode || WaitingForChoice)
             {
                 break;
             }
         }
 
-        if (_scripts.RemoveAll(s => s.Done) > 0)
+        // A halted script ends at its next turn in Exult, its casting frames with it.
+        if (_scripts.RemoveAll(s => s.Done && EndCasting(s.Obj, Math.Max(0, s.Wait) + StdDelaySeconds)) > 0)
         {
             _scripted.Clear();
             foreach (var s in _scripts)
             {
                 _scripted.Add(s.Obj);
             }
+        }
+    }
+
+    /// <summary>The casting frames to take out of actors' hands, and the seconds until then (Exult's <c>Clear_casting</c> events).</summary>
+    readonly Dictionary<U7Object, double> _castingClears = new();
+
+    /// <summary>
+    /// Exult <c>Actor::end_casting_mode</c>: casting frames shown leave the
+    /// hand twice the script's last delay later; a clear already due sooner
+    /// stands. Always true (for <see cref="List{T}.RemoveAll"/>).
+    /// </summary>
+    bool EndCasting(U7Object actor, double delaySeconds)
+    {
+        if (actor.Casting == CastingMode.Show &&
+            (!_castingClears.TryGetValue(actor, out var left) || left > 2 * delaySeconds))
+        {
+            _castingClears[actor] = 2 * delaySeconds;
+        }
+
+        return true;
+    }
+
+    /// <summary>Exult <c>Clear_casting::handle_event</c>: the casting frames due to go are hidden.</summary>
+    void TickCastingClears(double delta)
+    {
+        if (_castingClears.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var (actor, left) in _castingClears.ToList())
+        {
+            if (left - delta > 0)
+            {
+                _castingClears[actor] = left - delta;
+                continue;
+            }
+
+            _castingClears.Remove(actor);
+            actor.Casting = CastingMode.NotCasting;
         }
     }
 
@@ -542,7 +605,7 @@ public sealed class UsecodeMachine
         var ty = body.Ty;
         var tz = body.Tz;
         Map.RemoveObject(body);
-        npc.SetProp(U7.Actors.ActorProp.Health, npc.GetProp(U7.Actors.ActorProp.Strength));
+        U7.Actors.ActorProp.Set(npc, U7.Actors.ActorProp.Health, npc.GetProp(U7.Actors.ActorProp.Strength));
         foreach (var flag in new[] { U7.Actors.ObjFlag.Dead, 8, U7.Actors.ObjFlag.Paralyzed, U7.Actors.ObjFlag.Asleep, 9, 3, 2 })
         {
             npc.ClearFlag(flag);
@@ -551,11 +614,7 @@ public sealed class UsecodeMachine
         npc.Removed = false;
         Map.PlaceInWorld(npc, tx, ty, tz);
         U7.Actors.ActorWalker.Stand(npc, 4);
-        if (npc.GetFlag(U7.Actors.ObjFlag.InParty))
-        {
-            npc.ClearFlag(U7.Actors.ObjFlag.InParty);
-            Party?.AddToParty(npc);
-        }
+        Party?.UpdatePartyStatus(npc); // Exult: back into the party if it died in it.
 
         Schedules?.Revive(npc);
         var sched = Party?.IsInParty(npc) == true ? U7.Actors.ScheduleType.FollowAvatar : U7.Actors.ScheduleType.Loiter;
@@ -684,14 +743,28 @@ public sealed class UsecodeMachine
     public int SpeechTrack { get; set; } = -1;
 
     /// <summary>
-    /// Exult <c>Usecode_internal::do_speech</c> with no speech played (none is
-    /// yet): the track is kept and usecode 0x614 shows its text (the
-    /// Guardian's words of the voice eggs, a dying companion's).
+    /// Exult <c>intercept_click_on_item</c>: what the next <c>click_on_item</c>
+    /// answers at once instead of waiting for a click (a combat spell's
+    /// target), then cleared.
+    /// </summary>
+    public U7Object? InterceptItem { get; set; }
+
+    /// <summary>Exult's speech: U7SPEECH.SPC's voices (null: none plays).</summary>
+    public U7.Audio.SpeechPlayer? Speech { get; set; }
+
+    /// <summary>
+    /// Exult <c>Usecode_internal::do_speech</c>: the track is kept and its
+    /// voice played; usecode 0x614 shows its text when none plays or with the
+    /// subtitles (Exult's <c>speech_with_subs</c>; the Guardian's words of the
+    /// voice eggs, a dying companion's).
     /// </summary>
     public void DoSpeech(int num) => WhenDone(() =>
     {
         SpeechTrack = num;
-        Call(SpeechUsecode, null, UsecodeEvent.DoubleClick);
+        if (Speech?.PlaySpeech(num) != true || Speech.WithSubtitles)
+        {
+            Call(SpeechUsecode, null, UsecodeEvent.DoubleClick);
+        }
     });
 
     const int SpeechUsecode = 0x614;

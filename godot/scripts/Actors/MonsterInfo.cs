@@ -27,6 +27,19 @@ public sealed class MonsterRecord
     public bool SeeInvisible;
     /// <summary>Exult <c>Monster_info</c>'s immunities to the sleep, charm, curse, paralysis and poison flags, and to all of them (power).</summary>
     public bool SleepSafe, CharmSafe, CurseSafe, ParalysisSafe, PoisonSafe, PowerSafe;
+    /// <summary>Exult <c>m_death_safe</c> (Death Bolt can't kill it), <c>m_splits</c> (slimes) and <c>m_int_b1</c> (unknown, but worth experience).</summary>
+    public bool DeathSafe, Splits, IntB1;
+    /// <summary>Exult <c>Monster_info::flags</c>: fly 0, swim 1, walk 2, ethereal 3, start invisible 6, see invisible 7.</summary>
+    public int Flags;
+
+    /// <summary>Exult <c>Monster_info::get_base_xp_value</c> ("this formula is exact").</summary>
+    public int BaseXpValue =>
+        Armor + Weapon + (SleepSafe ? 1 : 0) + (CharmSafe ? 1 : 0) + (CurseSafe ? 1 : 0) + (ParalysisSafe ? 1 : 0) +
+        (PoisonSafe ? 1 : 0) + (IntB1 ? 1 : 0) + (DeathSafe ? 1 : 0) + (PowerSafe ? 8 : 0) + ((Flags & 1) != 0 ? 1 : 0) +
+        ((Flags & 2) != 0 ? 1 : 0) + ((Flags & 8) != 0 ? 2 : 0) + ((Flags & 32) != 0 ? 2 : 0) + ((Flags & 128) != 0 ? 2 : 0) +
+        ((Flags & 64) != 0 ? 8 : 0) + (Splits ? 2 : 0) + (Reach > 5 ? 2 : Reach > 3 ? 1 : 0);
+    /// <summary>Exult <c>Monster_info::cant_bleed</c> (MONSTERS.DAT): no blood from its wounds.</summary>
+    public bool CantBleed;
     /// <summary>Exult <c>Monster_actor::create</c>: the fly/walk/swim/ethereal type flags it gets.</summary>
     public int MoveFlags = U7.Data.MoveFlags.Walk;
     /// <summary>
@@ -130,6 +143,10 @@ public sealed class MonsterTable
         var iParalysisSafe = Col("paralysis_safe");
         var iPoisonSafe = Col("poison_safe");
         var iPowerSafe = Col("power_safe");
+        var iCantBleed = Col("cant_bleed");
+        var iDeathSafe = Col("death_safe");
+        var iSplits = Col("splits");
+        var iIntB1 = Col("xp_unknown_bit");
 
         string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
         int Num(string[] c, int i, int fallback = 0) =>
@@ -169,6 +186,11 @@ public sealed class MonsterTable
                 ParalysisSafe = Num(c, iParalysisSafe) != 0,
                 PoisonSafe = Num(c, iPoisonSafe) != 0,
                 PowerSafe = Num(c, iPowerSafe) != 0,
+                CantBleed = Num(c, iCantBleed) != 0,
+                DeathSafe = Num(c, iDeathSafe) != 0,
+                Splits = Num(c, iSplits) != 0,
+                IntB1 = Num(c, iIntB1) != 0,
+                Flags = Num(c, iFlagBits),
                 MoveFlags = ParseMoveFlags(Get(c, iFlags)),
                 AttackModeClass = Math.Clamp(Num(c, iMode, 2), 0, 4),
                 EquipOffset = Num(c, iEquip)

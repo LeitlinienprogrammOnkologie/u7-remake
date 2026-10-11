@@ -75,7 +75,7 @@ public partial class U7Game
     /// </summary>
     void OpenSaveLoad()
     {
-        if (_saveLoad is not null || _newGame is not null || _endgame is not null)
+        if (_saveLoad is not null || _newGame is not null || _endgame is not null || _mainMenu is not null)
         {
             return;
         }

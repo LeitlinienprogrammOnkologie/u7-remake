@@ -125,7 +125,7 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
             }
 
             // Guards only assist neutral (and chaotic) NPCs.
-            if (npc.Alignment != align || (npc.Shape == GuardShape && align != Alignment.Neutral))
+            if (npc.EffectiveAlignment != align || (npc.Shape == GuardShape && align != Alignment.Neutral))
             {
                 continue;
             }
@@ -167,7 +167,7 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
             return;
         }
 
-        var align = witness?.Alignment ?? Alignment.Neutral;
+        var align = witness?.EffectiveAlignment ?? Alignment.Neutral;
         witness ??= FindWitness(out _, align);
         if (witness is not null && combat.CanSpeak(witness))
         {
@@ -225,7 +225,7 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
         foreach (var npc in NearbyActors(20))
         {
             if (CombatSchedule.CanAct(npc) && !party.IsInParty(npc) && combat.IsSentient(npc) &&
-                ((npc.Shape == GuardShape && !inDungeon) || npc.Alignment == align) &&
+                ((npc.Shape == GuardShape && !inDungeon) || npc.EffectiveAlignment == align) &&
                 FastPathClient.IsGrabable(map, npc, avatar))
             {
                 combat.SetTarget(npc, avatar, true);
@@ -254,7 +254,7 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
             return;
         }
 
-        var align = victim.Alignment;
+        var align = victim.EffectiveAlignment;
         var witness = victim;
         if (!CombatSchedule.CanAct(victim))
         {
@@ -302,33 +302,7 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
         AttackAvatar(numGuards, align);
     }
 
-    /// <summary>
-    /// Exult <c>Actor::approach_another</c>: a free spot within 8 tiles of the
-    /// other, walked to at twice the usual speed, coming on from off the screen
-    /// if the walker is off it. False if there is no spot or way.
-    /// </summary>
-    bool ApproachAnother(U7Object actor, U7Object other)
-    {
-        if (map.FindSpot(Here(other), 8, actor.Shape, actor.Frame) is not { } dest)
-        {
-            return false;
-        }
-
-        var window = schedules.WindowTiles;
-        var src = Here(actor);
-        if (!Pathfinder.HasTile(window, src.Tx - src.Tz / 2, src.Ty - src.Tz / 2))
-        {
-            src = new TileCoord(-1, -1, 0);
-        }
-
-        if (PathWalk.ToTile(map, actor, src, dest, window) is not { } walk)
-        {
-            return false;
-        }
-
-        schedules.StartAction(actor, walk, U7Constants.StandardDelayMs / 2, 0);
-        return true;
-    }
+    bool ApproachAnother(U7Object actor, U7Object other) => schedules.ApproachAnother(actor, other);
 
     /// <summary>Exult: guards are made 128 tiles southeast of the avatar.</summary>
     TileCoord Offscreen() => new TileCoord(avatar.Tx + 128, avatar.Ty + 128, avatar.Tz).Wrapped();

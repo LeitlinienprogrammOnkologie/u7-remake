@@ -138,7 +138,8 @@ public sealed class VgaShapeFile
         return decoded.ToImage(pal[..(256 * stride)]);
     }
 
-    static int Wrap(int frame, int count)
+    /// <summary>A frame number wrapped round a gump's or face's count, as Exult paints them.</summary>
+    public static int Wrap(int frame, int count)
     {
         if (count <= 0)
         {

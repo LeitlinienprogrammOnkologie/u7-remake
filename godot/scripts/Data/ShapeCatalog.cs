@@ -68,6 +68,21 @@ public sealed class ShapeRecord
     public PaperdollSpot[] Paperdoll = Array.Empty<PaperdollSpot>();
     public int FrameCount;
     public FrameInfo[] Frames = Array.Empty<FrameInfo>();
+    /// <summary>Exult <c>Shape_info::weapon_offsets</c> (WIHH.DAT): a held weapon's spot, x and y per frame (255: none); null if the shape has none.</summary>
+    public byte[]? WeaponOffsets;
+
+    /// <summary>Exult <c>Shape_info::get_weapon_offset</c>: false where no weapon is drawn.</summary>
+    public bool WeaponOffset(int frame, out int x, out int y)
+    {
+        x = y = 255;
+        if (WeaponOffsets is { } offsets && frame * 2 + 1 < offsets.Length)
+        {
+            x = offsets[frame * 2];
+            y = offsets[frame * 2 + 1];
+        }
+
+        return x != 255;
+    }
 
     public bool IsObjectAllowed(int frame, int spot)
     {
@@ -174,6 +189,7 @@ public sealed class ShapeCatalog
         LoadVgaFrames();
         ApplyContainerGumps();
         LoadReadyDat();
+        LoadWeaponOffsets();
         LoadPaperdollInfo();
         Shapes[644].Lightweight = true;
         Shapes[842].Lightweight = true;
@@ -413,6 +429,42 @@ public sealed class ShapeCatalog
                         break;
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Shapes_vga_file::read_info</c>'s WIHH.DAT: an offset per shape
+    /// (0, or one into the table or past the end: none), each record 32
+    /// frames of x, y; a value above 63 (the file has 64 and 255) is "not
+    /// drawn".
+    /// </summary>
+    void LoadWeaponOffsets()
+    {
+        var path = Path.Combine(U7Paths.StaticDir, "WIHH.DAT");
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var data = File.ReadAllBytes(path);
+        var count = Math.Min(Math.Min(Shapes.Length, ShapesVga.ShapeCount), data.Length / 2);
+        for (var s = 0; s < count; s++)
+        {
+            var at = BitConverter.ToUInt16(data, s * 2);
+            if (at == 0 || at > data.Length - 64 || at < 2048)
+            {
+                continue;
+            }
+
+            var offsets = new byte[64];
+            for (var f = 0; f < 32; f++)
+            {
+                var x = data[at + f * 2];
+                var y = data[at + f * 2 + 1];
+                (offsets[f * 2], offsets[f * 2 + 1]) = x > 63 || y > 63 ? ((byte)255, (byte)255) : (x, y);
+            }
+
+            Shapes[s].WeaponOffsets = offsets;
         }
     }
 

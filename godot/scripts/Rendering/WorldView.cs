@@ -28,6 +28,12 @@ public partial class WorldView : Node2D
         uniform sampler2D palette_tex : filter_nearest;
         // The glow plane beside the drawn index plane: six bits of glow, a roof mark and a pane mark (IndexBuffer8).
         uniform sampler2D glow_tex : filter_nearest;
+        // Hi-res art's mix plane: a second index and how far the colour lies towards it.
+        uniform sampler2D mix_tex : filter_nearest;
+        uniform bool use_mix = false;
+        // Texels blended over one screen pixel at their edges, so each shows
+        // the same size at any scale (ArtLook.Sharp), instead of nearest.
+        uniform bool sharp = false;
         // Per light: xy centre in world pixels, z radius, w kind.
         uniform vec4 light_a[MAX_LIGHTS];
         // Per light: rgb colour times intensity, a phase.
@@ -131,16 +137,64 @@ public partial class WorldView : Node2D
             return v / 0.97;
         }
 
+        // A texel's ambient and lit colours (between two indices where hi-res
+        // art mixes them) and its glow byte.
+        int texel(sampler2D index_tex, ivec2 at, out vec3 ambient, out vec3 lit) {
+            int index = int(texelFetch(index_tex, at, 0).r * 255.0 + 0.5);
+            ambient = texelFetch(palette_tex, ivec2(index, 0), 0).rgb;
+            lit = texelFetch(palette_tex, ivec2(index, 1), 0).rgb;
+            if (use_mix) {
+                vec2 m = texelFetch(mix_tex, at, 0).rg;
+                if (m.g > 0.0) {
+                    int second = int(m.r * 255.0 + 0.5);
+                    ambient = mix(ambient, texelFetch(palette_tex, ivec2(second, 0), 0).rgb, m.g);
+                    lit = mix(lit, texelFetch(palette_tex, ivec2(second, 1), 0).rgb, m.g);
+                }
+            }
+            return int(texelFetch(glow_tex, at, 0).r * 255.0 + 0.5);
+        }
+
         void fragment() {
             ivec2 size = textureSize(TEXTURE, 0);
-            ivec2 at = min(ivec2(UV * vec2(size)), size - 1);
-            int index = int(texelFetch(TEXTURE, at, 0).r * 255.0 + 0.5);
-            int g = int(texelFetch(glow_tex, at, 0).r * 255.0 + 0.5);
-            float glow = float(g >> 2) / 63.0;
+            vec3 ambient;
+            vec3 lit;
+            int g;
+            float glow;
+            if (sharp) {
+                // The four texels round the fragment, weighted so a texel's
+                // edge blends over one screen pixel; marks from the nearest.
+                vec2 p = UV * vec2(size) - 0.5;
+                vec2 base = floor(p);
+                vec2 px = max(1.0 / max(fwidth(p), vec2(1e-5)), vec2(1.0));
+                vec2 f = clamp((p - base - 0.5) * px + 0.5, 0.0, 1.0);
+                ivec2 b = ivec2(base);
+                ambient = vec3(0.0);
+                lit = vec3(0.0);
+                glow = 0.0;
+                float best = -1.0;
+                g = 0;
+                for (int k = 0; k < 4; k++) {
+                    ivec2 o = ivec2(k & 1, k >> 1);
+                    float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+                    vec3 a;
+                    vec3 l;
+                    int gk = texel(TEXTURE, clamp(b + o, ivec2(0), size - 1), a, l);
+                    ambient += w * a;
+                    lit += w * l;
+                    glow += w * float(gk >> 2) / 63.0;
+                    if (w > best) {
+                        best = w;
+                        g = gk;
+                    }
+                }
+            } else {
+                ivec2 at = min(ivec2(UV * vec2(size)), size - 1);
+                g = texel(TEXTURE, at, ambient, lit);
+                glow = float(g >> 2) / 63.0;
+            }
+
             bool roof = (g & 1) != 0;
             bool pane = (g & 2) != 0;
-            vec3 ambient = texelFetch(palette_tex, ivec2(index, 0), 0).rgb;
-            vec3 lit = texelFetch(palette_tex, ivec2(index, 1), 0).rgb;
 
             // L: how much light falls here; tint_sum: its colours, weighted.
             float L = 0.0;
@@ -204,8 +258,9 @@ public partial class WorldView : Node2D
         }
         """;
 
-    /// <summary>About as many terrains' flats as Exult keeps rendered.</summary>
+    /// <summary>About as many terrains' flats as Exult keeps rendered; half as many in hi-res (the view reaches about 56 chunks).</summary>
     const int MaxCachedTerrains = 256;
+    const int MaxCachedTerrainsHires = 128;
 
     public GameMap Map = null!;
     /// <summary>The animated shapes' frames (Exult <c>Frame_animator</c>), told what is painted.</summary>
@@ -218,6 +273,8 @@ public partial class WorldView : Node2D
     public IReadOnlyList<U7.Actors.Missile>? Missiles;
     /// <summary>Death vortices and energy mists (Exult's homing projectiles), painted after the map.</summary>
     public IReadOnlyList<U7.Actors.HomingMissile>? HomingMissiles;
+    /// <summary>The art at a higher resolution, when the user's look has it (<see cref="ArtLook"/>).</summary>
+    public HiresArt? Art;
     /// <summary>The palettes and lights to show the frame with.</summary>
     public SceneLighting? Lighting;
     public int SkipAboveLift = U7Constants.NoRoof;
@@ -240,16 +297,34 @@ public partial class WorldView : Node2D
     public bool Frozen;
 
     readonly IndexBuffer8 _buffer = new();
+    /// <summary>Hi-res frames' outline bands (<see cref="ShapeFrame.Outline"/>), made when first painted.</summary>
+    readonly System.Runtime.CompilerServices.ConditionalWeakTable<ShapeFrame, ShapeFrame> _outlines = new();
     /// <summary>Scratch for <see cref="PaintThroughWindows"/>: the windows (by number) an effect shows through.</summary>
     readonly bool[] _paneWindows = new bool[256];
-    readonly Dictionary<int, LinkedListNode<(int Terrain, byte[] Pixels)>> _flats = new();
-    readonly LinkedList<(int Terrain, byte[] Pixels)> _flatOrder = new();
+    readonly Dictionary<int, LinkedListNode<Flats>> _flats = new();
+    readonly LinkedList<Flats> _flatOrder = new();
     WorldPalette _palette = null!;
     ShaderMaterial _material = null!;
     Image? _image;
     ImageTexture? _texture;
     Image? _glowImage;
     ImageTexture? _glowTexture;
+    Image? _mixImage;
+    ImageTexture? _mixTexture;
+    /// <summary>Buffer pixels a world pixel is painted as, each way (<see cref="HiresArt"/>).</summary>
+    int _scale = 1;
+    /// <summary>The art's version the terrains' flats were made from.</summary>
+    int _artVersion;
+    /// <summary>The camera's centre and the world pixels the window shows, for the frame painted.</summary>
+    Vector2 _center;
+    Vector2 _viewWorld;
+    /// <summary>Where the buffer was last drawn, in world pixels.</summary>
+    Rect2 _shown;
+    /// <summary>Milliseconds the last frames took to paint and to upload, smoothed (the console's <c>art</c>).</summary>
+    double _paintMs;
+    double _uploadMs;
+    /// <summary>The longest paint since the console last asked (frames read for the first time).</summary>
+    double _paintWorstMs;
     /// <summary>The world pixel at the buffer's top left.</summary>
     int _originX;
     int _originY;
@@ -273,6 +348,7 @@ public partial class WorldView : Node2D
         _material.SetShaderParameter("cloud_soft", WeatherLook.Clouds.Softness);
         _material.SetShaderParameter("mist_scale", WeatherLook.Fog.Scale);
         Material = _material;
+        RenderingServer.ViewportSetMeasureRenderTime(GetViewport().GetViewportRid(), true);
     }
 
     // Set every frame: cached, as a string would make a new StringName each time.
@@ -285,6 +361,8 @@ public partial class WorldView : Node2D
     static readonly StringName Mist = "mist";
     static readonly StringName MistOffset = "mist_offset";
     static readonly StringName MistColour = "mist_colour";
+    static readonly StringName UseMix = "use_mix";
+    static readonly StringName Sharp = "sharp";
 
     public override void _Process(double delta)
     {
@@ -303,32 +381,115 @@ public partial class WorldView : Node2D
 
         if (Frozen && _texture is not null)
         {
-            DrawTexture(_texture, new Vector2(_originX, _originY));
+            DrawTextureRect(_texture, _shown, false);
             return;
         }
 
         // Exult display_area paints the view elsewhere up to lift 4, dungeons not dark.
         SkipAboveLift = RemoteView ? RemoteViewSkipLift : Map.RoofOverAvatar(Avatar);
         InDungeonLift = RemoteView ? 0 : Map.DungeonHeight(Avatar.Tx, Avatar.Ty);
-        _frameNo++;
-        _paintCounter = 0;
 
         var cam = GetViewport().GetCamera2D();
         var view = GetViewport().GetVisibleRect().Size;
         var zoom = cam is not null ? cam.Zoom : Vector2.One;
-        var center = cam is not null ? cam.GlobalPosition : Vector2.Zero;
-        var half = view / zoom / 2f;
-        _originX = Mathf.FloorToInt(center.X - half.X);
-        _originY = Mathf.FloorToInt(center.Y - half.Y);
+        _center = cam is not null ? cam.GlobalPosition : Vector2.Zero;
+        _viewWorld = view / zoom;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        PaintView(PaintScale(view, zoom), Time.GetTicksMsec());
+        var paintMs = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        _paintMs += (paintMs - _paintMs) * 0.1;
+        _paintWorstMs = Math.Max(_paintWorstMs, paintMs);
+
+        // Exult paints text effects after the map; the bark overlay draws these on screen.
+        _barkBack.Clear();
+        foreach (var obj in _barks)
+        {
+            _barkBack.Add(MakeBark(obj));
+        }
+
+        (_barkInfo, _barkBack) = (_barkBack, _barkInfo);
+        _barks.Clear();
+
+        if (Lighting is not null)
+        {
+            if (Lighting.Version != _paletteVersion)
+            {
+                _paletteVersion = Lighting.Version;
+                _palette.SetRows(Lighting.Ambient, Lighting.Lit);
+            }
+
+            _material.SetShaderParameter(LightA, Lighting.LightA);
+            _material.SetShaderParameter(LightB, Lighting.LightB);
+            _material.SetShaderParameter(LightCount, Lighting.LightCount);
+            _material.SetShaderParameter(CloudOffset, Lighting.CloudOffset);
+            _material.SetShaderParameter(CloudCover, Lighting.CloudCover);
+            _material.SetShaderParameter(CloudShadow, Lighting.CloudShadow);
+            _material.SetShaderParameter(Mist, Lighting.Mist);
+            _material.SetShaderParameter(MistOffset, Lighting.MistOffset);
+            // A little lighter than what the fog has made of the day.
+            _material.SetShaderParameter(MistColour, (Lighting.AmbientMean * 1.2f).Clamp(Vector3.Zero, Vector3.One));
+        }
+
+        if (RotateColors)
+        {
+            _palette.Advance(Time.GetTicksMsec());
+        }
+
+        started = System.Diagnostics.Stopwatch.GetTimestamp();
+        Upload();
+        _uploadMs += (System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds - _uploadMs) * 0.1;
+        _material.SetShaderParameter(Sharp, ArtLook.Sharp);
+        _shown = new Rect2(_originX, _originY, (float)_buffer.Width / _scale, (float)_buffer.Height / _scale);
+        DrawTextureRect(_texture, _shown, false);
+    }
+
+    /// <summary>
+    /// How many buffer pixels a world pixel is painted as, each way: the
+    /// art's scale while a world pixel covers enough of the screen for its
+    /// pixels to show (<see cref="ArtLook.MinScreenPixels"/>) and the buffer
+    /// stays quick to paint (<see cref="ArtLook.MaxBufferPixels"/>), else 1.
+    /// </summary>
+    int PaintScale(Vector2 view, Vector2 zoom)
+    {
+        if (Art is not { Scale: > 1 } art)
+        {
+            return 1;
+        }
+
+        var screenPerWorld = zoom.X * GetWindow().Size.X / view.X;
+        var pixels = (view.X / zoom.X + 2) * (view.Y / zoom.Y + 2) * art.Scale * art.Scale;
+        return screenPerWorld >= art.Scale * ArtLook.MinScreenPixels && pixels <= ArtLook.MaxBufferPixels ? art.Scale : 1;
+    }
+
+    /// <summary>
+    /// The view round <see cref="_center"/> into the buffer at
+    /// <paramref name="scale"/> buffer pixels a world pixel (Exult
+    /// <c>Game_render::paint_map</c>, then the effects).
+    /// </summary>
+    void PaintView(int scale, ulong ticks)
+    {
+        _frameNo++;
+        _paintCounter = 0;
+        if (scale != _scale || Art?.Version != _artVersion)
+        {
+            _scale = scale;
+            _artVersion = Art?.Version ?? 0;
+            ClearFlats();
+        }
+
+        var half = _viewWorld / 2f;
+        _originX = Mathf.FloorToInt(_center.X - half.X);
+        _originY = Mathf.FloorToInt(_center.Y - half.Y);
         // No clearing: the terrain below covers every pixel and its glow.
-        _buffer.Resize(Mathf.CeilToInt(view.X / zoom.X) + 2, Mathf.CeilToInt(view.Y / zoom.Y) + 2);
+        _buffer.Resize((Mathf.CeilToInt(_viewWorld.X) + 2) * scale, (Mathf.CeilToInt(_viewWorld.Y) + 2) * scale);
+        _buffer.BeginFrame();
 
         // Objects from chunks around the view can reach into it.
         var margin = 160f;
-        var left = center.X - half.X - margin;
-        var top = center.Y - half.Y - margin;
-        var right = center.X + half.X + margin;
-        var bottom = center.Y + half.Y + margin;
+        var left = _center.X - half.X - margin;
+        var top = _center.Y - half.Y - margin;
+        var right = _center.X + half.X + margin;
+        var bottom = _center.Y + half.Y + margin;
 
         var c0x = Mathf.FloorToInt(left / U7Constants.ChunkSizePixels) - 1;
         var c0y = Mathf.FloorToInt(top / U7Constants.ChunkSizePixels) - 1;
@@ -341,11 +502,10 @@ public partial class WorldView : Node2D
             for (var cx = c0x; cx <= c1x; cx++)
             {
                 var flats = GetFlats(Map.TerrainMap[U7Constants.WrapChunk(cx), U7Constants.WrapChunk(cy)]);
-                _buffer.Copy8(flats, chunkPx, chunkPx, cx * chunkPx - _originX, cy * chunkPx - _originY);
+                _buffer.Copy8(flats.Pixels, chunkPx * scale, chunkPx * scale, BufferX(cx * chunkPx), BufferY(cy * chunkPx), 0, flats.Mix);
             }
         }
 
-        var ticks = Time.GetTicksMsec();
         Animators?.Update(ticks);
 
         // Exult Game_render::paint_map: flat RLE objects for every chunk first ...
@@ -394,51 +554,90 @@ public partial class WorldView : Node2D
         PaintMissiles();
         PaintHoming();
         PaintSprites();
-
-        // Exult paints text effects after the map; the bark overlay draws these on screen.
-        _barkBack.Clear();
-        foreach (var obj in _barks)
-        {
-            _barkBack.Add(MakeBark(obj));
-        }
-
-        (_barkInfo, _barkBack) = (_barkBack, _barkInfo);
-        _barks.Clear();
-
-        if (Lighting is not null)
-        {
-            if (Lighting.Version != _paletteVersion)
-            {
-                _paletteVersion = Lighting.Version;
-                _palette.SetRows(Lighting.Ambient, Lighting.Lit);
-            }
-
-            _material.SetShaderParameter(LightA, Lighting.LightA);
-            _material.SetShaderParameter(LightB, Lighting.LightB);
-            _material.SetShaderParameter(LightCount, Lighting.LightCount);
-            _material.SetShaderParameter(CloudOffset, Lighting.CloudOffset);
-            _material.SetShaderParameter(CloudCover, Lighting.CloudCover);
-            _material.SetShaderParameter(CloudShadow, Lighting.CloudShadow);
-            _material.SetShaderParameter(Mist, Lighting.Mist);
-            _material.SetShaderParameter(MistOffset, Lighting.MistOffset);
-            // A little lighter than what the fog has made of the day.
-            _material.SetShaderParameter(MistColour, (Lighting.AmbientMean * 1.2f).Clamp(Vector3.Zero, Vector3.One));
-        }
-
-        if (RotateColors)
-        {
-            _palette.Advance(Time.GetTicksMsec());
-        }
-
-        Upload();
-        DrawTexture(_texture, new Vector2(_originX, _originY));
     }
 
-    /// <summary>The index and glow planes as two R8 textures: the index drawn, the glow byte with its marks as <c>glow_tex</c>.</summary>
+    /// <summary>For the console: the buffer's size and what painting and uploading it take.</summary>
+    public string Timing()
+    {
+        var rid = GetViewport().GetViewportRid();
+        var worst = _paintWorstMs;
+        _paintWorstMs = 0;
+        return $"buffer {_buffer.Width}x{_buffer.Height} at {_scale}, paint {_paintMs:0.00} ms (worst {worst:0.0}), upload {_uploadMs:0.00} ms, " +
+               $"render cpu {RenderingServer.ViewportGetMeasuredRenderTimeCpu(rid):0.00} gpu {RenderingServer.ViewportGetMeasuredRenderTimeGpu(rid):0.00} ms";
+    }
+
+    /// <summary>A world pixel's column in the buffer.</summary>
+    int BufferX(int worldX) => (worldX - _originX) * _scale;
+
+    /// <summary>A world pixel's row in the buffer.</summary>
+    int BufferY(int worldY) => (worldY - _originY) * _scale;
+
+    /// <summary>A SHAPES.VGA frame at the scale painted.</summary>
+    ShapeFrame? ArtFrame(int shape, int frame) => Art is not null ? Art.Shape(shape, frame, _scale) : Shapes.GetFrame8(shape, frame);
+
+    /// <summary>A SPRITES.VGA frame at the scale painted.</summary>
+    ShapeFrame? ArtSprite(int sprite, int frame) => Art is not null ? Art.Sprite(sprite, frame, _scale) : Shapes.GetSprite8(sprite, frame);
+
+    /// <summary>
+    /// For the console: the view painted at 1 and at the art's scale with
+    /// the same clock, and the hi-res pixels (index, glow, pane) that differ
+    /// from the original pixel they stand on. Without a pack's art, none
+    /// should: the blown-up frames are the originals.
+    /// </summary>
+    public string CheckScale()
+    {
+        if (Art is not { Scale: > 1 } art)
+        {
+            return "the art's scale is 1";
+        }
+
+        var ticks = Time.GetTicksMsec();
+        PaintView(1, ticks);
+        var (w, h) = (_buffer.Width, _buffer.Height);
+        var pixels = (byte[])_buffer.Pixels.Clone();
+        var glow = (byte[])_buffer.Glow.Clone();
+        var panes = (ushort[])_buffer.Panes.Clone();
+        var n = art.Scale;
+        PaintView(n, ticks);
+        _barks.Clear();
+        var differ = 0;
+        var mixed = 0;
+        var first = "";
+        for (var y = 0; y < _buffer.Height; y++)
+        {
+            for (var x = 0; x < _buffer.Width; x++)
+            {
+                var at = y * _buffer.Width + x;
+                var was = y / n * w + x / n;
+                var pane = (glow[was] & IndexBuffer8.PaneMark) != 0;
+                if (_buffer.Pixels[at] != pixels[was] || _buffer.Glow[at] != glow[was] || (pane && _buffer.Panes[at] != panes[was]))
+                {
+                    if (differ++ == 0)
+                    {
+                        first = $" (first at {x},{y}: {_buffer.Pixels[at]}/{_buffer.Glow[at]} for {pixels[was]}/{glow[was]})";
+                    }
+                }
+
+                if (_buffer.MixUsed && _buffer.Mix[at * 2 + 1] != 0)
+                {
+                    mixed++;
+                }
+            }
+        }
+
+        return $"{w}x{h} at 1, {_buffer.Width}x{_buffer.Height} at {n}: {differ} pixels differ{first}, {mixed} mixed";
+    }
+
+    /// <summary>
+    /// The planes as textures: the index drawn as R8, the glow byte with its
+    /// marks as <c>glow_tex</c>, and while hi-res art mixes colours the mix
+    /// plane as <c>mix_tex</c> (RG8).
+    /// </summary>
     void Upload()
     {
         var w = _buffer.Width;
         var h = _buffer.Height;
+        _material.SetShaderParameter(UseMix, _buffer.MixUsed);
         if (_image is null || _texture is null || _glowImage is null || _glowTexture is null ||
             _image.GetWidth() != w || _image.GetHeight() != h)
         {
@@ -447,6 +646,9 @@ public partial class WorldView : Node2D
             _glowImage = Image.CreateFromData(w, h, false, Image.Format.R8, _buffer.Glow);
             _glowTexture = ImageTexture.CreateFromImage(_glowImage);
             _material.SetShaderParameter("glow_tex", _glowTexture);
+            _mixImage = Image.CreateFromData(w, h, false, Image.Format.Rg8, _buffer.Mix);
+            _mixTexture = ImageTexture.CreateFromImage(_mixImage);
+            _material.SetShaderParameter("mix_tex", _mixTexture);
             return;
         }
 
@@ -454,6 +656,11 @@ public partial class WorldView : Node2D
         _texture.Update(_image);
         _glowImage.SetData(w, h, false, Image.Format.R8, _buffer.Glow);
         _glowTexture.Update(_glowImage);
+        if (_buffer.MixUsed && _mixImage is not null && _mixTexture is not null)
+        {
+            _mixImage.SetData(w, h, false, Image.Format.Rg8, _buffer.Mix);
+            _mixTexture.Update(_mixImage);
+        }
     }
 
     /// <summary>
@@ -668,17 +875,17 @@ public partial class WorldView : Node2D
 
         // (Animated shapes: their animators set the frame, Exult's Frame_animator.)
         Animators?.Painted(obj);
-        if (Shapes.GetFrame8(obj.Shape, obj.Frame) is not { } shape)
+        if (Shapes.GetFrame8(obj.Shape, obj.Frame) is not { } original || ArtFrame(obj.Shape, obj.Frame) is not { } shape)
         {
             return;
         }
 
         ShapeLocation(obj.Tx, obj.Ty, obj.Tz, out var hx, out var hy);
-        hx -= _originX;
-        hy -= _originY;
+        hx = BufferX(hx);
+        hy = BufferY(hy);
         if (obj.IsActor)
         {
-            if (!PaintActor(obj, shape, hx, hy, ticks))
+            if (!PaintActor(obj, original, shape, hx, hy, ticks))
             {
                 return;
             }
@@ -708,12 +915,14 @@ public partial class WorldView : Node2D
     /// <summary>
     /// Exult <c>Actor::paint</c>: always translucent; an invisible actor
     /// only if it is the avatar or in the party, through the invisible table
-    /// (<c>paint_invisible</c>); then one outline for its state. False when
+    /// (<c>paint_invisible</c>); then what it holds (<see cref="PaintWeapon"/>)
+    /// and one outline for its state, round the original frame. False when
     /// nothing was painted.
     /// </summary>
-    bool PaintActor(U7Object actor, ShapeFrame shape, int x, int y, ulong ticks)
+    bool PaintActor(U7Object actor, ShapeFrame original, ShapeFrame shape, int x, int y, ulong ticks)
     {
-        if (actor.GetFlag(U7.Actors.ObjFlag.Invisible))
+        var invisible = actor.GetFlag(U7.Actors.ObjFlag.Invisible);
+        if (invisible)
         {
             if (actor != Avatar && !actor.GetFlag(U7.Actors.ObjFlag.InParty))
             {
@@ -728,12 +937,81 @@ public partial class WorldView : Node2D
             _buffer.PaintRleTranslucent(shape, x, y, Shapes.Xforms, glow, Haze(glow));
         }
 
+        PaintWeapon(actor, x, y, invisible);
         if (StatusOutline(actor, ticks) is { } color)
         {
-            _buffer.PaintRleOutline(shape, x, y, color);
+            if (_scale > 1 && Art?.Pack is not null)
+            {
+                // Redrawn art: the outline follows its silhouette, a world pixel deep.
+                _buffer.PaintRleSolid(_outlines.GetValue(shape, f => f.Outline(_scale)), x, y, color);
+            }
+            else
+            {
+                _buffer.PaintRleOutline(original, x, y, color, _scale);
+            }
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::paint_weapon</c> and <c>figure_weapon_pos</c>: what the
+    /// actor holds in its weapon hand, or its casting frames while it casts
+    /// (<c>get_effective_weapon_shape</c>), at WIHH.DAT's spot for the
+    /// actor's frame less the weapon frame's own (swapped for a reflected
+    /// frame). The weapon frame follows the pose: 1 in hand, 2-4 striking
+    /// north, east and south, 5-7 the casting poses; none where either shape
+    /// has no spot (lying down, not a weapon). Translucent as its shape is,
+    /// through the invisible table for an invisible actor; the casting
+    /// frames glow.
+    /// </summary>
+    void PaintWeapon(U7Object actor, int x, int y, bool invisible)
+    {
+        var held = actor.Casting == CastingMode.Show
+            ? actor.CastingShape
+            : U7.Actors.Equipment.GetReadied(actor, U7.Actors.ReadySpot.Lhand)?.Shape ?? -1;
+        if (held < 0)
+        {
+            return;
+        }
+
+        var pose = actor.Frame & 0x1f;
+        var frame = pose switch
+        {
+            4 or 7 or 22 or 25 => 4,
+            5 or 8 or 21 or 24 => 3,
+            6 or 9 or 20 or 23 => 2,
+            14 or 30 => 5,
+            15 => 6,
+            31 => 7,
+            _ => 1
+        } | (actor.Frame & 32);
+        if (!Catalog[actor.Shape].WeaponOffset(pose, out var ax, out var ay) ||
+            !Catalog[held].WeaponOffset(frame & 0xf, out var wx, out var wy) ||
+            ArtFrame(held, frame) is not { } art)
+        {
+            return;
+        }
+
+        var (dx, dy) = (actor.Frame & 32) != 0 ? (wy - ay, wx - ax) : (wx - ax, wy - ay);
+        x += dx * _scale;
+        y += dy * _scale;
+        if (invisible)
+        {
+            _buffer.PaintRleTransformed(art, x, y, Shapes.Xforms.Invisible);
+            return;
+        }
+
+        // The casting frames glow as magic does (the user's magic glows).
+        var glow = GlowTable.IsEmitter(held) || actor.Casting == CastingMode.Show ? GlowTable.GlowByte : (byte)0;
+        if (Catalog[held].Translucent)
+        {
+            _buffer.PaintRleTranslucent(art, x, y, Shapes.Xforms, glow, Haze(glow));
+        }
+        else
+        {
+            _buffer.PaintRle(art, x, y, glow);
+        }
     }
 
     /// <summary>Exult <c>Actor::paint</c>'s outline: a momentary red one for a hit, else the first of charmed, paralysed, protected, cursed and poisoned.</summary>
@@ -781,7 +1059,7 @@ public partial class WorldView : Node2D
 
         foreach (var m in Missiles)
         {
-            if (m.Frame < 0 || Shapes.GetFrame8(m.SpriteShape, m.Frame) is not { } frame)
+            if (m.Frame < 0 || ArtFrame(m.SpriteShape, m.Frame) is not { } frame)
             {
                 continue;
             }
@@ -794,11 +1072,11 @@ public partial class WorldView : Node2D
             }
             else if (Catalog[m.SpriteShape].Translucent)
             {
-                _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms, glow, Haze(glow));
+                _buffer.PaintRleTranslucent(frame, BufferX(x), BufferY(y), Shapes.Xforms, glow, Haze(glow));
             }
             else
             {
-                _buffer.PaintRle(frame, x - _originX, y - _originY, glow);
+                _buffer.PaintRle(frame, BufferX(x), BufferY(y), glow);
             }
         }
     }
@@ -813,7 +1091,7 @@ public partial class WorldView : Node2D
 
         foreach (var h in HomingMissiles)
         {
-            if (Shapes.GetSprite8(h.Sprite, h.Frame) is not { } frame)
+            if (ArtSprite(h.Sprite, h.Frame) is not { } frame)
             {
                 continue;
             }
@@ -826,7 +1104,7 @@ public partial class WorldView : Node2D
                 continue;
             }
 
-            _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms, glow, Haze(glow));
+            _buffer.PaintRleTranslucent(frame, BufferX(x), BufferY(y), Shapes.Xforms, glow, Haze(glow));
         }
     }
 
@@ -842,7 +1120,7 @@ public partial class WorldView : Node2D
     {
         if (Lighting?.Windows.PanesFor(at, _paneWindows) == true)
         {
-            _buffer.PaintRleThroughPanes(frame, x - _originX, y - _originY, Shapes.Xforms, _paneWindows, glow, translucent);
+            _buffer.PaintRleThroughPanes(frame, BufferX(x), BufferY(y), Shapes.Xforms, _paneWindows, glow, translucent);
         }
     }
 
@@ -856,7 +1134,7 @@ public partial class WorldView : Node2D
 
         foreach (var e in Effects.Sprites)
         {
-            if (!e.Visible || Shapes.GetSprite8(e.Sprite, e.Frame) is not { } frame)
+            if (!e.Visible || ArtSprite(e.Sprite, e.Frame) is not { } frame)
             {
                 continue;
             }
@@ -870,7 +1148,7 @@ public partial class WorldView : Node2D
             }
 
             // Exult paints every SPRITES.VGA shape translucent (Shape_manager::paint_shape).
-            _buffer.PaintRleTranslucent(frame, x - _originX, y - _originY, Shapes.Xforms, glow, Haze(glow));
+            _buffer.PaintRleTranslucent(frame, BufferX(x), BufferY(y), Shapes.Xforms, glow, Haze(glow));
         }
     }
 
@@ -922,11 +1200,11 @@ public partial class WorldView : Node2D
         {
             for (var cx = c0x; cx <= c1x; cx++)
             {
-                var x0 = cx * chunkPx - off - _originX;
-                var y0 = cy * chunkPx - off - _originY;
+                var x0 = cx * chunkPx - off;
+                var y0 = cy * chunkPx - off;
                 if (!Map.ChunkHasDungeon(cx, cy))
                 {
-                    _buffer.Fill8(0, chunkPx, chunkPx, x0, y0);
+                    Blacken(x0, y0, chunkPx, chunkPx);
                     continue;
                 }
 
@@ -947,19 +1225,22 @@ public partial class WorldView : Node2D
                         }
                         else if (run != 0)
                         {
-                            _buffer.Fill8(0, run * tilePx, tilePx, x0 + runX * tilePx, y0 + ly * tilePx);
+                            Blacken(x0 + runX * tilePx, y0 + ly * tilePx, run * tilePx, tilePx);
                             run = 0;
                         }
                     }
 
                     if (run != 0)
                     {
-                        _buffer.Fill8(0, run * tilePx, tilePx, x0 + runX * tilePx, y0 + ly * tilePx);
+                        Blacken(x0 + runX * tilePx, y0 + ly * tilePx, run * tilePx, tilePx);
                     }
                 }
             }
         }
     }
+
+    /// <summary>Index 0 over a rectangle of world pixels.</summary>
+    void Blacken(int x, int y, int w, int h) => _buffer.Fill8(0, w * _scale, h * _scale, BufferX(x), BufferY(y));
 
     public static void ShapeLocation(int tx, int ty, int tz, out int x, out int y)
     {
@@ -982,41 +1263,56 @@ public partial class WorldView : Node2D
         return new TileCoord(U7Constants.WrapTile(tx), U7Constants.WrapTile(ty), lift);
     }
 
+    /// <summary>A terrain's flats at the scale painted: its indices and, if its art mixes colours, their mix plane.</summary>
+    sealed class Flats(int terrain, byte[] pixels)
+    {
+        public int Terrain = terrain;
+        public readonly byte[] Pixels = pixels;
+        public byte[]? Mix;
+    }
+
     /// <summary>
     /// Exult <c>Chunk_terrain::render_flats</c>: a terrain's tiles whose frame
     /// is a raw 8×8 terrain frame, copied into a 128×128 picture of indices
-    /// (<c>paint_tile</c>; RLE flats are objects of their own). Kept for the
-    /// most recently used terrains, as Exult's render queue does.
+    /// (<c>paint_tile</c>; RLE flats are objects of their own), at the scale
+    /// painted. Kept for the most recently used terrains, as Exult's render
+    /// queue does.
     /// </summary>
-    byte[] GetFlats(int terrain)
+    Flats GetFlats(int terrain)
     {
         if (_flats.TryGetValue(terrain, out var node))
         {
             _flatOrder.Remove(node);
             _flatOrder.AddFirst(node);
-            return node.Value.Pixels;
+            return node.Value;
         }
 
-        const int size = U7Constants.ChunkSizePixels;
-        const int tile = ShapeFrame.TileSize;
-        byte[] pixels;
-        if (_flats.Count >= MaxCachedTerrains && _flatOrder.Last is { } last)
+        var tile = ShapeFrame.TileSize * _scale;
+        var size = U7Constants.ChunkSizePixels * _scale;
+        Flats flats;
+        if (_flats.Count >= (_scale == 1 ? MaxCachedTerrains : MaxCachedTerrainsHires) && _flatOrder.Last is { } last)
         {
             _flatOrder.RemoveLast();
             _flats.Remove(last.Value.Terrain);
-            pixels = last.Value.Pixels;
-            Array.Clear(pixels);
+            flats = last.Value;
+            flats.Terrain = terrain;
+            Array.Clear(flats.Pixels);
+            if (flats.Mix is not null)
+            {
+                Array.Clear(flats.Mix);
+            }
         }
         else
         {
-            pixels = new byte[size * size];
+            flats = new Flats(terrain, new byte[size * size]);
         }
 
         var cells = (uint)terrain < (uint)Map.Terrains.Length ? Map.Terrains[terrain] : null;
         for (var i = 0; cells is not null && i < cells.Length; i++)
         {
             var cell = cells[i];
-            if (cell.IsRle || Shapes.GetFrame8(cell.Shape, cell.Frame) is not { IsRle: false } flat)
+            if (cell.IsRle || Shapes.GetFrame8(cell.Shape, cell.Frame) is not { IsRle: false } ||
+                ArtFrame(cell.Shape, cell.Frame) is not { IsRle: false } flat)
             {
                 continue;
             }
@@ -1024,11 +1320,27 @@ public partial class WorldView : Node2D
             var at = i / U7Constants.TilesPerChunk * tile * size + i % U7Constants.TilesPerChunk * tile;
             for (var row = 0; row < tile; row++)
             {
-                flat.Pixels.AsSpan(row * tile, tile).CopyTo(pixels.AsSpan(at + row * size, tile));
+                flat.Pixels.AsSpan(row * tile, tile).CopyTo(flats.Pixels.AsSpan(at + row * size, tile));
+            }
+
+            if (flat.Mix is not null)
+            {
+                flats.Mix ??= new byte[size * size * 2];
+                for (var row = 0; row < tile; row++)
+                {
+                    flat.Mix.AsSpan(row * tile * 2, tile * 2).CopyTo(flats.Mix.AsSpan((at + row * size) * 2, tile * 2));
+                }
             }
         }
 
-        _flats[terrain] = _flatOrder.AddFirst((terrain, pixels));
-        return pixels;
+        _flats[terrain] = _flatOrder.AddFirst(flats);
+        return flats;
+    }
+
+    /// <summary>Forgets the terrains' flats (the scale painted has changed).</summary>
+    void ClearFlats()
+    {
+        _flats.Clear();
+        _flatOrder.Clear();
     }
 }

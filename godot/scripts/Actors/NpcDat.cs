@@ -197,7 +197,9 @@ public static class NpcDat
         npc.AttackMode = amode & 0xf;
         npc.CombatProtected = (amode & (1 << 4)) != 0;
         npc.UserSetAttack = (amode & (1 << 5)) != 0;
-        r.Skip(1); // charmalign / effective alignment
+        // Exult Actor::read: the alignment when charmed (the charmed flag is read by now); else the actor's own.
+        var charmAlign = r.U1();
+        npc.CharmAlignment = !fixFirst && npc.GetFlag(ObjFlag.Charmed) ? charmAlign : npc.Alignment;
         // Exult Actor::read: the original stores magic/mana two bytes later;
         // Exult's own saves put magic (high bit set) and mana here.
         var unk0 = r.U1();
@@ -471,7 +473,7 @@ public static class NpcDat
         w.Write((byte)(npc.GetProp(ActorProp.Combat) & 0x7f));
         w.Write((byte)npc.ScheduleType);
         w.Write((byte)((npc.AttackMode & 0xf) | (npc.CombatProtected ? 1 << 4 : 0) | (npc.UserSetAttack ? 1 << 5 : 0)));
-        w.Write((byte)npc.Alignment); // effective alignment
+        w.Write((byte)npc.EffectiveAlignment);
         w.Write((byte)(npc.GetProp(ActorProp.Magic) | 0x80));
         w.Write((byte)npc.GetProp(ActorProp.Mana));
         w.Write((byte)0); // temperature

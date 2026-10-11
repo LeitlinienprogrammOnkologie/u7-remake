@@ -185,6 +185,25 @@ public sealed class ChunkBlocking
     }
 
     /// <summary>
+    /// Exult <c>Chunk_cache::is_blocked</c>'s lift-0 terrain rules alone: can
+    /// a mover of <paramref name="moveFlags"/> stand on the tile's flat
+    /// (walkers not in water or on solid flats, swimmers only in water)?
+    /// </summary>
+    public bool TerrainHolds(int tx, int ty, int moveFlags)
+    {
+        var canWalk = (moveFlags & MoveFlags.Walk) != 0;
+        var canSwim = (moveFlags & MoveFlags.Swim) != 0;
+        var canFly = (moveFlags & MoveFlags.Fly) != 0;
+        var ter = Terrain(tx, ty);
+        if (canSwim && !canWalk && !canFly)
+        {
+            return (ter & 2) != 0;
+        }
+
+        return canFly || canSwim || (ter & 6) == 0;
+    }
+
+    /// <summary>
     /// Exult <c>Chunk_cache::is_blocked</c>: can something <paramref name="height"/>
     /// lifts tall stand on (tx, ty) coming from <paramref name="lift"/>? It
     /// climbs at most <paramref name="maxRise"/> (walkers 1) onto the first

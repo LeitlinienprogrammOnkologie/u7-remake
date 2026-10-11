@@ -9,7 +9,8 @@ namespace U7.Rendering;
 /// its low two bits marks for the world shader (<see cref="RoofMark"/>,
 /// <see cref="PaneMark"/>). Every painter writes its glow byte (0 unless
 /// told) where it paints, so what covers a glowing thing or a pane doesn't
-/// glow or count as one. Painters clip per scan.
+/// glow or count as one. Painters clip per scan. Hi-res art adds a mix
+/// plane (<see cref="Mix"/>), a pixel's colour between two indices.
 /// </summary>
 public sealed class IndexBuffer8
 {
@@ -31,6 +32,14 @@ public sealed class IndexBuffer8
     /// byte). Meaningless where the glow plane has no pane mark.
     /// </summary>
     public ushort[] Panes { get; private set; } = [];
+    /// <summary>
+    /// Two bytes a pixel, as a frame's <see cref="ShapeFrame.Mix"/>: a second
+    /// index and how far the colour lies towards it. Only meaningful while
+    /// <see cref="MixUsed"/>; until then every pixel is its index alone.
+    /// </summary>
+    public byte[] Mix { get; private set; } = [];
+    /// <summary>Whether this frame painted a mixed pixel (then <see cref="Mix"/> is kept for every pixel painted after).</summary>
+    public bool MixUsed { get; private set; }
 
     /// <summary>Takes a new size, allocating only when it changes; the pixels are then undefined.</summary>
     public void Resize(int width, int height)
@@ -45,6 +54,18 @@ public sealed class IndexBuffer8
         Pixels = new byte[width * height];
         Glow = new byte[width * height];
         Panes = new ushort[width * height];
+        Mix = new byte[width * height * 2];
+        MixUsed = false;
+    }
+
+    /// <summary>Starts a frame: no pixel is mixed yet.</summary>
+    public void BeginFrame()
+    {
+        if (MixUsed)
+        {
+            Array.Clear(Mix);
+            MixUsed = false;
+        }
     }
 
     /// <summary>Exult <c>fill8(pix, w, h, x, y)</c>: a rectangle.</summary>
@@ -59,11 +80,15 @@ public sealed class IndexBuffer8
         {
             Pixels.AsSpan((y + row) * Width + x, w).Fill(color);
             Glow.AsSpan((y + row) * Width + x, w).Clear();
+            Unmix((y + row) * Width + x, w);
         }
     }
 
-    /// <summary>Exult <c>copy8</c>: a rectangle of indices, <paramref name="srcw"/> a row, with its top left at x, y.</summary>
-    public void Copy8(ReadOnlySpan<byte> src, int srcw, int srch, int x, int y, byte glow = 0)
+    /// <summary>
+    /// Exult <c>copy8</c>: a rectangle of indices, <paramref name="srcw"/> a
+    /// row, with its top left at x, y; <paramref name="mix"/> its mix plane, if any.
+    /// </summary>
+    public void Copy8(ReadOnlySpan<byte> src, int srcw, int srch, int x, int y, byte glow = 0, ReadOnlySpan<byte> mix = default)
     {
         var w = srcw;
         var h = srch;
@@ -74,21 +99,24 @@ public sealed class IndexBuffer8
 
         for (var row = 0; row < h; row++)
         {
-            src.Slice((sy + row) * srcw + sx, w).CopyTo(Pixels.AsSpan((y + row) * Width + x, w));
-            Glow.AsSpan((y + row) * Width + x, w).Fill(glow);
+            var from = (sy + row) * srcw + sx;
+            var dest = (y + row) * Width + x;
+            src.Slice(from, w).CopyTo(Pixels.AsSpan(dest, w));
+            Glow.AsSpan(dest, w).Fill(glow);
+            CopyMix(mix, from, dest, w);
         }
     }
 
     /// <summary>
     /// Exult <c>Shape_frame::paint</c>: an RLE frame with its hotspot at x, y
     /// (<c>paint_rle</c>); a raw terrain frame is copied with its top left at
-    /// x - 8, y - 8.
+    /// x - 8, y - 8 (its extents, at its resolution).
     /// </summary>
     public void PaintRle(ShapeFrame frame, int x, int y, byte glow = 0)
     {
         if (!frame.IsRle)
         {
-            Copy8(frame.Pixels, ShapeFrame.TileSize, ShapeFrame.TileSize, x - ShapeFrame.TileSize, y - ShapeFrame.TileSize, glow);
+            Copy8(frame.Pixels, frame.Width, frame.Height, x - frame.XLeft, y - frame.YAbove, glow, frame.Mix);
             return;
         }
 
@@ -98,6 +126,7 @@ public sealed class IndexBuffer8
             {
                 frame.Pixels.AsSpan(src, len).CopyTo(Pixels.AsSpan(dest, len));
                 Glow.AsSpan(dest, len).Fill(glow);
+                CopyMix(frame.Mix, src, dest, len);
             }
         }
     }
@@ -108,7 +137,8 @@ public sealed class IndexBuffer8
     /// the others (0xFF too) are copied. The see-through pixels glow
     /// <paramref name="haze"/>, the others <paramref name="glow"/>; if
     /// <paramref name="haze"/> marks panes, they note <paramref name="window"/>
-    /// and their table in <see cref="Panes"/>.
+    /// and their table in <see cref="Panes"/>. A mixed pixel under glass
+    /// keeps its mix, both its indices turned.
     /// </summary>
     public void PaintRleTranslucent(ShapeFrame frame, int x, int y, XformTables xforms, byte glow = 0, byte haze = 0, byte window = 0)
     {
@@ -134,13 +164,20 @@ public sealed class IndexBuffer8
             var plain = first < 0 ? len : first;
             from[..plain].CopyTo(to);
             lit[..plain].Fill(glow);
+            CopyMix(frame.Mix, src, dest, plain);
             var panes = (haze & PaneMark) != 0 ? Panes.AsSpan(dest, len) : default;
             for (var i = plain; i < len; i++)
             {
                 var c = from[i];
                 if (c is >= XformTables.FirstTranslucent and <= 0xFE)
                 {
-                    to[i] = tables[((c - XformTables.FirstTranslucent) << 8) | to[i]];
+                    var table = (c - XformTables.FirstTranslucent) << 8;
+                    to[i] = tables[table | to[i]];
+                    if (MixUsed)
+                    {
+                        Mix[(dest + i) * 2] = tables[table | Mix[(dest + i) * 2]];
+                    }
+
                     lit[i] = haze;
                     if (!panes.IsEmpty)
                     {
@@ -151,6 +188,7 @@ public sealed class IndexBuffer8
                 {
                     to[i] = c;
                     lit[i] = glow;
+                    CopyMix(frame.Mix, src + i, dest + i, 1);
                 }
             }
         }
@@ -189,9 +227,25 @@ public sealed class IndexBuffer8
                 }
 
                 var c = frame.Pixels[src + i];
-                Pixels[at] = translucent && c is >= XformTables.FirstTranslucent and <= 0xFE
-                    ? tables[((c - XformTables.FirstTranslucent) << 8) | Pixels[at]]
-                    : tables[(pane & 0xFF00) | c];
+                if (translucent && c is >= XformTables.FirstTranslucent and <= 0xFE)
+                {
+                    var table = (c - XformTables.FirstTranslucent) << 8;
+                    Pixels[at] = tables[table | Pixels[at]];
+                    if (MixUsed)
+                    {
+                        Mix[at * 2] = tables[table | Mix[at * 2]];
+                    }
+                }
+                else
+                {
+                    Pixels[at] = tables[(pane & 0xFF00) | c];
+                    CopyMix(frame.Mix, src + i, at, 1);
+                    if (frame.Mix is not null)
+                    {
+                        Mix[at * 2] = tables[(pane & 0xFF00) | Mix[at * 2]];
+                    }
+                }
+
                 Glow[at] = (byte)((glow & GlowBits) | (Glow[at] & ~GlowBits));
             }
         }
@@ -221,6 +275,14 @@ public sealed class IndexBuffer8
                 to[i] = xform[to[i]];
             }
 
+            if (MixUsed)
+            {
+                for (var i = 0; i < len; i++)
+                {
+                    Mix[(dest + i) * 2] = xform[Mix[(dest + i) * 2]];
+                }
+            }
+
             Glow.AsSpan(dest, len).Clear();
         }
     }
@@ -228,36 +290,68 @@ public sealed class IndexBuffer8
     /// <summary>
     /// Exult <c>Shape_frame::paint_rle_outline</c>: a pixel of the colour at
     /// both ends of every scan, and the whole scans on the first scan's row
-    /// and the row a frame's height below it.
+    /// and the row a frame's height below it. The frame is the original
+    /// one; each of its pixels is a <paramref name="scale"/>-square block
+    /// here, the hotspot's at x, y.
     /// </summary>
-    public void PaintRleOutline(ShapeFrame frame, int x, int y, byte color)
+    public void PaintRleOutline(ShapeFrame frame, int x, int y, byte color, int scale = 1)
     {
         if (!frame.IsRle || frame.Scans.Length == 0)
         {
             return;
         }
 
-        var firsty = y + frame.Scans[0].Y;
+        var firsty = frame.Scans[0].Y;
         var lasty = firsty + frame.Height - 1;
         foreach (var scan in frame.Scans)
         {
-            var sx = x + scan.X;
-            var sy = y + scan.Y;
-            PutPixel8(color, sx, sy);
-            PutPixel8(color, sx + scan.Length - 1, sy);
-            if (sy == firsty || sy == lasty)
+            var sx = x + scan.X * scale;
+            var sy = y + scan.Y * scale;
+            Fill8(color, scale, scale, sx, sy);
+            Fill8(color, scale, scale, sx + (scan.Length - 1) * scale, sy);
+            if (scan.Y == firsty || scan.Y == lasty)
             {
-                Fill8(color, scan.Length, 1, sx, sy);
+                Fill8(color, scan.Length * scale, scale, sx, sy);
             }
         }
     }
 
-    void PutPixel8(byte color, int x, int y)
+    /// <summary>A frame's scans filled with one colour (a hi-res outline, <see cref="ShapeFrame.Outline"/>).</summary>
+    public void PaintRleSolid(ShapeFrame frame, int x, int y, byte color)
     {
-        if ((uint)x < (uint)Width && (uint)y < (uint)Height)
+        foreach (var scan in frame.Scans)
         {
-            Pixels[y * Width + x] = color;
-            Glow[y * Width + x] = 0;
+            if (ClipScan(scan, x, y, out var dest, out _, out var len))
+            {
+                Pixels.AsSpan(dest, len).Fill(color);
+                Glow.AsSpan(dest, len).Clear();
+                Unmix(dest, len);
+            }
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="len"/> pixels' mix from a frame's plane (at pixel
+    /// <paramref name="src"/>) to the buffer's (at <paramref name="dest"/>);
+    /// a frame without one leaves them unmixed.
+    /// </summary>
+    void CopyMix(ReadOnlySpan<byte> mix, int src, int dest, int len)
+    {
+        if (mix.IsEmpty)
+        {
+            Unmix(dest, len);
+            return;
+        }
+
+        mix.Slice(src * 2, len * 2).CopyTo(Mix.AsSpan(dest * 2, len * 2));
+        MixUsed = true;
+    }
+
+    void Unmix(int dest, int len)
+    {
+        if (MixUsed)
+        {
+            Mix.AsSpan(dest * 2, len * 2).Clear();
         }
     }
 

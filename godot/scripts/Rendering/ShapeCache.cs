@@ -37,6 +37,9 @@ public sealed class ShapeCache
     public ReadOnlySpan<byte> DayPalette => _palette;
     /// <summary>Exult's translucency tables (XFORM.TBL).</summary>
     public XformTables Xforms { get; }
+    /// <summary>The redrawn art, when the user's look has a pack: the gumps, pictures and faces show it too.</summary>
+    public HiresArt? Hires;
+    int _hiresVersion;
 
     public ShapeCache(ShapeCatalog catalog)
     {
@@ -62,6 +65,12 @@ public sealed class ShapeCache
     /// <summary>A SPRITES.VGA frame by palette index.</summary>
     public ShapeFrame? GetSprite8(int sprite, int frame) => _sprites8.Get(sprite, frame);
 
+    /// <summary>Whether a SHAPES.VGA frame is made by reflecting frame & 0x1f (Exult <c>Shape::read</c>).</summary>
+    public bool IsReflection(int shape, int frame) => FrameTable.IsReflection(_catalog.ShapesVga, shape, frame);
+
+    /// <summary>Whether a SPRITES.VGA frame is made by reflecting frame & 0x1f.</summary>
+    public bool IsSpriteReflection(int sprite, int frame) => FrameTable.IsReflection(_spritesVga, sprite, frame);
+
     /// <summary>
     /// A SPRITES.VGA frame as an RGBA texture in the day palette, for pictures
     /// over the gumps: opaque (Exult <c>paint_shape</c>), or with the
@@ -69,15 +78,16 @@ public sealed class ShapeCache
     /// </summary>
     public Texture2D? GetSprite(int sprite, int frame, bool translucent = false)
     {
+        CheckHires();
         var key = (sprite, frame, translucent);
         if (_spriteTex.TryGetValue(key, out var cached))
         {
             return cached;
         }
 
-        var tex = GetSprite8(sprite, frame) is { } decoded
-            ? ImageTexture.CreateFromImage(decoded.ToImage(translucent ? _translucentPalette : _palette))
-            : null;
+        var palette = translucent ? _translucentPalette : _palette;
+        var tex = HiresTexture(UiArt.Sprite, sprite, frame, 0, palette) ??
+                  (GetSprite8(sprite, frame) is { } decoded ? ImageTexture.CreateFromImage(decoded.ToImage(palette)) : null);
         _spriteTex[key] = tex;
         return tex;
     }
@@ -90,19 +100,23 @@ public sealed class ShapeCache
     /// </summary>
     public Texture2D? Get(int shape, int frame)
     {
+        CheckHires();
         var key = (shape, frame);
         if (_textures.TryGetValue(key, out var cached))
         {
             return cached;
         }
 
-        var tex = GetFrame8(shape, frame) is { } decoded ? ImageTexture.CreateFromImage(decoded.ToImage(_catalog[shape].Translucent ? _translucentPalette : _palette)) : null;
+        var palette = _catalog[shape].Translucent ? _translucentPalette : _palette;
+        var tex = HiresTexture(UiArt.Shape, shape, frame, 0, palette) ??
+                  (GetFrame8(shape, frame) is { } decoded ? ImageTexture.CreateFromImage(decoded.ToImage(palette)) : null);
         _textures[key] = tex;
         return tex;
     }
 
     public Texture2D? GetGump(int shape, int frame)
     {
+        CheckHires();
         var key = (shape, frame);
         if (_gumpTex.TryGetValue(key, out var cached))
         {
@@ -110,7 +124,7 @@ public sealed class ShapeCache
         }
 
         var image = GetGumpImage(shape, frame);
-        var tex = image is null ? null : ImageTexture.CreateFromImage(image);
+        var tex = image is null ? null : HiresTexture(UiArt.Gump, shape, frame, _gumpsVga.FrameCount(shape), _palette) ?? ImageTexture.CreateFromImage(image);
         _gumpTex[key] = tex;
         return tex;
     }
@@ -148,6 +162,7 @@ public sealed class ShapeCache
 
     public Texture2D? GetFace(int shape, int frame)
     {
+        CheckHires();
         var key = (shape, frame);
         if (_faceTex.TryGetValue(key, out var cached))
         {
@@ -155,9 +170,45 @@ public sealed class ShapeCache
         }
 
         var image = _facesVga.Decode(shape, frame, _palette);
-        var tex = image is null ? null : ImageTexture.CreateFromImage(image);
+        var tex = image is null ? null : HiresTexture(UiArt.Face, shape, frame, _facesVga.FrameCount(shape), _palette) ?? ImageTexture.CreateFromImage(image);
         _faceTex[key] = tex;
         return tex;
+    }
+
+    /// <summary>
+    /// A pack's frame (<see cref="HiresArt.UiFrame"/>) as a texture that
+    /// reports the original's size, so it is drawn where and as large as the
+    /// original, its finer pixels smoothly filtered; null where the original
+    /// is shown.
+    /// </summary>
+    Texture2D? HiresTexture(UiArt kind, int shape, int frame, int count, ReadOnlySpan<byte> palette)
+    {
+        if (Hires is not { Pack: not null } hires || hires.UiFrame(kind, shape, frame, count) is not { } hi)
+        {
+            return null;
+        }
+
+        var image = hi.ToImage(palette);
+        image.GenerateMipmaps();
+        var tex = ImageTexture.CreateFromImage(image);
+        tex.SetSizeOverride(new Vector2I(Math.Max(1, hi.Width / hires.Scale), Math.Max(1, hi.Height / hires.Scale)));
+        return new CanvasTexture { DiffuseTexture = tex, TextureFilter = CanvasItem.TextureFilterEnum.LinearWithMipmaps };
+    }
+
+    /// <summary>Forgets the textures made when the art has changed.</summary>
+    void CheckHires()
+    {
+        var version = Hires?.Version ?? 0;
+        if (version == _hiresVersion)
+        {
+            return;
+        }
+
+        _hiresVersion = version;
+        _textures.Clear();
+        _gumpTex.Clear();
+        _faceTex.Clear();
+        _spriteTex.Clear();
     }
 
     /// <summary>
@@ -214,14 +265,16 @@ public sealed class ShapeCache
                 return _file.DecodeFrame(shape, frame, true);
             }
 
-            // Exult Shape::read: a stored frame, or past them with bit 5 the
-            // reflection; terrain ignores the bit.
-            if (frame >= 32 && frame >= _file.FrameCount(shape) && !_file.Get(shape, 0).IsTile)
+            if (IsReflection(_file, shape, frame))
             {
                 return Get(shape, frame & 0x1f)?.Reflect();
             }
 
             return _file.DecodeFrame(shape, frame, false);
         }
+
+        /// <summary>Exult <c>Shape::read</c>: a stored frame, or past them with bit 5 the reflection; terrain ignores the bit.</summary>
+        public static bool IsReflection(VgaShapeFile file, int shape, int frame) =>
+            frame >= 32 && frame >= file.FrameCount(shape) && !file.Get(shape, 0).IsTile;
     }
 }

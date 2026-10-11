@@ -41,6 +41,8 @@ public sealed class MusicPlayer : IDisposable
     public bool Available => OperatingSystem.IsWindows();
     /// <summary>Track playing, or -1 (Exult <c>get_current_track</c>).</summary>
     public int CurrentTrack => _currentTrack;
+    /// <summary>Music still sounds (Exult <c>is_track_playing</c>): a piece not repeated ends by itself.</summary>
+    public bool IsPlaying => _thread is { IsAlive: true };
     /// <summary>Exult <c>MyMidiPlayer::egg_count</c>: continuous jukebox eggs holding the track.</summary>
     public int EggCount { get; set; }
     public string LastError { get; private set; } = "";

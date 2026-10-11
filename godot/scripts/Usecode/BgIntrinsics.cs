@@ -704,21 +704,30 @@ public sealed class BgIntrinsics
         return Zero();
     }
 
-    /// <summary>Exult <c>UI_get_dead_party(obj)</c>: corpses of party members within 50 tiles.</summary>
+    /// <summary>
+    /// Exult <c>UI_get_dead_party(obj)</c>: an element per member on the
+    /// dead-party list, in its order, its body if that lies within 50 tiles
+    /// of the object (Exult's guess), else 0.
+    /// </summary>
     UsecodeValue GetDeadParty(UsecodeValue[] p)
     {
-        var obj = _vm.GetItem(p[0]) ?? _vm.Avatar;
-        var bodies = new List<U7Object>();
-        foreach (var o in _vm.Map.FindNearby(new TileCoord(obj.Tx, obj.Ty, obj.Tz), U7Constants.AnyShape, 50))
+        if (_vm.GetItem(p[0]) is not { } obj || _vm.Party is not { } party)
         {
-            if (o.LiveNpcNum > 0 && o.LiveNpcNum < _vm.Npcs.Count &&
-                _vm.Npcs[o.LiveNpcNum] is { } npc && npc.IsDead && npc.GetFlag(U7.Actors.ObjFlag.InParty))
+            return Zero();
+        }
+
+        var dead = party.DeadMembers;
+        var near = _vm.Map.FindNearby(new TileCoord(obj.Tx, obj.Ty, obj.Tz), U7Constants.AnyShape, 49);
+        var ret = UsecodeValue.FromArray(dead.Count, Zero());
+        for (var i = 0; i < dead.Count; i++)
+        {
+            if (near.FirstOrDefault(o => o.LiveNpcNum == dead[i].NpcNum && o.LiveNpcNum > 0) is { } body)
             {
-                bodies.Add(o);
+                ret.PutElem(i, UsecodeValue.FromObject(body));
             }
         }
 
-        return UsecodeValue.FromObjects(bodies);
+        return ret;
     }
 
     /// <summary>Exult <c>Usecode_internal::get_party</c>: avatar first, then the members.</summary>
@@ -861,7 +870,7 @@ public sealed class BgIntrinsics
             delta += item.GetProp(prop);
         }
 
-        item.SetProp(prop, delta);
+        U7.Actors.ActorProp.Set(item, prop, delta);
         return UsecodeValue.FromInt(1);
     }
 
@@ -1250,23 +1259,23 @@ public sealed class BgIntrinsics
         _vm.Avatar is { } av && _vm.Map.AvatarInside(av);
 
     /// <summary>Exult <c>sprites/map</c> in Black Gate (bggame.cc).</summary>
-    const int MapSprite = 22;
+    public const int MapSprite = 22;
     /// <summary>The sextant's shape.</summary>
     const int SextantShape = 650;
 
     /// <summary>
     /// Exult <c>UI_display_map</c>: the map sprite until a click, marking where
     /// the avatar is when the party has a sextant and the avatar is outdoors
-    /// (<c>Paint_map</c>'s Black Gate scale, rounded as <c>lround</c> does).
+    /// (<c>Paint_map</c>; the game stands still while it shows, so the tile is
+    /// the one Exult reads when it paints).
     /// </summary>
     UsecodeValue DisplayMap()
     {
-        Godot.Vector2I? mark = null;
+        TileCoord? mark = null;
         if (_vm.Avatar is { } av && !AvatarInside() &&
             PartyObjects().Sum(m => Quantities.Count(m, SextantShape, U7Constants.AnyShape, U7Constants.AnyShape)) > 0)
         {
-            mark = new Godot.Vector2I((int)Math.Round(av.Tx / 16.05 + 5, MidpointRounding.AwayFromZero),
-                (int)Math.Round(av.Ty / 15.95 + 4, MidpointRounding.AwayFromZero));
+            mark = new TileCoord(av.Tx, av.Ty, av.Tz);
         }
 
         _vm.ShowPicture(new UsecodePicture(MapSprite, 0, mark));
@@ -1274,14 +1283,22 @@ public sealed class BgIntrinsics
     }
 
     /// <summary>
-    /// Exult <c>UI_start_speech(n)</c> and <c>UI_start_blocking_speech(n)</c>
-    /// when the speech doesn't play (there is no speech playback yet): the track
-    /// is kept for <c>get_speech_track</c>, the faces go, and 0 tells the
-    /// usecode to show the text instead.
+    /// Exult <c>UI_start_speech(n)</c> and <c>UI_start_blocking_speech(n)</c>:
+    /// the track kept for <c>get_speech_track</c> and its voice played; 1 when
+    /// it plays, else the faces go and 0 tells the usecode (0x940) to show the
+    /// text. With the user's subtitles the answer is 0 while the voice plays,
+    /// so the text shows too (Exult's <c>speech_with_subs</c> reaches only
+    /// <c>do_speech</c>).
     /// </summary>
     UsecodeValue StartSpeech(UsecodeValue[] p)
     {
         _vm.SpeechTrack = (int)p[0].IntValue;
+        var played = _vm.SpeechTrack >= 0 && _vm.Speech?.PlaySpeech(_vm.SpeechTrack) == true;
+        if (played && _vm.Speech is { WithSubtitles: false })
+        {
+            return UsecodeValue.FromInt(1);
+        }
+
         _vm.Conv.InitFaces();
         _vm.NotifyFaces();
         return Zero();
@@ -1365,18 +1382,37 @@ public sealed class BgIntrinsics
         return Zero();
     }
 
+    /// <summary>Exult <c>UI_get_alignment</c>: the effective one (a charmed actor's charm side).</summary>
     UsecodeValue GetAlignment(UsecodeValue[] p)
     {
         var npc = _vm.GetItem(p[0]);
-        return UsecodeValue.FromInt(npc?.Alignment ?? 0);
+        return UsecodeValue.FromInt(npc is { IsActor: true } ? npc.EffectiveAlignment : 0);
     }
 
+    /// <summary>
+    /// Exult <c>UI_set_alignment</c>: <c>set_effective_alignment</c>; a change
+    /// makes those fighting it look again and it seek a new opponent; one
+    /// fleeing fights the nearest instead (Exult's fix for fleeing in fields).
+    /// </summary>
     UsecodeValue SetAlignment(UsecodeValue[] p)
     {
-        var npc = _vm.GetItem(p[0]);
-        if (npc is not null)
+        if (_vm.GetItem(p[0]) is not { IsActor: true } npc)
         {
-            npc.Alignment = (int)p[1].IntValue;
+            return Zero();
+        }
+
+        var align = (int)p[1].IntValue;
+        var old = npc.EffectiveAlignment;
+        npc.SetEffectiveAlignment(align);
+        if (old != align)
+        {
+            _vm.Combat?.Timers?.StopAttacking(npc);
+            npc.CombatTarget = null;
+        }
+
+        if (npc.AttackMode == U7.Actors.AttackMode.Flee)
+        {
+            npc.AttackMode = U7.Actors.AttackMode.Nearest;
         }
 
         return Zero();
@@ -1421,8 +1457,24 @@ public sealed class BgIntrinsics
         return Zero();
     }
 
+    /// <summary>
+    /// Exult <c>UI_click_on_item</c>: an intercepted click answers at once
+    /// (the object and its tile, Exult's <c>intercept_item</c>: a spell cast
+    /// from a readied spellbook in combat aims at the caster's target); else
+    /// it waits for the player's click.
+    /// </summary>
     UsecodeValue ClickOnItem()
     {
+        if (_vm.InterceptItem is { } obj)
+        {
+            _vm.InterceptItem = null;
+            var arr = UsecodeValue.FromArray(4, UsecodeValue.FromObject(obj));
+            arr.PutElem(1, UsecodeValue.FromInt(obj.Tx));
+            arr.PutElem(2, UsecodeValue.FromInt(obj.Ty));
+            arr.PutElem(3, UsecodeValue.FromInt(obj.Tz));
+            return arr;
+        }
+
         _vm.RequestWait(UsecodeWait.ClickOnItem);
         return Zero();
     }
@@ -1742,9 +1794,19 @@ public sealed class BgIntrinsics
         IActorAction? action = obj is null
             ? PathWalk.Astar(_vm.Map, npc, dest)
             : new IfElsePathAction(_vm.Map, npc, dest, new UsecodeAction(fun, obj, (int)p[3].IntValue));
-        if (action is null)
+        // Exult set_get_party: the companions come along, and are called after the last step.
+        switch (action)
         {
-            return Zero();
+            case null:
+                return Zero();
+            case PathWalk walk:
+                walk.GetParty = true;
+                walk.LastStep = runner.AvatarWalkEnded;
+                break;
+            case IfElsePathAction ifElse:
+                ifElse.GetParty = true;
+                ifElse.LastStep = runner.AvatarWalkEnded;
+                break;
         }
 
         runner.StartAction(npc, action, U7Constants.StandardDelayMs, 0);
@@ -2044,8 +2106,9 @@ public sealed class BgIntrinsics
         if (size >= 3)
         {
             from.AttackTargetObj = null;
-            from.AttackTargetTile = new TileCoord((int)p[1].GetElem(1).IntValue, (int)p[1].GetElem(2).IntValue,
-                size >= 4 ? (int)p[1].GetElem(3).IntValue : 0);
+            // Exult Tile_coord::fixme: wrapped round the world.
+            from.AttackTargetTile = new TileCoord(U7Constants.WrapTile((int)p[1].GetElem(1).IntValue),
+                U7Constants.WrapTile((int)p[1].GetElem(2).IntValue), size >= 4 ? (int)p[1].GetElem(3).IntValue : 0);
             return UsecodeValue.FromInt(1);
         }
 

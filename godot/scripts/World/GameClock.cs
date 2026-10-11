@@ -3,7 +3,7 @@ using U7.Rendering;
 
 namespace U7.World;
 
-/// <summary>Exult <c>Game_clock</c> without hunger or light sources.</summary>
+/// <summary>Exult <c>Game_clock</c> (the hourly mending and hunger through <see cref="HourTicked"/>; no light sources).</summary>
 public sealed class GameClock
 {
     public int Hour { get; private set; } = 6;
@@ -28,6 +28,12 @@ public sealed class GameClock
 
     public event Action<int>? HourChanged;
     public event Action<int>? SlotChanged;
+    /// <summary>
+    /// Exult <c>Game_clock::handle_event</c>: an hour passed by the clock's
+    /// own tick, once for each (<c>mend_npcs</c>, <c>check_hunger</c>); not
+    /// when usecode moves the clock on.
+    /// </summary>
+    public event Action? HourTicked;
 
     double _accum;
 
@@ -143,6 +149,8 @@ public sealed class GameClock
                 Hour -= 24;
                 Day++;
             }
+
+            HourTicked?.Invoke();
         }
 
         // Exult Game_render::paint_map: the light spell ends.

@@ -15,6 +15,8 @@ public static class Spellbook
     public const int SpellCount = 9 * 8;
     /// <summary>Exult <c>BaseSpellsUsecode</c>.</summary>
     public const int BaseSpellsUsecode = 0x640;
+    /// <summary>Exult's casting frames, shown in the caster's hand while the spell's script runs (hard-coded there too).</summary>
+    public const int CastingFrames = 859;
 
     // Reagent bits match the reagent's frame.
     const int Bp = 1; // Black pearl.
@@ -58,6 +60,10 @@ public static class Spellbook
         Bm | Gr | Mr, Bp | Mr | Ns, Bm | Gr | Mr
     ];
 
+    /// <summary>Exult <c>can_do_spell(act)</c>: the bookmarked spell, if any, can be cast.</summary>
+    public static bool CanDoBookmark(U7Object book, U7Object caster, ItemQuantity quantities) =>
+        book.SpellBookmark >= 0 && CanDoSpell(book, caster, book.SpellBookmark, quantities);
+
     public static bool HasSpell(U7Object book, int spell) =>
         spell is >= 0 and < SpellCount && book.SpellCircles is { } c && (c[spell / 8] & (1 << (spell % 8))) != 0;
 
@@ -89,8 +95,9 @@ public static class Spellbook
 
     /// <summary>
     /// Exult <c>Spellbook_object::do_spell</c>: pay the mana and a reagent of
-    /// each kind, then run the spell's usecode as a double-click on the caster.
-    /// False if it cannot be cast.
+    /// each kind, then run the spell's usecode on the caster
+    /// (<c>execute_spell</c>: its next script shows the casting frames in its
+    /// hand). False if it cannot be cast.
     /// </summary>
     public static bool DoSpell(U7Object book, U7Object caster, int spell, bool canDo, ItemQuantity quantities,
         Action<int, U7Object> runUsecode)
@@ -110,7 +117,8 @@ public static class Spellbook
             }
         }
 
-        // (Exult also shows the casting frames, shape 859, in the caster's hand.)
+        caster.Casting = CastingMode.Init;
+        caster.CastingShape = CastingFrames;
         runUsecode(BaseSpellsUsecode + spell, caster);
         return true;
     }

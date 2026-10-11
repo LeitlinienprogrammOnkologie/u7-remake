@@ -20,10 +20,10 @@ namespace U7.Game;
 public partial class U7Game
 {
     const string AgentHelp =
-        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | create <shape> [frame] [qual] | esc | saveload [choose <row>|name <text>|save|load|delete|cancel|quit|yes|no] | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
+        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | create <shape> [frame] [qual] | esc | saveload [choose <row>|name <text>|save|load|delete|cancel|quit|yes|no] | menu [journey|new|intro|credits|quotes|endgame|quit|up|down|key|esc] | speech <n>|intro|endgame <7-9>|play <n>|state | prop <npc|id> <name|n> <value> | quantity <n>|cancel | spells <book> <n>... | key <name> | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
-        "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | quit | die [restart] | " +
-        "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] | damage <n> [type] | arena | combat [off] | attack <id> | drag <id> | cursor <x> <y> | avatar <name> [male|female] | name <id>|gump | rmouse <x> <y> <sec>|double | rclose | endgame [won|lost] | close";
+        "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | art [pack <name>|original | scale <n> | mix on|off | sharp on|off | check] | quit | die [restart] | " +
+        "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] | damage <n> [type] | arena [shape] | combat [off] | attack <id> | drag <id> | cursor <x> <y> | avatar <name> [male|female] | name <id>|gump | rmouse <x> <y> <sec>|double | rclose | endgame [won|lost] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
     static bool _agentStarted;
@@ -61,6 +61,7 @@ public partial class U7Game
             _agentLines = File.Exists(cmd) ? File.ReadAllLines(cmd).Length : 0;
         }
         _music.Enabled = false;
+        _speech.Enabled = false;
         _music.Stop();
         _agentFlags0 = (byte[])_usecode.GFlags.Clone();
         _usecode.Say += text => AgentLog("SAY " + text.Replace('\n', ' '));
@@ -337,6 +338,29 @@ public partial class U7Game
                     MouseY = mouse.Y
                 };
                 _gumps.LiftUp(drag);
+                if (parts.Length > 5)
+                {
+                    // Part of the stack: a count, as the slider would give, or "ask" for the dialog (answered by `quantity`).
+                    var quantity = Inventory.GetQuantity(item, _catalog);
+                    void Count(int count)
+                    {
+                        _gumps.DropCount(drag, _gumpView, 0, 0, null, count);
+                        AgentLog($"dropped {count} of {quantity} (aimed at {dx},{dy} lift {tz}); the stack: {AgentDescribe(item)}");
+                    }
+
+                    if (parts[5] == "ask")
+                    {
+                        AskQuantity(quantity, item, Count);
+                        AgentLog($"asks how many of {ObjectNames.OfThing(item, _catalog)}");
+                    }
+                    else
+                    {
+                        Count(int.Parse(parts[5]));
+                    }
+
+                    break;
+                }
+
                 var result = _gumps.DropInWorld(drag);
                 var takenBy = result == MapDrop.Taken && item.Container is { } holder ? $" by {AgentName(Inventory.Outermost(holder))}" : "";
                 AgentLog($"{result.ToString().ToLowerInvariant()}{takenBy} (aimed at {dx},{dy} lift {tz}): {AgentDescribe(item)}");
@@ -391,6 +415,11 @@ public partial class U7Game
             {
                 // A drag into the avatar's gump, with Exult's theft check.
                 var target = AgentTarget(arg) ?? throw new ArgumentException("no such object");
+                if (AgentRefusesDrag(target))
+                {
+                    break;
+                }
+
                 var okayToMove = target.GetFlag(ObjFlag.OkayToTake);
                 var lifted = AgentLiftedFrom(target);
                 if (!Equipment.AddToActor(av, target, _catalog, _map))
@@ -414,6 +443,11 @@ public partial class U7Game
                 // into an actor (its paperdoll), Exult's Actor::add readies it in its best free spot.
                 var item = AgentTarget(parts[1]) ?? throw new ArgumentException("no such object");
                 var cont = AgentTarget(parts[2]) ?? throw new ArgumentException("no such container");
+                if (AgentRefusesDrag(item))
+                {
+                    break;
+                }
+
                 var from = item.Container;
                 var okayToMove = item.GetFlag(ObjFlag.OkayToTake);
                 var lifted = AgentLiftedFrom(item);
@@ -433,6 +467,21 @@ public partial class U7Game
                     _gumps.PossibleTheft?.Invoke();
                 }
 
+                break;
+            }
+            case "key":
+            {
+                // A key press (Godot's key names: pageup, home, left, enter...) through the game's key handling.
+                if (!Enum.TryParse<Key>(arg, true, out var pressed))
+                {
+                    AgentLog($"no key {arg}");
+                    break;
+                }
+
+                _UnhandledInput(new InputEventKey { Keycode = pressed, Pressed = true });
+                AgentLog(_gumps.KeyboardFocus is SpellbookGump focused
+                    ? $"{pressed}: the spellbook has the keys, page {focused.Page}, bookmark {focused.Book.SpellBookmark}"
+                    : $"{pressed}: no gump has the keys");
                 break;
             }
             case "book":
@@ -468,9 +517,16 @@ public partial class U7Game
             {
                 if (_endgame is { } endgame)
                 {
-                    // As a key that skips the endgame's movies or ends its credits.
+                    // As a key that skips the endgame's movies or ends its credits; in the intro, a scene (all: Esc, the intro).
+                    if (arg == "all" && endgame is Intro intro)
+                    {
+                        intro.Break();
+                        AgentLog("INTRO break");
+                        break;
+                    }
+
                     endgame.Skip();
-                    AgentLog("ENDGAME skip");
+                    AgentLog(endgame is Intro ? "INTRO skip" : "ENDGAME skip");
                     break;
                 }
 
@@ -593,8 +649,8 @@ public partial class U7Game
                 break;
             }
             case "arena":
-                // The F3 debug fight: three chaotic rats around the avatar, combat on.
-                _combat.SpawnArena();
+                // The F3 debug fight: three chaotic rats (or monsters of another shape) around the avatar, combat on.
+                _combat.SpawnArena(parts.Length > 1 ? int.Parse(parts[1]) : 523);
                 AgentLog(_combat.LastMessage);
                 break;
             case "combat":
@@ -741,6 +797,38 @@ public partial class U7Game
                 _lighting.Update(0);
                 AgentLog(_lighting.Describe());
                 break;
+            case "art":
+                // The world's art at a higher resolution (HiresArt): its scale,
+                // the sharp fill, or a check that the blown-up art is the original.
+                if (parts.Length > 2 && parts[1] == "scale")
+                {
+                    U7.Rendering.ArtLook.Scale = int.Parse(parts[2]);
+                    _world.Art?.SetScale(U7.Rendering.ArtLook.Scale);
+                }
+                else if (parts.Length > 2 && parts[1] == "pack")
+                {
+                    U7.Rendering.ArtLook.Pack = parts[2] == "original" ? null : parts[2];
+                    _world.Art?.UsePack(U7.Rendering.ArtLook.Pack, U7.Rendering.ArtLook.Scale);
+                    _conversation.Refresh(); // its faces, fetched as the talk changes
+                }
+                else if (parts.Length > 2 && parts[1] == "mix")
+                {
+                    U7.Rendering.ArtLook.Mix = parts[2] is "on" or "1";
+                    _world.Art?.Clear();
+                    _conversation.Refresh();
+                }
+                else if (parts.Length > 2 && parts[1] == "sharp")
+                {
+                    U7.Rendering.ArtLook.Sharp = parts[2] is "on" or "1";
+                }
+                else if (parts.Length > 1 && parts[1] == "check")
+                {
+                    AgentLog(_world.CheckScale());
+                    break;
+                }
+
+                AgentLog($"art: {_world.Art?.Describe()}, mix {(U7.Rendering.ArtLook.Mix ? "on" : "off")}, sharp {(U7.Rendering.ArtLook.Sharp ? "on" : "off")}; {_world.Timing()}");
+                break;
             case "shot":
             {
                 if (DisplayServer.GetName() == "headless")
@@ -876,6 +964,90 @@ public partial class U7Game
             case "saveload":
                 AgentSaveLoad(parts);
                 break;
+            case "menu":
+                AgentMenu(parts);
+                break;
+            case "spells":
+            {
+                // A test shortcut: spells added to a spellbook as usecode's add_spell does (0-71), the first bookmarked.
+                var book = AgentTarget(parts[1]) ?? throw new ArgumentException("no such object");
+                if (book.SpellCircles is not { } circles)
+                {
+                    AgentLog("not a spellbook");
+                    break;
+                }
+
+                foreach (var n in parts.Skip(2).Select(int.Parse))
+                {
+                    circles[n / 8] |= (byte)(1 << (n % 8));
+                }
+
+                book.SpellBookmark = int.Parse(parts[2]);
+                AgentLog($"{AgentDescribe(book)}: spells {string.Join(" ", Enumerable.Range(0, Spellbook.SpellCount).Where(s => Spellbook.HasSpell(book, s)))}, bookmark {book.SpellBookmark}");
+                break;
+            }
+            case "quantity":
+                // The "how many?" dialog answered: a number (OK) or cancel (Esc).
+                if (_quantityView is not { } asking)
+                {
+                    AgentLog("nothing asks how many");
+                    break;
+                }
+
+                asking.Finish(arg == "cancel" ? 0 : int.Parse(arg));
+                break;
+            case "prop":
+            {
+                // A test shortcut: an actor's property set as usecode's set_npc_prop would (strength, dexterity,
+                // intelligence, health, combat, mana, magic, training, exp, food), by name or number.
+                var who = AgentTarget(parts[1]) ?? throw new ArgumentException("no such actor");
+                var prop = int.TryParse(parts[2], out var n) ? n : Array.IndexOf(PropNames, parts[2].ToLowerInvariant());
+                if (prop < 0 || prop >= ActorProp.Count)
+                {
+                    throw new ArgumentException("props: " + string.Join(", ", PropNames));
+                }
+
+                if (prop == ActorProp.Health)
+                {
+                    NpcTimers.SetHealth(who, int.Parse(parts[3]));
+                }
+                else
+                {
+                    who.SetProp(prop, int.Parse(parts[3]));
+                }
+
+                AgentLog(AgentDescribe(who));
+                break;
+            }
+            case "speech" when parts.Length > 1 && parts[1] is "play" or "state":
+                // A voice played with the sound muted (the console's games are silent otherwise), and whether it still plays.
+                if (parts[1] == "play")
+                {
+                    AudioServer.SetBusMute(0, true);
+                    _speech.Enabled = true;
+                    AgentLog(_speech.PlaySpeech(int.Parse(parts[2])) ? "voice playing (muted)" : "no voice");
+                    _speech.Enabled = false;
+                }
+                else
+                {
+                    AgentLog(_speech.IsPlaying ? "voice playing" : "no voice playing");
+                }
+
+                break;
+            case "speech":
+            {
+                // A voice decoded, not played (the console's games are silent): U7SPEECH.SPC's n, the intro's, or ENDGAME.DAT's 7-9.
+                byte[] voc = parts[1] switch
+                {
+                    "intro" => File.ReadAllBytes(Path.Combine(U7Paths.StaticDir, "INTROSND.DAT")),
+                    "endgame" => new IffFile(Path.Combine(U7Paths.StaticDir, "ENDGAME.DAT")).Get(int.Parse(parts[2])).ToArray(),
+                    _ => new FlexFile(Path.Combine(U7Paths.StaticDir, "U7SPEECH.SPC")).Get(int.Parse(parts[1])).ToArray()
+                };
+                AgentLog(U7.Audio.VocFile.Decode(voc) is { } stream
+                    ? $"voice: {stream.MixRate} Hz, {stream.Data.Length} samples, {stream.GetLength():0.0} s"
+                    : "no voice");
+                break;
+            }
             case "save":
                 if (UsecodeRunning)
                 {
@@ -945,6 +1117,59 @@ public partial class U7Game
         AgentLog(_saveLoad?.Describe() ?? "screen closed");
     }
 
+    /// <summary>
+    /// The main menu as the keys and mouse would use it: shown (headless games
+    /// start without it), an entry taken, the selection moved, Exult's
+    /// "journey failed" words dismissed, or the new game screen's Esc.
+    /// </summary>
+    void AgentMenu(string[] parts)
+    {
+        var sub = parts.Length > 1 ? parts[1] : "";
+        if (sub == "esc" && _newGame is { Cancelled: { } back })
+        {
+            back();
+        }
+        else if (_mainMenu is null && _endgame is null && _newGame is null)
+        {
+            ShowMainMenu();
+        }
+
+        if (_mainMenu is { } menu)
+        {
+            switch (sub)
+            {
+                case "up":
+                case "down":
+                    menu.Select(menu.Describe().Split(" | ").ToList().FindIndex(e => e.StartsWith('*')) + (sub == "up" ? -1 : 1));
+                    break;
+                case "key":
+                    menu.DismissMessage();
+                    break;
+                case "journey" or "new" or "intro" or "credits" or "quotes" or "endgame" or "quit":
+                    var choice = sub switch
+                    {
+                        "journey" => MenuChoice.Journey,
+                        "new" => MenuChoice.NewGame,
+                        "intro" => MenuChoice.Intro,
+                        "credits" => MenuChoice.Credits,
+                        "quotes" => MenuChoice.Quotes,
+                        "endgame" => MenuChoice.Endgame,
+                        _ => MenuChoice.Quit
+                    };
+                    if (!menu.Take(choice))
+                    {
+                        AgentLog($"the menu offers no {sub}");
+                    }
+
+                    break;
+            }
+        }
+
+        AgentLog(_mainMenu?.Describe() ?? (_newGame is not null ? "the new game screen" : _endgame is not null ? "a show runs" : "no menu"));
+    }
+
+    static readonly string[] PropNames = ["strength", "dexterity", "intelligence", "health", "combat", "mana", "magic", "training", "exp", "food"];
+
     /// <summary>In barge mode, steer the barge's centre to the tile (a held click there) until it stops.</summary>
     void AgentSail(int tx, int ty)
     {
@@ -967,6 +1192,18 @@ public partial class U7Game
         _gumps.CloseAll();
         _agentClick = new Vector2I(tx, ty);
         AgentAwaitArrival(tx, ty);
+    }
+
+    /// <summary>A drag of a thing in the world starts with Exult's checks: what the mouse couldn't pick up is refused.</summary>
+    bool AgentRefusesDrag(U7Object obj)
+    {
+        if (obj.Container is not null || _gumps.RefuseWorldDrag(obj) is not { } flash)
+        {
+            return false;
+        }
+
+        AgentLog($"cannot pick it up ({(flash == MouseShape.TooHeavy ? "too heavy" : "out of reach")})");
+        return true;
     }
 
     /// <summary>What a drag of a thing in the world does once it was dropped elsewhere (its eggs, gravity), for later.</summary>
@@ -1049,7 +1286,7 @@ public partial class U7Game
     void AgentUse(U7Object obj)
     {
         // Exult Game_window::double_clicked: in combat mode an enemy is attacked; otherwise its usecode runs.
-        if (_combat.InCombat && obj.IsActor && CombatEngine.IsEnemy(_avatar.Avatar.Alignment, obj.Alignment))
+        if (_combat.InCombat && obj.IsActor && CombatEngine.IsEnemy(_avatar.Avatar.EffectiveAlignment, obj.EffectiveAlignment))
         {
             _combat.AttackClicked(obj);
             AgentLog(_combat.LastMessage);
@@ -1065,10 +1302,11 @@ public partial class U7Game
             return;
         }
 
+        _statusExtra = ""; // a sleeper ignoring the click sets none: don't report the last one again
         RunUsecode(obj);
         if (_usecode is { InUsecode: false, WaitingForChoice: false })
         {
-            AgentLog($"usecode ran: {_statusExtra}");
+            AgentLog(_statusExtra.Length > 0 ? $"usecode ran: {_statusExtra}" : "nothing happened");
         }
     }
 
@@ -1179,6 +1417,10 @@ public partial class U7Game
         foreach (var obj in hits)
         {
             AgentLog("  " + AgentDescribe(obj) + (obj.Container is { } c ? $" in #{c.Id} {AgentName(c)}" : ""));
+            if (obj.Container is { } container)
+            {
+                _agentIds[container.Id] = container; // usable as a `put` target too
+            }
         }
     }
 
@@ -1243,13 +1485,23 @@ public partial class U7Game
 
         if (obj.IsActor)
         {
-            sb.Append($" {AlignmentNames[obj.Alignment & 3]} faces {"N?E?S?W?"[ActorWalker.FacingOfFrame(obj.Frame)]} hp {obj.GetProp(ActorProp.Health)}");
+            sb.Append($" {AlignmentNames[obj.EffectiveAlignment & 3]}{(obj.EffectiveAlignment != obj.Alignment ? $" (own {AlignmentNames[obj.Alignment & 3]})" : "")} faces {"N?E?S?W?"[ActorWalker.FacingOfFrame(obj.Frame)]} hp {obj.GetProp(ActorProp.Health)}");
+            if (obj.NpcNum >= 0)
+            {
+                sb.Append($" food {obj.GetProp(ActorProp.FoodLevel)} mana {obj.GetProp(ActorProp.Mana)}");
+            }
+
             foreach (var (flag, word) in StatusWords)
             {
                 if (obj.GetFlag(flag))
                 {
                     sb.Append(' ').Append(word);
                 }
+            }
+
+            if (obj.Casting != CastingMode.NotCasting)
+            {
+                sb.Append(obj.Casting == CastingMode.Show ? " casting" : " about to cast");
             }
         }
         else if (obj.Kind == ObjectKind.Ireg && !obj.IsEgg && !obj.GetFlag(ObjFlag.OkayToTake))
@@ -1357,7 +1609,7 @@ public partial class U7Game
         {
             AgentLog($"WAIT {vm.Wait}" + (vm.Wait == UsecodeWait.ClickToContinue ? $"{_conversation.PageNote}: {vm.Conv.NpcText.Replace('\n', ' ')}" : "") +
                      (vm is { Wait: UsecodeWait.Picture or UsecodeWait.WizardEye, Picture: { } pic }
-                         ? $": sprite {pic.Sprite}:{pic.Frame}" + (pic.Mark is { } mark ? $", mark at {mark.X},{mark.Y}" : "") +
+                         ? $": sprite {pic.Sprite}:{pic.Frame}" + (pic.Mark is { } tile ? AgentMapMark(tile) : "") +
                            (pic.Area is { } at ? $", view at {at.Tx},{at.Ty}" : "") +
                            (vm.Wait == UsecodeWait.WizardEye ? $", {vm.WizardEyeMs / 1000:0.0} s left" : "")
                          : "") +
@@ -1368,6 +1620,20 @@ public partial class U7Game
                          ? $"  answers: {string.Join(" | ", vm.Conv.Answers)}"
                          : ""));
         }
+    }
+
+    /// <summary>The map's mark: the tile, its pixel on Exult's map sprite and, when shown, on the painted map.</summary>
+    string AgentMapMark(TileCoord tile)
+    {
+        var sprite = UsecodePicture.MapSpritePixel(tile);
+        var text = $", mark on {tile.Tx},{tile.Ty} (sprite {sprite.X},{sprite.Y}";
+        if (_mapView.Map is { } map)
+        {
+            var at = map.ToPixel(tile);
+            text += $"; painting {at.X:0},{at.Y:0} of {map.Size.X:0}x{map.Size.Y:0}";
+        }
+
+        return text + ")";
     }
 
     static readonly string[] AgentCriteria =

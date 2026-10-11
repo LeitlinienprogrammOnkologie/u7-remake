@@ -8,6 +8,16 @@ public enum ObjectKind
     Actor
 }
 
+/// <summary>Exult <c>Actor::Casting_mode</c>.</summary>
+public enum CastingMode
+{
+    NotCasting,
+    /// <summary>The actor's next usecode script shows the casting frames.</summary>
+    Init,
+    /// <summary>Shown in the hand until the script ends.</summary>
+    Show
+}
+
 /// <summary>
 /// A world object: ifix scenery, ireg items, terrain RLE (trees/rocks in
 /// chunk defs), or the avatar. Positions are absolute tiles.
@@ -116,6 +126,10 @@ public sealed class U7Object
     public U7.Core.TileCoord? AttackTargetTile;
     public int AttackWeapon = -1;
     public ulong HitUntilMsec;
+    /// <summary>Exult <c>Actor::casting_mode</c>: casting frames are coming with the actor's next script, or shown in its hand.</summary>
+    public CastingMode Casting;
+    /// <summary>Exult <c>Actor::casting_shape</c>: the shape shown in the hand while casting (859).</summary>
+    public int CastingShape = -1;
     public bool IsDead => GetFlag(U7.Actors.ObjFlag.Dead);
     /// <summary>Exult <c>Actor::Attack_mode</c> (combat-mode button).</summary>
     public int AttackMode;
@@ -250,6 +264,74 @@ public sealed class U7Object
         if ((uint)index < (uint)Props.Length)
         {
             Props[index] = value;
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::get_effective_prop</c>: dexterity and combat are 0 and
+    /// 1 while paralysed, asleep or knocked out; those and intelligence the
+    /// same when dead, else one less charmed or asleep; those and strength
+    /// gain up to 15 with might and lose 3 cursed. Other properties as they are.
+    /// </summary>
+    public int EffectiveProp(int prop)
+    {
+        var val = GetProp(prop);
+        var dexterity = prop == U7.Actors.ActorProp.Dexterity;
+        if (dexterity || prop == U7.Actors.ActorProp.Combat)
+        {
+            if (GetFlag(U7.Actors.ObjFlag.Paralyzed) || GetFlag(U7.Actors.ObjFlag.Asleep) || GetProp(U7.Actors.ActorProp.Health) <= 0)
+            {
+                return dexterity ? 0 : 1;
+            }
+        }
+
+        if (dexterity || prop is U7.Actors.ActorProp.Combat or U7.Actors.ActorProp.Intelligence)
+        {
+            if (IsDead)
+            {
+                return dexterity ? 0 : 1;
+            }
+
+            if (GetFlag(U7.Actors.ObjFlag.Charmed) || GetFlag(U7.Actors.ObjFlag.Asleep))
+            {
+                val--;
+            }
+        }
+
+        if (dexterity || prop is U7.Actors.ActorProp.Combat or U7.Actors.ActorProp.Intelligence or U7.Actors.ActorProp.Strength)
+        {
+            if (GetFlag(U7.Actors.ObjFlag.Might))
+            {
+                val += Math.Min(val, 15);
+            }
+
+            if (GetFlag(U7.Actors.ObjFlag.Cursed))
+            {
+                val -= 3;
+            }
+        }
+
+        return val;
+    }
+
+    /// <summary>Exult <c>Actor::charmalign</c>: the side a charmed actor takes (the attacker's that charmed it).</summary>
+    public int CharmAlignment;
+
+    /// <summary>
+    /// Exult <c>Actor::get_effective_alignment</c>: the charm's side while
+    /// charmed, except for the avatar (Exult's charmed_more_difficult is off);
+    /// the side combat, guards and usecode go by. (SI's goblin village hack
+    /// doesn't apply.)
+    /// </summary>
+    public int EffectiveAlignment => GetFlag(U7.Actors.ObjFlag.Charmed) && NpcNum != 0 ? CharmAlignment : Alignment;
+
+    /// <summary>Exult <c>Actor::set_effective_alignment</c>: the charm's side, and the actor's own unless charmed.</summary>
+    public void SetEffectiveAlignment(int align)
+    {
+        CharmAlignment = align;
+        if (!GetFlag(U7.Actors.ObjFlag.Charmed))
+        {
+            Alignment = align;
         }
     }
 

@@ -32,13 +32,20 @@ public sealed class ShapeFrame
     public bool IsRle { get; }
     public Scan[] Scans { get; }
     public byte[] Pixels { get; }
+    /// <summary>
+    /// Hi-res art's colours between two palette entries (<see cref="U7.Rendering.HiresArt"/>):
+    /// beside each of <see cref="Pixels"/> two bytes, a second index and how far
+    /// (0-255) the colour lies from the first towards it. Null when every pixel
+    /// is its index alone, as in the original files.
+    /// </summary>
+    public byte[]? Mix { get; }
 
     public int Width => XLeft + XRight + 1;
     /// <summary>Exult <c>Shape_frame::is_empty</c>: an RLE frame with no pixels.</summary>
     public bool IsEmpty => IsRle && Scans.Length == 0;
     public int Height => YAbove + YBelow + 1;
 
-    ShapeFrame(int xleft, int yabove, int xright, int ybelow, bool rle, Scan[] scans, byte[] pixels)
+    ShapeFrame(int xleft, int yabove, int xright, int ybelow, bool rle, Scan[] scans, byte[] pixels, byte[]? mix = null)
     {
         XLeft = xleft;
         YAbove = yabove;
@@ -47,6 +54,59 @@ public sealed class ShapeFrame
         IsRle = rle;
         Scans = scans;
         Pixels = pixels;
+        Mix = mix;
+    }
+
+    /// <summary>
+    /// A hi-res frame from its parts: the extents and scans at its own
+    /// resolution, the indices back to back and, if any, their mix plane.
+    /// </summary>
+    public static ShapeFrame FromScans(int xleft, int yabove, int xright, int ybelow, bool rle, Scan[] scans, byte[] pixels, byte[]? mix) =>
+        new(xleft, yabove, xright, ybelow, rle, scans, pixels, mix);
+
+    /// <summary>
+    /// The frame at <paramref name="n"/> times the resolution, each pixel an
+    /// n×n block: what hi-res art stands in for where it has no frame. A
+    /// pixel x of the original covers x·n to x·n + n - 1, so the hotspot's
+    /// block starts at the new hotspot.
+    /// </summary>
+    public ShapeFrame Scaled(int n)
+    {
+        if (n == 1)
+        {
+            return this;
+        }
+
+        var scans = new Scan[Scans.Length * n];
+        var pixels = new byte[Pixels.Length * n * n];
+        var mix = Mix is null ? null : new byte[pixels.Length * 2];
+        var at = 0;
+        var k = 0;
+        foreach (var scan in Scans)
+        {
+            var len = scan.Length * n;
+            for (var row = 0; row < n; row++)
+            {
+                scans[k++] = new Scan((short)(scan.X * n), (short)(scan.Y * n + row), (short)len, at);
+                for (var i = 0; i < scan.Length; i++)
+                {
+                    var src = scan.Offset + i;
+                    pixels.AsSpan(at + i * n, n).Fill(Pixels[src]);
+                    if (mix is not null)
+                    {
+                        for (var j = 0; j < n; j++)
+                        {
+                            mix[(at + i * n + j) * 2] = Mix![src * 2];
+                            mix[(at + i * n + j) * 2 + 1] = Mix[src * 2 + 1];
+                        }
+                    }
+                }
+
+                at += len;
+            }
+        }
+
+        return new ShapeFrame(XLeft * n, YAbove * n, XRight * n + n - 1, YBelow * n + n - 1, IsRle, scans, pixels, mix);
     }
 
     /// <summary>
@@ -196,6 +256,7 @@ public sealed class ShapeFrame
 
         var buf = new byte[side * side];
         Array.Fill(buf, Transparent);
+        var mixBuf = Mix is null ? null : new ushort[side * side];
         foreach (var scan in Scans)
         {
             var col = xleft + scan.Y;
@@ -210,12 +271,17 @@ public sealed class ShapeFrame
                 if ((uint)row < (uint)side)
                 {
                     buf[row * side + col] = Pixels[scan.Offset + k];
+                    if (mixBuf is not null)
+                    {
+                        mixBuf[row * side + col] = (ushort)(Mix![(scan.Offset + k) * 2] | Mix[(scan.Offset + k) * 2 + 1] << 8);
+                    }
                 }
             }
         }
 
         var scans = new List<Scan>();
         var pixels = new List<byte>();
+        var mix = mixBuf is null ? null : new List<byte>();
         for (var row = 0; row < side; row++)
         {
             var line = buf.AsSpan(row * side, side);
@@ -239,11 +305,100 @@ public sealed class ShapeFrame
                     pixels.Add(p);
                 }
 
+                for (var c = x; mix is not null && c < end; c++)
+                {
+                    var m = mixBuf![row * side + c];
+                    mix.Add((byte)m);
+                    mix.Add((byte)(m >> 8));
+                }
+
                 x = end;
             }
         }
 
-        return new ShapeFrame(xleft, yabove, YBelow, XRight, true, scans.ToArray(), pixels.ToArray());
+        return new ShapeFrame(xleft, yabove, YBelow, XRight, true, scans.ToArray(), pixels.ToArray(), mix?.ToArray());
+    }
+
+    /// <summary>
+    /// The band <paramref name="width"/> pixels deep along the inside of the
+    /// frame's edge, as scans (their pixels unused): where hi-res art draws
+    /// Exult's outline (<c>paint_rle_outline</c>, on a frame's edge pixels),
+    /// following its smooth silhouette instead of the original's stairs.
+    /// </summary>
+    public ShapeFrame Outline(int width)
+    {
+        var w = Math.Max(1, Width);
+        var h = Math.Max(1, Height);
+        var mask = new bool[w * h];
+        foreach (var scan in Scans)
+        {
+            var y = YAbove + scan.Y;
+            for (var k = 0; k < scan.Length && (uint)y < (uint)h; k++)
+            {
+                var x = XLeft + scan.X + k;
+                if ((uint)x < (uint)w)
+                {
+                    mask[y * w + x] = true;
+                }
+            }
+        }
+
+        // Eroded by a (2 width + 1) square, a row pass then a column pass; outside the frame is empty.
+        var across = new bool[w * h];
+        for (var y = 0; y < h; y++)
+        {
+            for (var x = 0; x < w; x++)
+            {
+                var all = true;
+                for (var dx = -width; dx <= width && all; dx++)
+                {
+                    var xx = x + dx;
+                    all = (uint)xx < (uint)w && mask[y * w + xx];
+                }
+
+                across[y * w + x] = all;
+            }
+        }
+
+        var scans = new List<Scan>();
+        for (var y = 0; y < h; y++)
+        {
+            for (var x = 0; x < w;)
+            {
+                if (!Ring(x, y))
+                {
+                    x++;
+                    continue;
+                }
+
+                var end = x;
+                while (end < w && Ring(end, y))
+                {
+                    end++;
+                }
+
+                scans.Add(new Scan((short)(x - XLeft), (short)(y - YAbove), (short)(end - x), 0));
+                x = end;
+            }
+        }
+
+        return new ShapeFrame(XLeft, YAbove, XRight, YBelow, true, scans.ToArray(), []);
+
+        bool Inside(int x, int y)
+        {
+            for (var dy = -width; dy <= width; dy++)
+            {
+                var yy = y + dy;
+                if ((uint)yy >= (uint)h || !across[yy * w + x])
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        bool Ring(int x, int y) => mask[y * w + x] && !Inside(x, y);
     }
 
     /// <summary>
@@ -272,7 +427,7 @@ public sealed class ShapeFrame
     /// <summary>
     /// The frame as an RGBA image with the hotspot at
     /// (<see cref="XLeft"/>, <see cref="YAbove"/>). The palette is 256 RGB
-    /// entries (opaque) or 256 RGBA entries.
+    /// entries (opaque) or 256 RGBA entries; mixed pixels blend their two.
     /// </summary>
     public Image ToImage(ReadOnlySpan<byte> palette)
     {
@@ -302,11 +457,16 @@ public sealed class ShapeFrame
                 }
 
                 var o = (y * w + x) * 4;
-                var p = Pixels[scan.Offset + k] * stride;
-                rgba[o] = palette[p];
-                rgba[o + 1] = palette[p + 1];
-                rgba[o + 2] = palette[p + 2];
-                rgba[o + 3] = stride == 4 ? palette[p + 3] : (byte)255;
+                var at = scan.Offset + k;
+                var p = Pixels[at] * stride;
+                var t = Mix is null ? 0 : Mix[at * 2 + 1];
+                var q = Mix is null ? p : Mix[at * 2] * stride;
+                for (var c = 0; c < 4; c++)
+                {
+                    int a = c < 3 || stride == 4 ? palette[p + c] : 255;
+                    int b = c < 3 || stride == 4 ? palette[q + c] : 255;
+                    rgba[o + c] = (byte)(a + ((b - a) * t + 127) / 255);
+                }
             }
         }
 
