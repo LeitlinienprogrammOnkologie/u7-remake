@@ -14,6 +14,12 @@ public sealed class UsecodeFunction
     public int NumVars { get; }
     public ushort[] Externs { get; }
     public byte[] Bytecode { get; }
+    /// <summary>Exult <c>Usecode_function::orig</c>: the function a patch replaced, which UCC's <c>original</c> calls (CALLO).</summary>
+    public UsecodeFunction? Orig { get; set; }
+    /// <summary>Where it was read from: 0 the game's USECODE, 1 the remake's additions, 2 a mod's patch.</summary>
+    public int Layer { get; init; }
+    /// <summary>Exult <c>Usecode_function::statics</c>: UCC's function-local statics, saved in <c>usecode.var</c>.</summary>
+    public List<UsecodeValue> Statics { get; } = new();
 
     public UsecodeFunction(int id, bool extended, byte[] code)
     {

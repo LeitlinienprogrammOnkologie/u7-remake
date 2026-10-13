@@ -29,7 +29,7 @@ public partial class U7Game
         var count = (_saveCount ??= SaveGame.ReadCurrentInfo()?.Details.SaveCount ?? 0) + 1;
         SaveGame.Write(slot, _map, _npcs, _usecode, _combat.Spawned,
             new GwinState(_clock.Day, _clock.Hour, _clock.Minute, _combat.InCombat, _music.CurrentTrack, _music.Repeat,
-                _music.EggCount, _clock.SpecialLight, _combat.Armageddon),
+                _music.EggCount, _clock.SpecialLight, _combat.Armageddon, _clock.AmbientLight, _clock.Infravision),
             CurrentInfo(count), name, shot);
         _saveCount = count;
     }

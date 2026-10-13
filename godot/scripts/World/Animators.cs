@@ -5,8 +5,9 @@ namespace U7.World;
 /// <summary>
 /// Exult <c>Frame_animator</c> (objs/animate.cc) for the animated shapes:
 /// each object on screen steps its frame on Exult's 100 ms beat, in the way
-/// its TFA animation type says (<c>Animation_info::create_from_tfa</c>; Black
-/// Gate's <c>shape_info.txt</c> adds none), and the frame is written to the
+/// its TFA animation type says (<c>Animation_info::create_from_tfa</c>), or
+/// its <c>shape_info.txt</c> animation (Serpent Isle has two; Black Gate
+/// none), and the frame is written to the
 /// object, so usecode and saves see it. Off the screen an animation stops
 /// where it is (Exult stops the animator once its object isn't painted).
 /// </summary>
@@ -116,7 +117,10 @@ public sealed class Animators(GameMap map, GameClock clock)
         var shapeFrames = map.Catalog[obj.Shape].FrameCount;
         var lastFrame = obj.Frame & ~32;
         var rotflag = obj.Frame & 32;
-        anim.Info = FromTfa(map.Catalog[obj.Shape].AnimType, shapeFrames);
+        var info = map.Catalog[obj.Shape];
+        anim.Info = info.AnimationText is { } text
+            ? new Info((AniType)text.Type, text.FrameCount, text.Recycle, text.FreezeFirst, text.FrameDelay)
+            : FromTfa(info.AnimType, shapeFrames);
         var frames = anim.Info.FrameCount < 0 ? shapeFrames : anim.Info.FrameCount;
         var first = frames == shapeFrames ? 0 : lastFrame - lastFrame % frames;
         if (first + frames >= shapeFrames)

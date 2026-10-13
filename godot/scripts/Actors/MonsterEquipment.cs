@@ -1,5 +1,6 @@
 using System.IO;
 using U7.Core;
+using U7.Data;
 
 namespace U7.Actors;
 
@@ -18,16 +19,8 @@ public sealed class MonsterEquipment
     public Element[]? this[int offset] =>
         offset >= 1 && offset <= _records.Count ? _records[offset - 1] : null;
 
-    /// <summary>
-    /// Exult <c>data/bg/shape_info.txt</c> <c>monster_food</c>: the food frame a
-    /// monster carries (chicken, beef, venison, ...); -1, any frame, for the rest.
-    /// </summary>
-    static readonly Dictionary<int, int> FoodFrames = new()
-    {
-        [498] = 10, [500] = 9, [502] = 14, [509] = 12, [811] = 9, [970] = 8, [727] = 23, [329] = 11
-    };
-
-    public static int FoodFrame(int monsterShape) => FoodFrames.GetValueOrDefault(monsterShape, -1);
+    /// <summary>Exult <c>Shape_info::get_monster_food</c> (<c>shape_info.txt</c>'s monster_food): the food frame a monster carries, -1 any.</summary>
+    public static int FoodFrame(int monsterShape) => ShapeCatalog.Current[monsterShape].MonsterFood;
 
     public static MonsterEquipment Load()
     {

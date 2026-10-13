@@ -20,10 +20,10 @@ namespace U7.Game;
 public partial class U7Game
 {
     const string AgentHelp =
-        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | create <shape> [frame] [qual] | esc | saveload [choose <row>|name <text>|save|load|delete|cancel|quit|yes|no] | menu [journey|new|intro|credits|quotes|endgame|quit|up|down|key|esc] | speech <n>|intro|endgame <7-9>|play <n>|state | prop <npc|id> <name|n> <value> | quantity <n>|cancel | spells <book> <n>... | key <name> | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
+        "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | create <shape> [frame] [qual] [at <x> <y> <z>] | esc | saveload [choose <row>|name <text>|save|load|delete|cancel|quit|yes|no] | menu [journey|new|intro|credits|quotes|endgame|quit|up|down|key|esc] | speech <n>|intro|endgame <7-9>|play <n>|state | prop <npc|id> <name|n> <value> | quantity <n>|cancel | spells <book> <n>... | key <name> | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
-        "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | art [pack <name>|original | scale <n> | mix on|off | sharp on|off | check] | quit | die [restart] | " +
-        "save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] | damage <n> [type] | arena [shape] | combat [off] | attack <id> | drag <id> | cursor <x> <y> | avatar <name> [male|female] | name <id>|gump | rmouse <x> <y> <sec>|double | rclose | endgame [won|lost] | close";
+        "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | art [pack <name>|original | scale <n> | mix on|off | truecolour on|off | sharp on|off | renderer cpu|gpu|auto | resolve reference|skip | store <MB> | modern on|off | lut [32|64] | occlusion on|off | bloom <strength> [radius] | gumps on|off | paperdolls on|off | faces on|off | check | dump <name> [scale] | diff <a> <b> | still on|off | bench [frames]] | zoom [z] | window <w> <h>|full | quit | die [restart] | " +
+        "game [bg|si|saga] | save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] [x y z] | damage <n> [type] | arena [shape] | combat [off] | attack <id> | drag <id> | cursor <x> <y> | avatar <name> [male|female] | name <id>|gump | rmouse <x> <y> <sec>|double | rclose | endgame [won|lost] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
     static bool _agentStarted;
@@ -64,7 +64,8 @@ public partial class U7Game
         _speech.Enabled = false;
         _music.Stop();
         _agentFlags0 = (byte[])_usecode.GFlags.Clone();
-        _usecode.Say += text => AgentLog("SAY " + text.Replace('\n', ' '));
+        // The speaking face (slot and face shape) when one is shown, so two-face conversations can be checked.
+        _usecode.Say += text => AgentLog("SAY " + SpeakerNote() + text.Replace('\n', ' '));
         _usecode.ItemSay += (obj, text) => AgentLog($"BARK {AgentName(obj)}: {text}");
         _usecode.FadeStarted += (cycles, fadeIn) =>
             AgentLog($"FADE {(fadeIn ? "in" : "out")}" +
@@ -76,7 +77,7 @@ public partial class U7Game
         Engine.TimeScale = 0;
         if (_agentStarted)
         {
-            AgentLog($"(scene reloaded from {U7Paths.GameDatOverride ?? "INITGAME"})");
+            AgentLog($"(scene reloaded from {U7Paths.GameDatOverride ?? "INITGAME"}: {GameContext.Describe()})");
             AgentStatus();
             return;
         }
@@ -211,6 +212,22 @@ public partial class U7Game
                 break;
             case "state":
                 break; // AgentStatus prints it
+            case "game":
+                if (arg.Length == 0)
+                {
+                    AgentLog($"game: {GameContext.Describe()}, saves in {U7Paths.SavesDir}");
+                    break;
+                }
+
+                PlayMode? mode = arg switch
+                {
+                    "bg" => PlayMode.BlackGate,
+                    "si" => PlayMode.SerpentIsle,
+                    "saga" => PlayMode.Saga,
+                    _ => null
+                };
+                AgentLog(mode is null ? "game bg|si|saga" : StartMode(mode.Value) ? "starting..." : "that game isn't installed");
+                break;
             case "inv":
                 AgentInventory(parts.Length > 1 ? AgentNpc(arg) ?? AgentTarget(arg) ?? av : av, 0);
                 break;
@@ -399,9 +416,19 @@ public partial class U7Game
             {
                 // A test shortcut: a new thing of the shape (frame, quality) in the avatar's hands or pack,
                 // as usecode's create_new_object and give_last_created would (okay to take, Exult add(obj, true)).
-                var made = _map.CreateIregObject(int.Parse(parts[1]), parts.Length > 2 ? int.Parse(parts[2]) : 0);
-                made.Quality = parts.Length > 3 ? int.Parse(parts[3]) : 0;
+                // With "at x y z", it is set down there instead, past the drop's checks (scenes for docs/RENDERER.md's suite).
+                var at = Array.IndexOf(parts, "at");
+                var args = at < 0 ? parts : parts[..at];
+                var made = _map.CreateIregObject(int.Parse(args[1]), args.Length > 2 ? int.Parse(args[2]) : 0);
+                made.Quality = args.Length > 3 ? int.Parse(args[3]) : 0;
                 made.SetFlag(ObjFlag.OkayToTake);
+                if (at > 0)
+                {
+                    _map.PlaceInWorld(made, int.Parse(parts[at + 1]), int.Parse(parts[at + 2]), int.Parse(parts[at + 3]));
+                    AgentLog($"created {AgentDescribe(made)}");
+                    break;
+                }
+
                 if (!Equipment.AddToActor(av, made, _catalog, _map, dontCheck: true))
                 {
                     AgentLog("no room on the avatar");
@@ -678,11 +705,15 @@ public partial class U7Game
             }
             case "avatar":
             {
-                // The new game screen's choice (headless games skip it): avatar <name> [male|female].
-                var female = parts[^1] is "female";
-                var words = parts[1..].Where(w => w is not ("male" or "female")).ToArray();
-                SetAvatar(words.Length > 0 ? string.Join(' ', words) : av.NpcName, female);
-                AgentLog($"{AgentDescribe(av)}: {(AvatarLook.IsFemale(av) ? "female" : "male")}");
+                // The new game screen's choice (headless games skip it): avatar <name> [male|female] [skin <n>].
+                var female = parts.Contains("female");
+                var skinAt = Array.IndexOf(parts, "skin");
+                var skin = skinAt > 0 && skinAt + 1 < parts.Length ? int.Parse(parts[skinAt + 1]) : -1;
+                var words = parts[1..].Where((w, i) => w is not ("male" or "female" or "skin") && i + 1 != skinAt + 1).ToArray();
+                SetAvatar(words.Length > 0 ? string.Join(' ', words) : av.NpcName, female, skin);
+                var (faceShape, faceFrame) = AvatarLook.Face(av, AvatarLook.IsFemale(av));
+                AgentLog($"{AgentDescribe(av)}: {(AvatarLook.IsFemale(av) ? "female" : "male")}, skin {av.SkinColor}, face {faceShape}:{faceFrame}; " +
+                         $"skins offered: {string.Join(" ", AvatarLook.SelectableSkins(AvatarLook.IsFemale(av)))}");
                 break;
             }
             case "name":
@@ -797,6 +828,28 @@ public partial class U7Game
                 _lighting.Update(0);
                 AgentLog(_lighting.Describe());
                 break;
+            case "zoom":
+                if (parts.Length > 1)
+                {
+                    SetZoom(float.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture));
+                }
+
+                AgentLog($"zoom {_zoom:0.#}");
+                break;
+            case "window":
+                // A windowed run's size (the OS may keep it within the desktop), or full screen.
+                if (parts.Length > 2)
+                {
+                    DisplayServer.WindowSetMode(DisplayServer.WindowMode.Windowed);
+                    DisplayServer.WindowSetSize(new Vector2I(int.Parse(parts[1]), int.Parse(parts[2])));
+                }
+                else if (arg == "full")
+                {
+                    DisplayServer.WindowSetMode(DisplayServer.WindowMode.Fullscreen);
+                }
+
+                AgentLog($"window {DisplayServer.WindowGetSize().X}x{DisplayServer.WindowGetSize().Y}, {DisplayServer.WindowGetMode()}");
+                break;
             case "art":
                 // The world's art at a higher resolution (HiresArt): its scale,
                 // the sharp fill, or a check that the blown-up art is the original.
@@ -817,17 +870,170 @@ public partial class U7Game
                     _world.Art?.Clear();
                     _conversation.Refresh();
                 }
+                else if (parts.Length > 2 && parts[1] is "truecolour" or "truecolor")
+                {
+                    AgentLog(SetTrueColour(parts[2] is "on" or "1"));
+                }
                 else if (parts.Length > 2 && parts[1] == "sharp")
                 {
                     U7.Rendering.ArtLook.Sharp = parts[2] is "on" or "1";
+                }
+                else if (parts.Length > 2 && parts[1] == "renderer" && parts[2] is "cpu" or "gpu" or "auto")
+                {
+                    // The backend replaying the command stream (docs/RENDERER.md, 5.3), kept in the settings.
+                    U7.Rendering.ArtLook.Renderer = parts[2];
+                    Settings.Set("art", "renderer", parts[2]);
+                }
+                else if (parts.Length > 2 && parts[1] == "gumps")
+                {
+                    // The gumps under the world's palette (docs/RENDERER.md 5.9), as Exult shows them.
+                    U7.Rendering.ArtLook.GumpPalette = parts[2] is "on" or "1";
+                    Settings.Set("art", "gump_palette", U7.Rendering.ArtLook.GumpPalette);
+                }
+                else if (parts.Length > 2 && parts[1] == "bloom")
+                {
+                    // Bloom (docs/RENDERER.md 5.7): the glow's spill, its strength (0 off) and radius in world pixels.
+                    U7.Rendering.ArtLook.Bloom = float.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture);
+                    if (parts.Length > 3)
+                    {
+                        U7.Rendering.ArtLook.BloomRadius = float.Parse(parts[3], System.Globalization.CultureInfo.InvariantCulture);
+                    }
+
+                    Settings.Set("art", "bloom", U7.Rendering.ArtLook.Bloom);
+                    Settings.Set("art", "bloom_radius", U7.Rendering.ArtLook.BloomRadius);
+                }
+                else if (parts.Length > 2 && parts[1] == "occlusion")
+                {
+                    // Light occlusion (docs/RENDERER.md 5.6): walls and doors stop a pool's light.
+                    U7.Rendering.ArtLook.Occlusion = parts[2] is "on" or "1";
+                    Settings.Set("art", "occlusion", U7.Rendering.ArtLook.Occlusion);
+                }
+                else if (parts.Length > 2 && parts[1] == "modern")
+                {
+                    // Modern colour (docs/RENDERER.md 5.5): true colour through the lookup tables, the lights in linear light.
+                    U7.Rendering.ArtLook.Modern = parts[2] is "on" or "1";
+                    Settings.Set("art", "modern", U7.Rendering.ArtLook.Modern);
+                    AgentLog($"modern colour {(U7.Rendering.ArtLook.Modern ? "on: " + _world.LutReport() : "off")}");
+                    break;
+                }
+                else if (parts.Length > 1 && parts[1] == "lut")
+                {
+                    // The lookup tables' size (32 or 64) and their error on the palettes' own colours; the GPU's tables are made again.
+                    if (parts.Length > 2)
+                    {
+                        U7.Rendering.ArtLook.LutSize = int.Parse(parts[2]) >= 64 ? 64 : 32;
+                        Settings.Set("art", "lut", U7.Rendering.ArtLook.LutSize);
+                        _world.ResetGpu();
+                    }
+
+                    AgentLog(_world.LutReport());
+                    break;
+                }
+                else if (parts.Length > 2 && parts[1] == "store")
+                {
+                    // The GPU store's budget in MB (docs/RENDERER.md 5.4), kept in the settings; the backend is made again.
+                    U7.Rendering.ArtLook.StoreMb = int.Parse(parts[2]);
+                    Settings.Set("art", "store_mb", U7.Rendering.ArtLook.StoreMb);
+                    _world.ResetGpu();
+                }
+                else if (parts.Length > 2 && parts[1] == "resolve" && parts[2] is "reference" or "skip")
+                {
+                    // The GPU backend's walk of a pixel's commands (docs/RENDERER.md, 5.2), for checking one against the other.
+                    U7.Rendering.GpuCompositor.Skip = parts[2] == "skip";
+                }
+                else if (parts.Length > 2 && parts[1] == "paperdolls")
+                {
+                    AgentLog(SetRedrawnPaperdolls(parts[2] is "on" or "1"));
+                }
+                else if (parts.Length > 2 && parts[1] == "faces")
+                {
+                    AgentLog(SetPaintedFaces(parts[2] is "on" or "1"));
                 }
                 else if (parts.Length > 1 && parts[1] == "check")
                 {
                     AgentLog(_world.CheckScale());
                     break;
                 }
+                else if (parts.Length > 2 && parts[1] == "dump")
+                {
+                    // The planes (docs/RENDERER.md, R0), under <agent>/planes/<name>, of the next frame: the
+                    // camera finds its place after the console's commands (a first one after a load would
+                    // otherwise get the scene's first frame). A scale given is forced for it (headless has
+                    // no window to choose the art's).
+                    var dir = Path.Combine(_agentDir!, "planes", parts[2]);
+                    var waited = false;
+                    _world.ForcedScale = parts.Length > 3 ? int.Parse(parts[3]) : null;
+                    if (_world.ForcedScale is { } forced && forced != 1 && forced != _world.Art?.Scale)
+                    {
+                        _world.ForcedScale = null;
+                        throw new ArgumentException($"the art comes at 1 or {_world.Art?.Scale ?? 1}");
+                    }
 
-                AgentLog($"art: {_world.Art?.Describe()}, mix {(U7.Rendering.ArtLook.Mix ? "on" : "off")}, sharp {(U7.Rendering.ArtLook.Sharp ? "on" : "off")}; {_world.Timing()}");
+                    _agentElapsed = 0;
+                    _agentLimit = 10;
+                    _agentBusy = () =>
+                    {
+                        if (!waited)
+                        {
+                            // The GPU backend reads its planes back in the frame drawn next.
+                            waited = true;
+                            _world.RequestPlanes();
+                            return true;
+                        }
+
+                        if (!_world.PlanesReady)
+                        {
+                            return true;
+                        }
+
+                        _world.ForcedScale = null;
+                        AgentLog($"planes {parts[2]}: {_world.DumpPlanes(dir)}");
+                        return false;
+                    };
+                    break;
+                }
+                else if (parts.Length > 3 && parts[1] == "diff")
+                {
+                    var planes = Path.Combine(_agentDir!, "planes");
+                    AgentLog(U7.Rendering.PlaneDump.Diff(Path.Combine(planes, parts[2]), Path.Combine(planes, parts[3])));
+                    break;
+                }
+                else if (parts.Length > 2 && parts[1] == "still")
+                {
+                    U7.Rendering.WorldView.Still = parts[2] is "on" or "1";
+                    AgentLog($"animation {(U7.Rendering.WorldView.Still ? "held" : "running")}");
+                    break;
+                }
+                else if (parts.Length > 1 && parts[1] == "bench")
+                {
+                    // Frames at each zoom and scale (docs/RENDERER.md, R0); the game stands still meanwhile.
+                    var bench = new U7.Rendering.RenderBench(_world, SetZoom, _zoom, parts.Length > 2 ? int.Parse(parts[2]) : 60);
+                    _agentElapsed = 0;
+                    _agentLimit = double.MaxValue;
+                    _agentBusy = () =>
+                    {
+                        if (bench.Step())
+                        {
+                            return true;
+                        }
+
+                        AgentLog(bench.Report());
+                        return false;
+                    };
+                    break;
+                }
+
+                AgentLog($"art: {_world.Art?.Describe()}, mix {(U7.Rendering.ArtLook.Mix ? "on" : "off")}, " +
+                         $"true colour {(U7.Rendering.ArtLook.TrueColour ? "on" : "off")}, modern {(U7.Rendering.ArtLook.Modern ? "on" : "off")}, " +
+                         $"occlusion {(U7.Rendering.ArtLook.Occlusion ? "on" : "off")}, bloom {U7.Rendering.ArtLook.Bloom:0.00} at {U7.Rendering.ArtLook.BloomRadius:0} px, " +
+                         $"gumps {(U7.Rendering.ArtLook.GumpPalette ? "under the palette" : "by day")}, " +
+                         $"sharp {(U7.Rendering.ArtLook.Sharp ? "on" : "off")}, " +
+                         $"renderer {U7.Rendering.ArtLook.Renderer}; {_world.Timing()}");
+                break;
+            case "vsync":
+                // For art bench: without vsync the frame time is the work's own.
+                DisplayServer.WindowSetVsyncMode(arg is "off" or "0" ? DisplayServer.VSyncMode.Disabled : DisplayServer.VSyncMode.Enabled);
+                AgentLog($"vsync {DisplayServer.WindowGetVsyncMode()}");
                 break;
             case "shot":
             {
@@ -858,11 +1064,14 @@ public partial class U7Game
             }
             case "sprite":
             {
-                // A SPRITES.VGA animation played once over the avatar.
+                // A SPRITES.VGA animation played once over the avatar, or at a tile given (sprite <n> [frame] [x y z]).
                 var sprite = int.Parse(parts[1]);
                 var frame = parts.Length > 2 ? int.Parse(parts[2]) : 0;
-                var e = _effects.AddSprite(sprite, new TileCoord(av.Tx, av.Ty, av.Tz), frame: frame);
-                AgentLog($"sprite {sprite} ({e.Frames} frames) from frame {frame} at {av.Tx},{av.Ty},{av.Tz}");
+                var at = parts.Length > 5
+                    ? new TileCoord(int.Parse(parts[3]), int.Parse(parts[4]), int.Parse(parts[5]))
+                    : new TileCoord(av.Tx, av.Ty, av.Tz);
+                var e = _effects.AddSprite(sprite, at, frame: frame);
+                AgentLog($"sprite {sprite} ({e.Frames} frames) from frame {frame} at {at.Tx},{at.Ty},{at.Tz}");
                 break;
             }
             case "eggs":
@@ -1694,6 +1903,12 @@ public partial class U7Game
         }
 
         return total;
+    }
+
+    string SpeakerNote()
+    {
+        var conv = _usecode!.Conv;
+        return conv.TextFace >= 0 && conv.Faces[conv.TextFace] is { } f ? $"[face{conv.TextFace} {f.Shape}] " : "";
     }
 
     void AgentLog(string line)

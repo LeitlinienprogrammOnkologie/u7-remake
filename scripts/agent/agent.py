@@ -30,8 +30,8 @@ def done_count(text):
     return len(re.findall(r'^DONE \d+$', text, re.M))
 
 
-def main():
-    cmds = sys.argv[1:]
+def run(cmds):
+    """Sends the commands and returns what the game wrote until each has its DONE."""
     before = read_out()
     target = done_count(before) + len(cmds)
     os.makedirs(DIR, exist_ok=True)
@@ -46,8 +46,12 @@ def main():
             break
         time.sleep(0.1)
     else:
-        print('[timeout waiting for the game - is it running? see scripts/agent/restart.ps1]')
-    print(text[len(before):].rstrip())
+        return text[len(before):].rstrip() + '\n[timeout waiting for the game - is it running? see scripts/agent/restart.ps1]'
+    return text[len(before):].rstrip()
+
+
+def main():
+    print(run(sys.argv[1:]))
 
 
 if __name__ == '__main__':

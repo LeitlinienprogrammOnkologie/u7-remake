@@ -1,4 +1,5 @@
 using Godot;
+using U7.Core;
 using U7.Data;
 
 namespace U7.Rendering;
@@ -86,17 +87,24 @@ public static class GlowTable
     /// <summary>The explosion sprites, whose light flashes and dies away (Exult <c>Explosion_effect</c>).</summary>
     public static bool IsBlast(int sprite) => sprite is 1 or 4 or 5 or 19;
 
-    /// <summary>Magic missiles that glow in flight: the fire, death and magic bolts, lightning, the starburst, the mist and the vortex.</summary>
-    public static bool IsGlowingMissile(int shape) => shape is 856 or 807 or 527 or 417 or 565 or 399 or 639;
+    /// <summary>
+    /// Magic missiles that glow in flight: the fire, death and magic bolts,
+    /// lightning, the mist and the vortex, and in Black Gate the starburst
+    /// (565 is a fighter in Serpent Isle).
+    /// </summary>
+    public static bool IsGlowingMissile(int shape) =>
+        shape is 856 or 807 or 527 or 417 or 399 or 639 || (GameContext.IsBg && shape == 565);
 
     /// <summary>
-    /// Magic things in the world that glow: the moongates, the Orb of the
-    /// Moons, the fire, poison, sleep and energy fields, the Virtue Stone,
-    /// the Orrery crystal, the crystal ball, the prisms, the beam of light
-    /// and the wisp.
+    /// Magic things in the world that glow: the fire, poison, sleep and
+    /// energy fields; in Black Gate also the moongates, the Orb of the Moons,
+    /// the Virtue Stone, the Orrery crystal, the crystal ball, the prisms, the
+    /// beam of light and the wisp (other things under those numbers in
+    /// Serpent Isle, whose own are still to be picked).
     /// </summary>
     public static bool IsEmitter(int shape) =>
-        shape is 157 or 776 or 777 or 779 or 785 or 895 or 900 or 902 or 768 or 330 or 746 or 729 or 968 or 981 or 1010 or 168 or 534;
+        shape is 895 or 900 or 902 or 768 ||
+        (GameContext.IsBg && shape is 157 or 776 or 777 or 779 or 785 or 330 or 746 or 729 or 968 or 981 or 1010 or 168 or 534);
 
     /// <summary>The glow plane's value for a magic pixel (in its glow bits, <see cref="IndexBuffer8.GlowBits"/>).</summary>
     public static byte GlowByte => (byte)(Mathf.Clamp(Mathf.RoundToInt(63 * Magic.Glow), 0, 63) << 2);
@@ -122,8 +130,9 @@ public static class GlowTable
         {
             338 => new Glow(GlowKind.Flame, radius, intensity, CandleColour, Small: true),
             435 or 701 or 825 or 739 or 442 or 551 or 553 or 895 => new Glow(GlowKind.Flame, radius, intensity, FlameColour),
-            534 => new Glow(GlowKind.Magic, radius, intensity, MagicColour),
-            179 => new Glow(GlowKind.Flash, radius, intensity, FlashColour),
+            // Black Gate's wisp and lightning (a wall and a monk in Serpent Isle).
+            534 when GameContext.IsBg => new Glow(GlowKind.Magic, radius, intensity, MagicColour),
+            179 when GameContext.IsBg => new Glow(GlowKind.Flash, radius, intensity, FlashColour),
             198 => new Glow(GlowKind.Steady, radius, intensity, NeutralColour),
             _ => new Glow(GlowKind.Steady, radius, intensity, CandleColour)
         };

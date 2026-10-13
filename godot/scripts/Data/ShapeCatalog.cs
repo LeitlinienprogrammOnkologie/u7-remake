@@ -18,6 +18,17 @@ public readonly record struct PaperdollSpot(int Frame, int Spot);
 
 public sealed class ShapeRecord
 {
+    /// <summary>This shape's information under another number, keeping that one's own frames (Exult <c>copy_info</c>).</summary>
+    public ShapeRecord CopyAs(int shape, ShapeRecord own)
+    {
+        var copy = (ShapeRecord)MemberwiseClone();
+        copy.Shape = shape;
+        copy.Frames = own.Frames;
+        copy.FrameCount = own.FrameCount;
+        copy.TileShape = own.TileShape;
+        return copy;
+    }
+
     public int Shape;
     public string Name = "";
     public string ClassName = "";
@@ -68,6 +79,46 @@ public sealed class ShapeRecord
     public PaperdollSpot[] Paperdoll = Array.Empty<PaperdollSpot>();
     public int FrameCount;
     public FrameInfo[] Frames = Array.Empty<FrameInfo>();
+    // Exult's shape_info.txt and bodies.txt (ShapeInfoText), per game.
+    /// <summary>Exult <c>Explosion_info</c>: the SPRITES.VGA explosion and its sound (-1 none); null for the default (sprite 5).</summary>
+    public (int Sprite, int Sfx)? Explosion;
+    /// <summary>Exult <c>Animation_info</c> from <c>shape_info.txt</c>, over TFA.DAT's type; null for TFA's.</summary>
+    public AnimationText? AnimationText;
+    /// <summary>Exult <c>usecode_events</c>: its usecode is also run on Exult's extra events.</summary>
+    public bool UsecodeEvents;
+    /// <summary>Exult <c>monster_food</c>: the food frame the monster carries, -1 any.</summary>
+    public int MonsterFood = -1;
+    /// <summary>Exult <c>Shape_info::Actor_flags</c> bits: cold_immune 0, doesnt_eat, teleports, summons, turns_invisible, armageddon_safe, quake_walk, goblin 7.</summary>
+    public int ActorFlags;
+    /// <summary>Exult <c>effective_hps</c>: hit points by frame and quality.</summary>
+    public FrameValue[] EffectiveHps = [];
+    /// <summary>Exult <c>light_data</c>: light by frame.</summary>
+    public FrameValue[] Lights = [];
+    /// <summary>Exult <c>warmth_data</c>: warmth by frame.</summary>
+    public FrameValue[] Warmth = [];
+    /// <summary>Exult <c>quantity_frames</c>: its frame follows its quantity.</summary>
+    public bool QuantityFrames;
+    /// <summary>Exult <c>locked_containers</c>.</summary>
+    public bool Locked;
+    /// <summary>Exult <c>content_rules</c>: what the container takes or refuses.</summary>
+    public ContentRule[] ContentRules = [];
+    /// <summary>Exult <c>volatile_explosive</c>: blows up readily (the powder keg).</summary>
+    public bool Volatile;
+    /// <summary>Exult <c>framenames</c>.</summary>
+    public FrameName[] FrameNames = [];
+    /// <summary>Exult <c>frame_powers</c> (<c>Frame_flags_info</c>): flags by frame and quality.</summary>
+    public FrameValue[] FrameFlags = [];
+    /// <summary>Exult <c>is_jawbone</c>, <c>is_mirror</c>, <c>on_fire</c>, <c>extradimensional_storage</c>.</summary>
+    public bool Jawbone, Mirror, OnFire, ExtradimensionalStorage;
+    /// <summary>Exult <c>field_type</c>: 0 fire, 1 sleep, 2 poison, 3 caltrops, 4 campfire; -1 none.</summary>
+    public int FieldType = -1;
+    /// <summary>Exult <c>frame_usecode</c>.</summary>
+    public FrameUsecode[] FrameUsecodes = [];
+    /// <summary>Exult <c>bodyshapes</c>: a corpse.</summary>
+    public bool IsBody;
+    /// <summary>Exult <c>Body_info</c> (<c>bodylist</c>): the corpse an actor of this shape leaves.</summary>
+    public (int Shape, int Frame)? Body;
+
     /// <summary>Exult <c>Shape_info::weapon_offsets</c> (WIHH.DAT): a held weapon's spot, x and y per frame (255: none); null if the shape has none.</summary>
     public byte[]? WeaponOffsets;
 
@@ -135,8 +186,9 @@ public sealed class ShapeRecord
 }
 
 /// <summary>
-/// Shape names and TFA flags from the extracted CSVs (Exult <c>TFA.DAT</c> /
-/// <c>SHPDIMS.DAT</c>), per-frame hotspots from SHAPES.VGA itself.
+/// Exult <c>Shapes_vga_file</c>'s shape information: names from TEXT.FLX,
+/// TFA.DAT's flags, WGTVOL.DAT, OCCLUDE.DAT, READY.DAT and WIHH.DAT, the
+/// frames' extents from SHAPES.VGA itself.
 /// </summary>
 public sealed class ShapeCatalog
 {
@@ -176,7 +228,14 @@ public sealed class ShapeCatalog
 
     public ShapeCatalog()
     {
-        Shapes = new ShapeRecord[U7Constants.MaxShapes];
+        ShapesVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "SHAPES.VGA"));
+        U7.Rendering.ShapeCache.AddPatchLayer(ShapesVga, "SHAPES.VGA");
+        Files = ShapeFiles.Load();
+        Avatar = AvatarData.Load(Files);
+        Dolls = PaperdollInfo.Load(Files);
+        ImportSerpentShapes();
+        ImportAdditions();
+        Shapes = new ShapeRecord[Math.Max(U7Constants.MaxShapes, ShapesVga.ShapeCount)];
         for (var i = 0; i < Shapes.Length; i++)
         {
             Shapes[i] = new ShapeRecord { Shape = i, TileShape = i < U7Constants.TileShapeCount };
@@ -184,196 +243,260 @@ public sealed class ShapeCatalog
 
         LoadNames();
         LoadTypeFlags();
-        LoadMountainTops();
-        ShapesVga = new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "SHAPES.VGA"));
         LoadVgaFrames();
-        ApplyContainerGumps();
-        LoadReadyDat();
         LoadWeaponOffsets();
+        ShapeInfoText.ReadContainers(Shapes);
+        LoadReadyDat();
+        ShapeInfoText.Read(Shapes);
         LoadPaperdollInfo();
-        Shapes[644].Lightweight = true;
-        Shapes[842].Lightweight = true;
+        // Exult read_info: "Ensure valid ready spots for all shapes", the backpack in Black Gate, the right hand in Serpent Isle.
+        var defaultReady = GameContext.IsSi ? U7.Actors.ReadySpot.Rhand : U7.Actors.ReadySpot.Back;
+        foreach (var rec in Shapes.Where(r => r.ReadyType == U7.Actors.ReadySpot.Invalid))
+        {
+            rec.ReadyType = defaultReady;
+        }
+
+        CopySkinInfo();
+        CopyAdditionInfo();
+        GumpAreas = LoadGumpAreas();
+        Current = this;
+        U7.Actors.AvatarLook.Use(this);
+    }
+
+    /// <summary>The scene's catalog, for the static helpers that ask about a shape (bodies, locked containers, actor flags, ...).</summary>
+    public static ShapeCatalog Current { get; private set; } = null!;
+
+    /// <summary>
+    /// Exult <c>Gump::set_object_area</c>'s <c>gump_area_info.txt</c> (the
+    /// game's, or a mod's in its place): a container gump's object area and
+    /// check mark by gump shape, from the file's global section.
+    /// </summary>
+    public Dictionary<int, (int X, int Y, int W, int H, int CheckX, int CheckY)> GumpAreas { get; private set; } = new();
+
+    static Dictionary<int, (int, int, int, int, int, int)> LoadGumpAreas()
+    {
+        var areas = new Dictionary<int, (int, int, int, int, int, int)>();
+        var path = U7Paths.PatchFile("gump_area_info.txt") ?? Path.Combine(U7Paths.GameDataDir, "gump_area_info.txt");
+        if (ExultDataFile.Read(path) is not { } file)
+        {
+            return areas;
+        }
+
+        foreach (var (gump, text) in file.Entries(ExultDataFile.GlobalSection))
+        {
+            // Exult read_int_and_advance: six integers separated by commas.
+            var v = text.Split(',').Select(t => int.TryParse(t.Trim(), out var n) ? n : (int?)null).ToArray();
+            if (v.Length >= 6 && v.Take(6).All(n => n is not null))
+            {
+                areas[gump] = (v[0]!.Value, v[1]!.Value, v[2]!.Value, v[3]!.Value, v[4]!.Value, v[5]!.Value);
+            }
+        }
+
+        return areas;
+    }
+
+    /// <summary>Exult's <c>shape_files.txt</c> (and a mod's): the imports and the paperdolls' sources.</summary>
+    public ShapeFiles Files { get; }
+    /// <summary>Exult's <c>avatar_data.txt</c> (and a mod's): the avatar's shapes, faces and skins.</summary>
+    public AvatarData Avatar { get; }
+    /// <summary>Exult's <c>paperdol_info.txt</c> (and a mod's): the characters' and items' paperdoll art.</summary>
+    public PaperdollInfo Dolls { get; }
+    /// <summary>Whether Serpent Isle's shapes were imported (Exult <c>got_si_shapes</c>): its skin colours can be chosen.</summary>
+    public bool HasSerpentShapes { get; private set; }
+
+    /// <summary>
+    /// Exult <c>Shape_manager::load</c> for Black Gate: with Serpent Isle
+    /// installed, its avatar bodies (<c>multiracial_imports</c>) come in at
+    /// 2048 and up.
+    /// </summary>
+    void ImportSerpentShapes()
+    {
+        // Exult: Serpent Isle has its own skin bodies (got_si_shapes), nothing to import.
+        HasSerpentShapes = GameContext.IsSi;
+        if (GameContext.IsSi || Files.SkinImports.Count == 0 || U7Paths.SerpentStaticFile("SHAPES.VGA") is not { } path)
+        {
+            return;
+        }
+
+        var serpent = new FlexFile(path);
+        foreach (var (dest, src) in Files.SkinImports)
+        {
+            ShapesVga.Import(serpent, src, dest);
+        }
+
+        HasSerpentShapes = true;
+    }
+
+    /// <summary>The new shapes (<see cref="ShapeAdditions"/>): the remake's own, then a mod's.</summary>
+    public List<ShapeAddition> Additions { get; private set; } = new();
+
+    void ImportAdditions()
+    {
+        Additions = ShapeAdditions.Load();
+        foreach (var add in Additions)
+        {
+            ShapesVga.Import(add.Art, add.ArtShape, add.Shape);
+        }
+    }
+
+    /// <summary>A new shape takes its model's information (Exult <c>copy_info</c>), keeping its own frames, and its own name.</summary>
+    void CopyAdditionInfo()
+    {
+        foreach (var add in Additions)
+        {
+            if ((uint)add.Shape < (uint)Shapes.Length && (uint)add.InfoFrom < (uint)Shapes.Length)
+            {
+                Shapes[add.Shape] = Shapes[add.InfoFrom].CopyAs(add.Shape, Shapes[add.Shape]);
+                Shapes[add.Shape].Name = add.Name;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Shape_manager::read_shape_info</c>: a skin's bodies take the
+    /// default avatar's information (<c>copydata</c>), keeping their own frames.
+    /// </summary>
+    void CopySkinInfo()
+    {
+        foreach (var skin in Avatar.Skins.Where(s => s.CopyInfo))
+        {
+            if (!Avatar.Defaults.TryGetValue(skin.Female, out var def) || (uint)def.Shape >= (uint)Shapes.Length)
+            {
+                continue;
+            }
+
+            foreach (var dest in new[] { skin.Shape, skin.NakedShape })
+            {
+                if (dest != def.Shape && (uint)dest < (uint)Shapes.Length && Shapes[dest].FrameCount > 0)
+                {
+                    var own = Shapes[dest];
+                    Shapes[dest] = Shapes[def.Shape].CopyAs(dest, own);
+                }
+            }
+        }
     }
 
     public ShapeRecord this[int shape] =>
         (uint)shape < (uint)Shapes.Length ? Shapes[shape] : Shapes[0];
 
+    /// <summary>
+    /// Exult <c>Setup_item_names</c>: a shape's name is TEXT.FLX's entry of
+    /// its number, for the first 0x400 shapes (the rest have none there).
+    /// </summary>
     void LoadNames()
     {
-        var path = Path.Combine(U7Paths.TextDir, "shape_names.txt");
+        var path = U7Paths.PatchFile("text.flx") ?? Path.Combine(U7Paths.StaticDir, "TEXT.FLX");
         if (!File.Exists(path))
         {
             return;
         }
 
-        foreach (var line in File.ReadLines(path))
+        var text = new FlexFile(path);
+        var count = Math.Min(Math.Min(text.Count, 0x400), Shapes.Length);
+        for (var s = 0; s < count; s++)
         {
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            var tab = line.IndexOf('\t');
-            if (tab <= 0)
-            {
-                continue;
-            }
-
-            if (!int.TryParse(line.AsSpan(0, tab), out var index) || (uint)index >= (uint)Shapes.Length)
-            {
-                continue;
-            }
-
-            Shapes[index].Name = line[(tab + 1)..].Trim();
+            var data = text.Get(s);
+            var end = data.IndexOf((byte)0);
+            Shapes[s].Name = System.Text.Encoding.Latin1.GetString(end >= 0 ? data[..end] : data).Trim();
         }
     }
 
+    /// <summary>A STATIC file, or the mod's of that name (Exult's <c>IExultDataSource(file, patch)</c>); null when neither is there.</summary>
+    static byte[]? ReadStatic(string name)
+    {
+        var path = U7Paths.PatchFile(name) ?? Path.Combine(U7Paths.StaticDir, name);
+        return File.Exists(path) ? File.ReadAllBytes(path) : null;
+    }
+
+    /// <summary>
+    /// Exult <c>Shapes_vga_file::read_info</c>: WGTVOL.DAT (weight and
+    /// volume), TFA.DAT (three bytes a shape, <c>Shape_info::set_tfa_data</c>
+    /// and the flags' accessors), each read on while the file lasts, so
+    /// shapes past the file's end keep none; TFA.DAT's animation types (a
+    /// nibble a shape from 3 * 1024, <c>Animation_info::create_from_tfa</c>);
+    /// OCCLUDE.DAT (a bit a shape).
+    /// </summary>
     void LoadTypeFlags()
     {
-        var path = Path.Combine(U7Paths.DataDir, "typeflags.csv");
-        if (!File.Exists(path))
+        if (ReadStatic("WGTVOL.DAT") is { } wgtvol)
         {
-            return;
-        }
-
-        using var reader = new StreamReader(path);
-        var header = reader.ReadLine();
-        if (header is null)
-        {
-            return;
-        }
-
-        var cols = SplitCsv(header);
-        var iShape = IndexOf(cols, "shape");
-        var iName = IndexOf(cols, "shape_class_name");
-        var iDx = IndexOf(cols, "dims_x");
-        var iDy = IndexOf(cols, "dims_y");
-        var iDz = IndexOf(cols, "dims_z");
-        var iSolid = IndexOf(cols, "solid");
-        var iWater = IndexOf(cols, "water");
-        var iAnim = IndexOf(cols, "animated");
-        var iAnimType = IndexOf(cols, "anim_type");
-        var iOcc = IndexOf(cols, "occludes");
-        var iTrans = IndexOf(cols, "transparent");
-        var iTluc = IndexOf(cols, "translucency");
-        var iBargePart = IndexOf(cols, "barge_part");
-        var iDoor = IndexOf(cols, "door");
-        var iPoison = IndexOf(cols, "poisonous");
-        var iLight = IndexOf(cols, "light_source");
-        var iClass = IndexOf(cols, "shape_class");
-        var iWeight = IndexOf(cols, "weight");
-        var iVolume = IndexOf(cols, "volume");
-
-        while (reader.ReadLine() is { } line)
-        {
-            var c = SplitCsv(line);
-            if (c.Length <= iShape || !int.TryParse(c[iShape], out var shape) ||
-                (uint)shape >= (uint)Shapes.Length)
+            for (var s = 0; s < Shapes.Length && 2 * s + 1 < wgtvol.Length; s++)
             {
-                continue;
-            }
-
-            var rec = Shapes[shape];
-            rec.ClassName = Get(c, iName);
-            rec.DimX = Math.Max(1, ParseInt(Get(c, iDx), 1));
-            rec.DimY = Math.Max(1, ParseInt(Get(c, iDy), 1));
-            rec.DimZ = ParseInt(Get(c, iDz), 0);
-            rec.Solid = Get(c, iSolid) == "1";
-            rec.Water = Get(c, iWater) == "1";
-            rec.Animated = Get(c, iAnim) == "1";
-            rec.AnimType = ParseInt(Get(c, iAnimType), -1);
-            rec.Occludes = Get(c, iOcc) == "1";
-            rec.Transparent = Get(c, iTrans) == "1";
-            rec.Translucent = Get(c, iTluc) == "1";
-            rec.BargePart = Get(c, iBargePart) == "1";
-            rec.BargeType = shape switch { 292 => 2, 251 => 3, 774 => 4, 796 => 5, _ => 0 };
-            rec.Door = Get(c, iDoor) == "1";
-            rec.Poisonous = Get(c, iPoison) == "1";
-            rec.LightSource = Get(c, iLight) == "1";
-            rec.ShapeClass = ParseInt(Get(c, iClass), 0);
-            rec.Weight = ParseInt(Get(c, iWeight), 0);
-            rec.Volume = ParseInt(Get(c, iVolume), 0);
-        }
-    }
-
-    /// <summary>Exult <c>data/bg/shape_info.txt</c> <c>mountain_tops</c>.</summary>
-    void LoadMountainTops()
-    {
-        foreach (var shape in new[] { 180, 182, 183, 324, 969, 983 })
-        {
-            Shapes[shape].MountainTop = 1;
-        }
-    }
-
-    static string[] SplitCsv(string line) => line.Split(',');
-
-    static int IndexOf(string[] cols, string name)
-    {
-        for (var i = 0; i < cols.Length; i++)
-        {
-            if (cols[i].Equals(name, StringComparison.OrdinalIgnoreCase))
-            {
-                return i;
+                Shapes[s].Weight = wgtvol[2 * s];
+                Shapes[s].Volume = wgtvol[2 * s + 1];
             }
         }
 
-        return 0;
+        if (ReadStatic("TFA.DAT") is { } tfa)
+        {
+            for (var s = 0; s < Shapes.Length && 3 * s + 2 < tfa.Length; s++)
+            {
+                var (t0, t1, t2) = (tfa[3 * s], tfa[3 * s + 1], tfa[3 * s + 2]);
+                var rec = Shapes[s];
+                rec.DimX = 1 + (t2 & 7);
+                rec.DimY = 1 + ((t2 >> 3) & 7);
+                rec.DimZ = t0 >> 5;
+                rec.Animated = (t0 & (1 << 2)) != 0;
+                rec.Solid = (t0 & (1 << 3)) != 0;
+                rec.Water = (t0 & (1 << 4)) != 0;
+                rec.ShapeClass = t1 & 15;
+                rec.ClassName = ClassNames.GetValueOrDefault(rec.ShapeClass, "");
+                rec.Poisonous = (t1 & (1 << 4)) != 0;
+                rec.Door = (t1 & (1 << 5)) != 0;
+                rec.BargePart = (t1 & (1 << 6)) != 0;
+                rec.Transparent = (t1 & (1 << 7)) != 0;
+                rec.LightSource = (t2 & (1 << 6)) != 0;
+                rec.Translucent = (t2 & (1 << 7)) != 0;
+            }
+        }
+
+        // The animation types are read from the game's own TFA.DAT only.
+        var stfa = Path.Combine(U7Paths.StaticDir, "TFA.DAT");
+        if (File.Exists(stfa))
+        {
+            var data = File.ReadAllBytes(stfa);
+            for (var i = 0; i < 512 && 3 * 1024 + i < data.Length; i++)
+            {
+                var val = (int)data[3 * 1024 + i];
+                for (var s = 2 * i; val != 0; val >>= 4, s++)
+                {
+                    if ((val & 0xf) != 0 && s < Shapes.Length)
+                    {
+                        Shapes[s].AnimType = val & 0xf;
+                    }
+                }
+            }
+        }
+
+        if (ReadStatic("OCCLUDE.DAT") is { } occ)
+        {
+            for (var i = 0; i < occ.Length; i++)
+            {
+                for (int b = 0, bits = occ[i]; bits != 0; b++, bits >>= 1)
+                {
+                    if ((bits & 1) != 0 && i * 8 + b < Shapes.Length)
+                    {
+                        Shapes[i * 8 + b].Occludes = true;
+                    }
+                }
+            }
+        }
     }
 
-    static string Get(string[] cols, int i) => (uint)i < (uint)cols.Length ? cols[i] : "";
+    /// <summary>Exult <c>Shape_info::Shape_class</c>'s names, as the class names elsewhere expect them.</summary>
+    static readonly Dictionary<int, string> ClassNames = new()
+    {
+        [2] = "quality", [3] = "quantity", [4] = "has_hp", [5] = "quality_flags",
+        [6] = "container", [7] = "hatchable", [8] = "spellbook", [9] = "barge", [11] = "virtue_stone",
+        [12] = "monster", [13] = "human", [14] = "building"
+    };
 
     static int ParseInt(string s, int fallback) =>
         int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : fallback;
 
     /// <summary>
-    /// Exult's <c>data/bg/container.dat</c> (in exult_bg.flx; the original
-    /// has none), by gump: each shape's gump. The avatar, the companions and
-    /// the generic NPCs have their own paperdolls; the locked chest and the
-    /// sealed box have none, so their usecode runs (Exult
-    /// <c>Container_game_object::show_gump</c>), as for the unicorn and the
-    /// hydra, which Exult lists without one.
-    /// </summary>
-    static readonly Dictionary<int, int[]> ContainerGumps = new()
-    {
-        [0] = [799],
-        [1] = [804],
-        [8] = [819],
-        [9] = [802],
-        [10] = [801],
-        [11] = [803],
-        [22] = [800],
-        [26] = [405],
-        [27] = [283, 406, 407, 416, 679],
-        [32] = [642],
-        [43] = [761],
-        [53] = [400, 414, 507, 762, 778, 892],
-        [55] = [797],
-        [57] = [721],
-        [58] = [989],
-        [59] = [465],
-        [60] = [489],
-        [61] = [487],
-        [62] = [488],
-        [63] = [490],
-        [65] = [154, 155, 226, 227, 228, 247, 259, 265, 274, 304, 317, 318, 319, 337, 354, 380, 394, 401, 403, 445, 449, 450, 451, 455, 457, 458, 462, 464, 466, 467, 468, 471, 472, 473, 475, 479, 480, 482, 484, 485, 501, 506, 519, 528, 533, 720, 805, 806, 861, 882, 883, 884, 946, 952, 957, 965],
-        [66] = [229, 299, 382, 446, 448, 454, 456, 459, 461, 463, 469, 532, 753, 881, 929],
-        [67] = [452],
-        [68] = [460],
-    };
-
-    void ApplyContainerGumps()
-    {
-        foreach (var (gump, shapes) in ContainerGumps)
-        {
-            foreach (var shape in shapes)
-            {
-                Shapes[shape].GumpShape = gump;
-            }
-        }
-    }
-
-    /// <summary>
-    /// READY.DAT: count, then (u16 shape, u8 ready_type, 6 pad) per Exult.
+    /// READY.DAT: count, then (u16 shape, u8 ready_type, 6 pad) per Exult
+    /// (<c>Ready_type_functor</c>), the spot in the game's numbering.
     /// </summary>
     void LoadReadyDat()
     {
@@ -413,7 +536,7 @@ public sealed class ShapeCatalog
                 // READY.DAT packs spell_flag in bit 0; type is bits 3+.
                 var rec = Shapes[shape];
                 rec.IsSpell = (ready & 1) != 0;
-                var spot = U7.Actors.ReadySpot.FromBg(ready >> 3);
+                var spot = GameContext.IsSi ? U7.Actors.ReadySpot.FromSi(ready >> 3) : U7.Actors.ReadySpot.FromBg(ready >> 3);
                 rec.ReadyType = spot;
                 switch (spot)
                 {
@@ -475,13 +598,13 @@ public sealed class ShapeCatalog
     void LoadPaperdollInfo()
     {
         // Copied from Exult data/bg/paperdol_info.txt (GPL) so the Exult tree is not needed at runtime.
-        var path = Path.Combine(U7Paths.RepoRoot, "godot", "data", "bg", "paperdol_info.txt");
+        var path = Path.Combine(U7Paths.GameDataDir, "paperdol_info.txt");
         if (!File.Exists(path))
         {
             return;
         }
 
-        var buckets = new List<PaperdollSpot>[U7Constants.MaxShapes];
+        var buckets = new List<PaperdollSpot>[Shapes.Length];
         var inItems = false;
         foreach (var raw in File.ReadLines(path))
         {

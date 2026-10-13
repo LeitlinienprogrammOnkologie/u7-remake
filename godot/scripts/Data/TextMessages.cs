@@ -45,6 +45,9 @@ public static class TextMessages
     public const int FirstInvisTheft = 0x85;
     public const int LastInvisTheft = 0x87;
     public const int HeardSomething = 0x95;
+    /// <summary>Serpent Isle's goblins' own lines for the same (Exult items.h).</summary>
+    public const int GoblinInvisTheft = 0xc8, GoblinCallGuardsTheft = 0xc9, GoblinHeardSomething = 0xca,
+        GoblinTheft = 0xcb, FirstGoblinCallGuards = 0xc6, LastGoblinCallGuards = 0xc7, GoblinNeedHelp = 0xd2;
     /// <summary>A farmer cutting crops ("These crops are tough!"), and looking for some.</summary>
     public const int FirstFarmer = 0x3f;
     public const int LastFarmer = 0x41;
@@ -189,14 +192,27 @@ public static class TextMessages
 
     static FlexFile? _flex;
 
+    /// <summary>The game was switched (<see cref="U7.Core.GameContext.Switch"/>): TEXT.FLX is the other game's.</summary>
+    public static void Reset() => _flex = null;
+
     /// <summary>A random message from <paramref name="first"/> to <paramref name="last"/> (Exult <c>Actor::say(from, to)</c>).</summary>
     public static string Random(int first, int last) => Get(first + System.Random.Shared.Next(last - first + 1));
 
     /// <summary>Exult <c>get_misc_name</c>: TEXT.FLX entries from 0x500 on (reagents, "Circle", ...).</summary>
-    public static string MiscName(int num) => Entry(0x500 + num);
+    public static string MiscName(int num) => (uint)num < (uint)MiscNameCount ? Entry(0x500 + num) : "";
 
-    /// <summary>The misc name a click on the avatar shows ("yourself", Exult <c>Get_object_name</c>).</summary>
-    public const int Yourself = 0x42;
+    /// <summary>Exult <c>get_num_misc_names</c>: TEXT.FLX's entries from 0x500 up to 0x600 in Black Gate, 0x686 in Serpent Isle (the rest discarded).</summary>
+    public static int MiscNameCount
+    {
+        get
+        {
+            _flex ??= new FlexFile(Path.Combine(U7Paths.StaticDir, "TEXT.FLX"));
+            return Math.Max(0, Math.Min(_flex.Count, U7.Core.GameContext.IsSi ? 0x686 : 0x600) - 0x500);
+        }
+    }
+
+    /// <summary>The misc name a click on the avatar shows ("yourself", Exult <c>Get_object_name</c>): 0x42 in Black Gate, 0x4e in Serpent Isle.</summary>
+    public static int Yourself => U7.Core.GameContext.IsSi ? 0x4e : 0x42;
 
     public static string Get(int msg)
     {

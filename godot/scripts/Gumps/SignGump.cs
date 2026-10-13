@@ -1,45 +1,56 @@
 using System.Text;
+using U7.Core;
 using U7.Data;
 
 namespace U7.Gumps;
 
 /// <summary>
-/// Exult <c>Sign_gump</c>: a wooden sign, tombstone or gold plaque (GUMPS.VGA
-/// 49-51; the scroll 55) with its lines spread evenly down the shape's text
-/// area, each centred, in the sign's rune font (<c>display_runes</c>). The
-/// rune fonts have runes for lower case and letters for capitals.
+/// Exult <c>Sign_gump</c>: a wooden sign, tombstone or gold plaque (the
+/// game's <c>gumps/woodsign</c>, <c>tombstone</c>, <c>goldsign</c>; also its
+/// scroll) with its lines spread evenly down the shape's text area, each
+/// centred, in the sign's rune font (<c>display_runes</c>). The rune fonts
+/// have runes for lower case and letters for capitals.
 /// </summary>
 public sealed class SignGump
 {
-    public const int WoodSign = 49, Tombstone = 50, GoldSign = 51, Scroll = 55;
-
     public int GumpShape { get; }
     public IReadOnlyList<string> Lines { get; }
+    /// <summary>Exult's <c>serpentine</c>: Serpent Isle's serpent runes, for an avatar who can't read them.</summary>
+    public bool Serpentine { get; }
 
-    public SignGump(int gumpShape, IReadOnlyList<string> lines)
+    /// <summary>
+    /// Exult <c>Sign_gump</c>'s constructor and <c>add_text</c>: in Serpent
+    /// Isle shape 49 ("THIS IS A HACK") is the gold plaque in serpent runes
+    /// unless the avatar can read them; an avatar who can read runes (the
+    /// read flag) sees the other signs' lines in letters.
+    /// </summary>
+    public SignGump(int gumpShape, IReadOnlyList<string> lines, bool canRead)
     {
+        if (GameContext.IsSi && gumpShape == 49 && !canRead)
+        {
+            Serpentine = true;
+            gumpShape = GameShapes.Get("gumps/goldsign");
+        }
+
         GumpShape = gumpShape;
-        Lines = lines;
-        Translation = Translate(lines);
+        Lines = !Serpentine && canRead ? lines.Select(Readable).ToList() : lines;
+        Translation = Serpentine ? null : Translate(Lines);
     }
 
-    /// <summary>Exult <c>Sign_gump::paint</c>'s font: embossed on the gold plaque, engraved on the tombstone, else the plain runes.</summary>
-    public int Font => GumpShape switch
-    {
-        GoldSign => 6,
-        Tombstone => 3,
-        _ => 1
-    };
+    /// <summary>Exult <c>Sign_gump::paint</c>'s font: embossed on the gold plaque (serpent runes there 10, elsewhere 8), engraved on the tombstone, else the plain runes.</summary>
+    public int Font =>
+        GumpShape == GameShapes.Get("gumps/goldsign") ? Serpentine ? 10 : 6
+        : Serpentine ? 8
+        : GumpShape == GameShapes.Get("gumps/tombstone") ? 3
+        : 1;
 
-    /// <summary>Exult <c>Sign_gump</c>'s object area for the text (x, y, w, h from the gump's position); the whole frame otherwise.</summary>
-    public (int X, int Y, int W, int H) TextArea(FrameInfo frame) => GumpShape switch
-    {
-        WoodSign => (0, 4, 196, 92),
-        Tombstone => (0, 8, 200, 112),
-        GoldSign => (0, 4, 232, 96),
-        Scroll => (48, 30, 146, 118),
-        _ => (-frame.XLeft, -frame.YAbove, frame.Width, frame.Height)
-    };
+    /// <summary>Exult <c>Sign_gump</c>'s object area for the text (x, y, w, h from the gump's position; Serpent Isle's gold plaque is wider); the whole frame otherwise.</summary>
+    public (int X, int Y, int W, int H) TextArea(FrameInfo frame) =>
+        GumpShape == GameShapes.Get("gumps/woodsign") ? (0, 4, 196, 92)
+        : GumpShape == GameShapes.Get("gumps/tombstone") ? (0, 8, 200, 112)
+        : GumpShape == GameShapes.Get("gumps/goldsign") ? GameContext.IsSi ? (4, 4, 312, 96) : (0, 4, 232, 96)
+        : GumpShape == GameShapes.Get("gumps/scroll") ? (48, 30, 146, 118)
+        : (-frame.XLeft, -frame.YAbove, frame.Width, frame.Height);
 
     /// <summary>
     /// Exult <c>Sign_gump::add_text</c> for an avatar who can read runes (the

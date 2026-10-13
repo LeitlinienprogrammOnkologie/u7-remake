@@ -87,7 +87,7 @@ public sealed class SceneLighting
     /// <summary>Changes whenever <see cref="Ambient"/> or <see cref="Lit"/> do.</summary>
     public int Version { get; private set; }
 
-    /// <summary>Per light: centre in world pixels, radius, kind. Always <see cref="MaxLights"/> long.</summary>
+    /// <summary>Per light: centre in world pixels, radius, kind plus 16 times its lift. Always <see cref="MaxLights"/> long.</summary>
     public Vector4[] LightA { get; } = new Vector4[MaxLights];
     /// <summary>Per light: colour times intensity, animation phase. Always <see cref="MaxLights"/> long.</summary>
     public Vector4[] LightB { get; } = new Vector4[MaxLights];
@@ -193,6 +193,7 @@ public sealed class SceneLighting
         // Either one is the whole screen's, lights included.
         Override = _effects is { LightningFlash: true } ? PaletteSet.Lightning
             : av.GetFlag(ObjFlag.Invisible) ? PaletteSet.Invisible
+            : _clock.Infravision ? PaletteSet.Day
             : -1;
         Level = LightSources.Level(_map, _catalog, av, _party?.Members ?? [], Focus, InDungeon, _frameOf);
         Class = LightSources.Classify(Level);
@@ -214,7 +215,7 @@ public sealed class SceneLighting
         _snap = false;
         if (SpellStrength > 0)
         {
-            AddLight(FigureCentre(av), SpellRadius, KindSpell, new Vector3(SpellStrength, SpellStrength, SpellStrength), 0);
+            AddLight(FigureCentre(av), SpellRadius, KindSpell, new Vector3(SpellStrength, SpellStrength, SpellStrength), 0, av.Tz);
         }
 
         Windows.Begin(InDungeon ? -1 : _skip);
@@ -225,7 +226,7 @@ public sealed class SceneLighting
         {
             var l = _found[i];
             var (intensity, radius) = Animate(l, seconds);
-            AddLight(l.Centre, radius, l.Kind, l.Glow.Colour * intensity, l.Extra);
+            AddLight(l.Centre, radius, l.Kind, l.Glow.Colour * intensity, l.Extra, l.Source.Tz);
         }
     }
 
@@ -464,7 +465,7 @@ public sealed class SceneLighting
         }
 
         var centre = new Vector2(x - xleft + width / 2f, y - yabove + height / 2f);
-        AddLight(centre, MagicRadius(Mathf.Max(width, height)), KindPool, colour * intensity, 0);
+        AddLight(centre, MagicRadius(Mathf.Max(width, height)), KindPool, colour * intensity, 0, at.Tz);
     }
 
     /// <summary>
@@ -529,14 +530,15 @@ public sealed class SceneLighting
     static float Flicker(double t, float phase) =>
         (float)(0.5 * Math.Sin(t * 7.3 + phase) + 0.3 * Math.Sin(t * 13.1 + phase * 1.7) + 0.2 * Math.Sin(t * 23.7 + phase * 2.3));
 
-    void AddLight(Vector2 centre, float radius, int kind, Vector3 colour, float phase)
+    /// <summary>A light for the world shader; its kind and lift (for the occlusion of RENDERER.md 5.6) packed as <c>kind + 16 lift</c>.</summary>
+    void AddLight(Vector2 centre, float radius, int kind, Vector3 colour, float phase, int lift)
     {
         if (LightCount >= MaxLights)
         {
             return;
         }
 
-        LightA[LightCount] = new Vector4(centre.X, centre.Y, radius, kind);
+        LightA[LightCount] = new Vector4(centre.X, centre.Y, radius, kind + 16 * Math.Clamp(lift, 0, 31));
         LightB[LightCount] = new Vector4(colour.X, colour.Y, colour.Z, phase);
         LightCount++;
     }

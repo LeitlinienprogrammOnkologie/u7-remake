@@ -40,8 +40,17 @@ public sealed class NpcTimers
     const int FirstHunger = 0x77, LastHunger = 0x79, FirstNeedFood = 0x7a, LastNeedFood = 0x7c, FirstStarving = 0x7d, LastStarving = 0x7f;
     /// <summary>Exult <c>set_property(food_level)</c>: "Never seems to get above this."</summary>
     const int MaxFood = 31;
-    /// <summary>The swamp boots: Exult's <c>frame_powers</c> make them <c>swamp_safe</c>.</summary>
-    const int SwampBoots = 588;
+    /// <summary>Exult <c>Frame_flags</c>: what worn things give (<c>shape_info.txt</c>'s frame_powers).</summary>
+    const int PoisonSafe = 1 << 0, CharmSafe = 1 << 1, SleepSafe = 1 << 2, ParalysisSafe = 1 << 3, CurseSafe = 1 << 4,
+        PowerSafe = 1 << 5, DoesntEat = 1 << 9, SwampSafe = 1 << 10;
+
+    /// <summary>The spots <c>Actor::refigure_gear</c> looks at.</summary>
+    static readonly int[] GearSpots =
+    [
+        ReadySpot.Head, ReadySpot.Belt, ReadySpot.Lhand, ReadySpot.Lfinger, ReadySpot.Legs, ReadySpot.Feet,
+        ReadySpot.Rfinger, ReadySpot.Rhand, ReadySpot.Torso, ReadySpot.Neck, ReadySpot.Earrings,
+        ReadySpot.Cloak, ReadySpot.Gloves
+    ];
     /// <summary>Exult <c>ticks_per_minute * std_delay / 2</c>: half a game minute in ms.</summary>
     const double HalfMinuteMs = 25 * U7Constants.StandardDelayMs / 2.0;
     const int InvisibilityRing = 296, ProtectionRing = 297;
@@ -134,10 +143,11 @@ public sealed class NpcTimers
         }
 
         var minf = _combat.MonsterInfo(obj.Shape);
+        var gear = GearPowers(obj);
         switch (flag)
         {
             case ObjFlag.Asleep:
-                if (minf.SleepSafe || minf.PowerSafe)
+                if (minf.SleepSafe || minf.PowerSafe || (gear & (PowerSafe | SleepSafe)) != 0)
                 {
                     return;
                 }
@@ -158,7 +168,7 @@ public sealed class NpcTimers
                 LayDown(obj);
                 break;
             case ObjFlag.Poisoned:
-                if (minf.PoisonSafe)
+                if (minf.PoisonSafe || (gear & PoisonSafe) != 0)
                 {
                     return;
                 }
@@ -172,7 +182,7 @@ public sealed class NpcTimers
                 StartFlag(obj, flag);
                 break;
             case ObjFlag.Cursed:
-                if (minf.CurseSafe || minf.PowerSafe)
+                if (minf.CurseSafe || minf.PowerSafe || (gear & (PowerSafe | CurseSafe)) != 0)
                 {
                     return;
                 }
@@ -180,7 +190,7 @@ public sealed class NpcTimers
                 StartFlag(obj, flag);
                 break;
             case ObjFlag.Charmed:
-                if (minf.CharmSafe || minf.PowerSafe)
+                if (minf.CharmSafe || minf.PowerSafe || (gear & (PowerSafe | CharmSafe)) != 0)
                 {
                     return;
                 }
@@ -190,7 +200,7 @@ public sealed class NpcTimers
                 obj.CombatTarget = null;
                 break;
             case ObjFlag.Paralyzed:
-                if (minf.ParalysisSafe || minf.PowerSafe)
+                if (minf.ParalysisSafe || minf.PowerSafe || (gear & (PowerSafe | ParalysisSafe)) != 0)
                 {
                     return;
                 }
@@ -501,11 +511,17 @@ public sealed class NpcTimers
 
     /// <summary>
     /// Exult <c>Actor::use_food</c>: 0-3 food an hour (1.5 on average); at 9
-    /// or less the complaints and the hunger timer begin. (No Black Gate
-    /// shape or gear is exempt: Exult's <c>dont_eat</c> and <c>doesnt_eat</c> are unset.)
+    /// or less the complaints and the hunger timer begin. Not for a shape
+    /// that doesn't eat (its actor flag) or one wearing gear that feeds it
+    /// (none in Black Gate).
     /// </summary>
     void UseFood(U7Object npc)
     {
+        if ((ShapeCatalog.Current[npc.Shape].ActorFlags & (1 << ActorFlags.DoesntEat)) != 0 || (GearPowers(npc) & DoesntEat) != 0)
+        {
+            return;
+        }
+
         var food = Math.Clamp(npc.GetProp(ActorProp.FoodLevel) - _rng.Next(4), 0, MaxFood);
         ActorProp.Set(npc, ActorProp.FoodLevel, food);
         if (food > 9)
@@ -683,13 +699,33 @@ public sealed class NpcTimers
         }
 
         var flat = _runner.Map.GetFlat(actor.Tx, actor.Ty);
-        if (flat.Shape < 0 || !_runner.Map.Catalog[flat.Shape].Poisonous ||
-            actor.Contents.Any(o => o.ReadySlot >= 0 && o.Shape == SwampBoots))
+        if (flat.Shape < 0 || !_runner.Map.Catalog[flat.Shape].Poisonous || (GearPowers(actor) & (SwampSafe | PoisonSafe)) != 0)
         {
             return;
         }
 
         SetFlag(actor, ObjFlag.Poisoned);
+    }
+
+    /// <summary>
+    /// Exult <c>Actor::refigure_gear</c>'s <c>gear_powers</c>: the frame
+    /// powers (<c>Shape_info::get_object_flags</c>) of what the actor wears
+    /// in its gear spots (Black Gate's swamp boots are swamp-safe).
+    /// </summary>
+    static int GearPowers(U7Object actor)
+    {
+        var powers = 0;
+        foreach (var worn in actor.Contents)
+        {
+            if (worn.ReadySlot >= 0 && Array.IndexOf(GearSpots, worn.ReadySlot) >= 0 && !worn.Removed)
+            {
+                var info = ShapeCatalog.Current[worn.Shape];
+                powers |= ShapeInfoText.Find(info.FrameFlags, worn.Frame, info.HasQuality ? worn.Quality : -1,
+                    e => (e.Frame, e.Quality))?.Value ?? 0;
+            }
+        }
+
+        return powers;
     }
 
     static bool WearingRing(U7Object actor, int shape) =>

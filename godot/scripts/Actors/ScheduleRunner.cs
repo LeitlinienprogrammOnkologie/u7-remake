@@ -83,7 +83,8 @@ public sealed class ScheduleRunner
     /// <summary>A <c>path_run_usecode</c> walk of the avatar's took its last step: the party is called along (Exult <c>Main_actor::get_followers</c>).</summary>
     public Action? AvatarWalkEnded { get; set; }
     /// <summary>Exult <c>Game_object::activate</c>: the object's usecode as a double-click; false if usecode cannot run now.</summary>
-    public Func<U7Object, bool>? Activate { get; set; }
+    /// <summary>Exult <c>Actor::activate(event)</c>: the object's usecode with that event (1, a double-click, mostly); false while usecode runs.</summary>
+    public Func<U7Object, int, bool>? Activate { get; set; }
     /// <summary>Milliseconds of game play (Exult <c>Game::get_ticks</c>, for schedule timers).</summary>
     public double Ticks { get; private set; }
     public int Hour => _clock.Hour;
@@ -670,8 +671,9 @@ public sealed class ScheduleRunner
         return dx >= 0 && dx < w + 20 && dy >= 0 && dy < h + 20;
     }
 
-    /// <summary>Exult <c>Bg_dont_wake</c>: ghosts (translucent shapes), Horace and Penumbra sleep on.</summary>
-    public static bool DontWake(GameMap map, U7Object npc) => map.Catalog[npc.Shape].Translucent || npc.NpcNum is 141 or 150;
+    /// <summary>Exult <c>Bg_dont_wake</c>: in Black Gate, ghosts (translucent shapes), Horace and Penumbra sleep on.</summary>
+    public static bool DontWake(GameMap map, U7Object npc) =>
+        GameContext.IsBg && (map.Catalog[npc.Shape].Translucent || npc.NpcNum is 141 or 150);
 
     /// <summary>
     /// Exult <c>Fast_pathfinder_client::is_straight_path</c> for two objects:
@@ -1163,6 +1165,30 @@ public sealed class ScheduleRunner
         var getUp = old is SleepSchedule && newType is ScheduleType.Sleep or ScheduleType.Wait;
         old.Ending(getUp ? ScheduleType.WalkToSchedule : newType);
         b.Schedule = null;
+    }
+
+    /// <summary>The schedules, which usecode may change (Exult's <c>set_new_schedules</c> and kin) and a save writes.</summary>
+    public ScheduleTable Table => _table;
+
+    /// <summary>
+    /// Exult <c>run_schedule</c> (<c>update_schedule(hour / 3)</c>): the
+    /// period's schedule starts again, unless no entry starts in this period
+    /// and the NPC already keeps the one before it at its spot.
+    /// </summary>
+    public void RunSchedule(U7Object npc)
+    {
+        if (BrainOf(npc) is not { } b || _table.ForSlot(npc.NpcNum, _clock.Slot) is not { } entry)
+        {
+            return;
+        }
+
+        if (entry.TimeSlot != _clock.Slot && npc.ScheduleType == entry.Type &&
+            b.Dest == new TileCoord(entry.Tx, entry.Ty, entry.Tz))
+        {
+            return;
+        }
+
+        UpdateSchedule(b, null);
     }
 
     /// <summary>

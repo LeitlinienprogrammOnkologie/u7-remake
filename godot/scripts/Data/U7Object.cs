@@ -50,8 +50,8 @@ public sealed class U7Object
     public int ReadySlot = -1;
     public bool Removed;
     /// <summary>Exult render dependencies: objects that must paint before / after this one.</summary>
-    public HashSet<U7Object>? Dependencies;
-    public HashSet<U7Object>? Dependors;
+    public ObjectSet? Dependencies;
+    public ObjectSet? Dependors;
     public uint RenderSeq;
     /// <summary>Frame number (high 32 bits) and paint index of the last draw; later paint = on top.</summary>
     public long PaintStamp;
@@ -114,8 +114,12 @@ public sealed class U7Object
     public bool HasSavedGumpPos => GumpX != int.MinValue && GumpY != int.MinValue;
     public bool IsContained => Container is not null;
     public bool IsNpc => NpcNum >= 0;
-    /// <summary>1×1 hatchable (shapes 200/275). Hidden unless painting eggs.</summary>
-    public bool InvisibleEgg => IsEgg && DimX <= 1 && DimY <= 1;
+    /// <summary>
+    /// 1×1 hatchable (shapes 200/275), or a path marker (607, which Exult's
+    /// <c>create_ireg_object</c> makes an <c>Egglike_game_object</c>). Hidden
+    /// unless painting eggs.
+    /// </summary>
+    public bool InvisibleEgg => (IsEgg && DimX <= 1 && DimY <= 1) || Shape == U7.Actors.PatrolSchedule.PathShape;
     public bool IsMonster;
     /// <summary>Exult <c>Actor::target</c>: whom it fights.</summary>
     public U7Object? CombatTarget;
@@ -355,6 +359,16 @@ public sealed class U7Object
 
     /// <summary>Exult <c>Actor::set_usecode</c>: a function the actor runs instead of its own (the arrest's guards), or -1.</summary>
     public int AssignedUsecode = -1;
+    /// <summary>Exult <c>usecode_name</c>: the assigned function's name in UCC's table, which a save keeps instead of its number.</summary>
+    public string? UsecodeName;
+    /// <summary>Exult <c>Actor::ident</c> (0-31): usecode's <c>get_npc_id</c> / <c>set_npc_id</c>.</summary>
+    public int Ident;
+    /// <summary>Exult <c>Actor::temperature</c> (0-63, Serpent Isle's cold), kept through saves.</summary>
+    public int Temperature;
+    /// <summary>Exult <c>Actor::shape_save</c>: a polymorphed actor's own shape, -1 when it has its own.</summary>
+    public int ShapeSave = -1;
+    /// <summary>Exult <c>Actor::skin_color</c>: -1 for the shape's own; a save writes it as a byte, so it comes back 255.</summary>
+    public int SkinColor = -1;
 
     public int GetUsecode()
     {

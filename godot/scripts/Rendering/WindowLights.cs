@@ -45,12 +45,17 @@ public sealed class WindowLights
     /// </summary>
     public static WindowLook Look { get; } = new(2.5f, 4f, 0.6f, 0.9f);
 
-    /// <summary>Glass: windows, stained glass and glass walls, whose see-through pixels are panes.</summary>
+    /// <summary>
+    /// Glass: windows and glass walls, and in Black Gate the stained glass and
+    /// its other glass walls (other things under those numbers in Serpent
+    /// Isle), whose see-through pixels are panes.
+    /// </summary>
     public static bool IsGlass(int shape) =>
-        shape is 438 or 732 or 508 or 512 or 373 or 832 or 833 or 841 or 996 or 1005 or 1007 or 1019;
+        shape is 438 or 732 or 833 or 841 ||
+        (GameContext.IsBg && shape is 508 or 512 or 373 or 832 or 996 or 1005 or 1007 or 1019);
 
-    /// <summary>Glass, and the open shutters (an opening without glass).</summary>
-    public static bool IsWindow(int shape) => IsGlass(shape) || shape is 322 or 372;
+    /// <summary>Glass, and Black Gate's open shutters (an opening without glass; Serpent Isle's open and close by frame).</summary>
+    public static bool IsWindow(int shape) => IsGlass(shape) || (GameContext.IsBg && shape is 322 or 372);
 
     sealed class Window
     {

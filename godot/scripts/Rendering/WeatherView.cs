@@ -55,9 +55,72 @@ public partial class WeatherView : Node2D
         public long Steps;
     }
 
+    /// <summary>
+    /// The rain and snow lit by the lights (RENDERER.md 5.8, R7): each drop's
+    /// colour, darkened by the time of day as before, brightens in a pool's or
+    /// the light spell's light where it falls, in the light's colour, by
+    /// <see cref="WeatherLook.LightCatch"/>. The lights are the world
+    /// shader's (SceneLighting), without occlusion: rain is in the air.
+    /// </summary>
+    const string LitCode = """
+        shader_type canvas_item;
+        render_mode unshaded;
+
+        const int MAX_LIGHTS = 64;
+        const int KIND_WINDOW = 2;
+        uniform vec4 light_a[MAX_LIGHTS];
+        uniform vec4 light_b[MAX_LIGHTS];
+        uniform int light_count = 0;
+        uniform float light_catch = 1.0;
+
+        varying vec2 world_pos;
+        varying vec4 vcol;
+
+        void vertex() {
+            world_pos = VERTEX;
+            vcol = COLOR;
+        }
+
+        void fragment() {
+            vec4 c = vcol * texture(TEXTURE, UV);
+            float L = 0.0;
+            vec3 tint = vec3(0.0);
+            for (int i = 0; i < light_count; i++) {
+                vec4 a = light_a[i];
+                vec4 b = light_b[i];
+                if ((int(a.w + 0.5) & 15) >= KIND_WINDOW) {
+                    continue;
+                }
+                float intensity = max(b.r, max(b.g, b.b));
+                if (intensity <= 0.0) {
+                    continue;
+                }
+                float x = length(world_pos - a.xy) / a.z;
+                if (x >= 1.0) {
+                    continue;
+                }
+                float w = (1.0 - smoothstep(0.0, 1.0, x)) * intensity;
+                L += w;
+                tint += w * b.rgb / intensity;
+            }
+            if (L > 0.0) {
+                c.rgb *= 1.0 + light_catch * min(L, 1.0) * (0.5 + tint / L);
+            }
+            COLOR = c;
+        }
+        """;
+
+    static readonly StringName LightA = "light_a";
+    static readonly StringName LightB = "light_b";
+    static readonly StringName LightCount = "light_count";
+    ShaderMaterial? _lit;
+
     public override void _Ready()
     {
         ZIndex = 1;
+        _lit = new ShaderMaterial { Shader = new Shader { Code = LitCode } };
+        _lit.SetShaderParameter("light_catch", WeatherLook.LightCatch);
+        Material = _lit;
         _dot = SoftDot(16);
         _star = Star(15);
         _glints = new Node2D
@@ -227,6 +290,13 @@ public partial class WeatherView : Node2D
 
     public override void _Draw()
     {
+        if (_lit is not null && Lighting is not null)
+        {
+            _lit.SetShaderParameter(LightA, Lighting.LightA);
+            _lit.SetShaderParameter(LightB, Lighting.LightB);
+            _lit.SetShaderParameter(LightCount, Lighting.LightCount);
+        }
+
         var light = Light();
         _lines.Clear();
         _lineColours.Clear();

@@ -287,7 +287,9 @@ public abstract class Schedule(NpcBrain brain)
 
     // Exult try_street_maintenance: shutters to close and lamps to light at
     // night; shutters to open, lamps to put out and spent candles by day.
+    // Serpent Isle's shutters are 290 and 291 open or closed by frame (Exult sinight).
     static readonly int[] NightShapes = [322, 372, 336, 997, 889];
+    static readonly int[] SiNightShapes = [290, 291, 336, 997, 889];
     static readonly int[] DayShapes = [290, 291, 338, 997, 526];
 
     /// <summary>
@@ -319,7 +321,7 @@ public abstract class Schedule(NpcBrain brain)
         }
         else if (hour is >= 18 or < 6)
         {
-            shapes = NightShapes;
+            shapes = GameContext.IsSi ? SiNightShapes : NightShapes;
         }
         else
         {
@@ -335,6 +337,11 @@ public abstract class Schedule(NpcBrain brain)
         {
             foreach (var obj in Map.FindNearby(Here(Npc), shape, 20))
             {
+                if (GameContext.IsSi && !SiTends(obj, shapes == DayShapes))
+                {
+                    continue;
+                }
+
                 if (PathWalk.Approach(Map, Npc, obj, 1) is { } walk)
                 {
                     Runner.SetSchedule(Brain, ScheduleType.StreetMaintenance,
@@ -347,6 +354,23 @@ public abstract class Schedule(NpcBrain brain)
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Exult <c>try_street_maintenance</c> for Serpent Isle: shutters (frames
+    /// up to 3 open) are closed by day only if open, and opened by night only
+    /// if closed, the other way round; its lamp posts can't be toggled in
+    /// frames 0, 1, 4 and 5.
+    /// </summary>
+    static bool SiTends(U7Object obj, bool day)
+    {
+        var frame = obj.Frame;
+        if (obj.Shape is 290 or 291 && day != (frame <= 3))
+        {
+            return false;
+        }
+
+        return !(obj.Shape is 526 or 889 && frame is 0 or 1 or 4 or 5);
     }
 
     /// <summary>

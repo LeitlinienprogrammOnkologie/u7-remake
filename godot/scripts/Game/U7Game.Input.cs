@@ -109,15 +109,11 @@ public partial class U7Game
             }
             else if (mb.ButtonIndex == MouseButton.WheelUp && mb.Pressed)
             {
-                _zoom = Mathf.Clamp(_zoom + 0.5f, 1f, 8f);
-                _camera.Zoom = new Vector2(_zoom, _zoom);
-                _gumpView.Zoom = _zoom;
+                SetZoom(_zoom + 0.5f);
             }
             else if (mb.ButtonIndex == MouseButton.WheelDown && mb.Pressed)
             {
-                _zoom = Mathf.Clamp(_zoom - 0.5f, 1f, 8f);
-                _camera.Zoom = new Vector2(_zoom, _zoom);
-                _gumpView.Zoom = _zoom;
+                SetZoom(_zoom - 0.5f);
             }
             else if (mb is { ButtonIndex: MouseButton.Left, Pressed: true })
             {
@@ -300,6 +296,9 @@ public partial class U7Game
                 case Key.F6:
                     DebugDie(restart: key.ShiftPressed);
                     break;
+                case Key.F7:
+                    _statusExtra = ToggleRedrawnPaperdolls();
+                    break;
                 case Key.F5:
                     QuickSave();
                     break;
@@ -346,6 +345,14 @@ public partial class U7Game
         (Vector2I)(world - _camera.GlobalPosition + GetViewport().GetVisibleRect().Size / (2 * _zoom)).Floor();
 
     Vector2 VirtualToWorld(Vector2 virt) => virt + _camera.GlobalPosition - GetViewport().GetVisibleRect().Size / (2 * _zoom);
+
+    /// <summary>The world's zoom (the mouse wheel's, 1 to 8), for the camera and the gumps.</summary>
+    void SetZoom(float zoom)
+    {
+        _zoom = Mathf.Clamp(zoom, 1f, 8f);
+        _camera.Zoom = new Vector2(_zoom, _zoom);
+        _gumpView.Zoom = _zoom;
+    }
 
     /// <summary>
     /// Exult <c>Dragging_info::drop_on_map</c>: a thing let go on the map.
@@ -982,7 +989,8 @@ public partial class U7Game
             return false;
         }
 
-        if ((info.Door && obj.Frame % 4 < 2) || (Inventory.IsContainer(obj, _catalog) && obj.Shape is not (522 or 798)))
+        // Exult: a locked container (shape_info.txt's locked_containers) can be attacked.
+        if ((info.Door && obj.Frame % 4 < 2) || (Inventory.IsContainer(obj, _catalog) && !info.Locked))
         {
             return false;
         }
@@ -1005,5 +1013,68 @@ public partial class U7Game
 
         _gumps.ShowInventory(npc);
         return true;
+    }
+
+    /// <summary>
+    /// The paperdolls in their original art or redrawn from the pack (the
+    /// user's switch, kept in <c>saves/settings.cfg</c>); says which, and when
+    /// the pack has none yet, how to make them.
+    /// </summary>
+    string ToggleRedrawnPaperdolls() => SetRedrawnPaperdolls(!ArtLook.RedrawnPaperdolls);
+
+    string SetRedrawnPaperdolls(bool redrawn)
+    {
+        ArtLook.RedrawnPaperdolls = redrawn;
+        Settings.Set("art", "redrawn_paperdolls", redrawn);
+        _world.Art?.Clear();
+        if (!redrawn)
+        {
+            return "paperdolls: original art";
+        }
+
+        return _world.Art?.HasPaperdolls == true
+            ? "paperdolls: redrawn"
+            : "paperdolls: redrawn once made (scripts/upscale/missing.py --make); original art until then";
+    }
+
+    /// <summary>
+    /// The redrawn art in its own colours or in palette entries (the user's
+    /// switch, kept in <c>saves/settings.cfg</c>); says which, and when the
+    /// packs have no colours (made before version 2), how to make them.
+    /// </summary>
+    string SetTrueColour(bool on)
+    {
+        ArtLook.TrueColour = on;
+        Settings.Set("art", "true_colour", on);
+        _world.Art?.Clear();
+        _conversation.Refresh();
+        if (!on)
+        {
+            return "true colour: off (palette entries" + (ArtLook.Mix ? ", mixed)" : ")");
+        }
+
+        return _world.Art?.HasColours == true
+            ? "true colour: on"
+            : "true colour: on once the packs are made again (scripts/upscale/pack.py); palette entries until then";
+    }
+
+    /// <summary>
+    /// The faces as the user's paintings or in the game's art (the user's
+    /// switch, kept in <c>saves/settings.cfg</c>); says which, and when none
+    /// are made, how to make them.
+    /// </summary>
+    string SetPaintedFaces(bool painted)
+    {
+        ArtLook.PaintedFaces = painted;
+        Settings.Set("art", "painted_faces", painted);
+        _conversation.Refresh();
+        if (!painted)
+        {
+            return "faces: the game's art";
+        }
+
+        return _shapes.HasPaintedFaces
+            ? "faces: painted"
+            : "faces: painted once made (scripts/faces/prepare.py); the game's art until then";
     }
 }

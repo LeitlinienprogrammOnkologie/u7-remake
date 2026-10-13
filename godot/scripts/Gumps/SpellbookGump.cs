@@ -1,4 +1,5 @@
 using U7.Actors;
+using U7.Core;
 using U7.Data;
 
 namespace U7.Gumps;
@@ -11,16 +12,18 @@ namespace U7.Gumps;
 /// </summary>
 public sealed class SpellbookGump : Gump
 {
-    // GUMPS.VGA (Black Gate).
-    public const int BookShape = 43;
+    // Exult Spellbook_gump.cc's GUMPS.VGA shapes, Black Gate's or Serpent Isle's.
+    /// <summary>Exult <c>gumps/spellbook</c>.</summary>
+    public static int BookShape => GameShapes.Get("gumps/spellbook");
     /// <summary>First of eight shapes, one per spell of a circle; the frame is the circle.</summary>
-    const int SpellsShape = 33;
-    const int TurningPageShape = 41;
-    const int BookmarkShape = 42;
-    const int LeftPageShape = 44;
-    const int RightPageShape = 45;
-    /// <summary>TEXT.FLX misc names: "Circle", then "First" to "Eighth".</summary>
-    const int CircleName = 0x45;
+    static int SpellsShape => GameContext.IsSi ? 28 : 33;
+    static int TurningPageShape => GameContext.IsSi ? 36 : 41;
+    static int BookmarkShape => GameContext.IsSi ? 37 : 42;
+    static int LeftPageShape => GameContext.IsSi ? 39 : 44;
+    static int RightPageShape => GameContext.IsSi ? 40 : 45;
+    /// <summary>TEXT.FLX misc names: "Circle" (Exult <c>CIRCLE</c>), and the first of "First" to "Eighth" less one (<c>CIRCLENUM</c>).</summary>
+    static int CircleName => GameContext.IsSi ? 0x51 : 0x45;
+    static int CircleNumber => GameContext.IsSi ? 0x52 : 0x45;
     const int NumbersFont = 5;
     const int TurnFrameMs = 50;
 
@@ -279,7 +282,7 @@ public sealed class SpellbookGump : Gump
 
         if (Page > 0)
         {
-            var number = TextMessages.MiscName(CircleName + Page);
+            var number = TextMessages.MiscName(CircleNumber + Page);
             var circle = TextMessages.MiscName(CircleName);
             view.DrawFontText(font, number, X + 40 + (44 - font.TextWidth(number, 0, number.Length)) / 2, Y + 20);
             view.DrawFontText(font, circle, X + 92 + (44 - font.TextWidth(circle, 0, circle.Length)) / 2, Y + 20);

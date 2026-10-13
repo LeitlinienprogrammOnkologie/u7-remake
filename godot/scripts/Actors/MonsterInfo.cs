@@ -1,6 +1,4 @@
-using System.Globalization;
-using System.IO;
-using U7.Core;
+using U7.Data;
 
 namespace U7.Actors;
 
@@ -53,31 +51,26 @@ public sealed class MonsterRecord
 }
 
 /// <summary>
-/// Exult <c>data/bg/shape_info.txt</c> <c>actor_flags</c>, which Exult
-/// hard-codes for Black Gate: who can teleport, summon or turn invisible in
-/// combat (mages, liches, ghosts, dragons, ...).
+/// Exult <c>Shape_info</c>'s actor flags (<c>shape_info.txt</c>'s
+/// actor_flags): who can teleport, summon or turn invisible in combat
+/// (mages, liches, ghosts, dragons, ...) and who survives Armageddon.
 /// </summary>
 public static class ActorFlags
 {
-    // shape: teleports, summons, turn_invis
-    static readonly Dictionary<int, (bool Teleports, bool Summons, bool TurnInvis)> Flags = new()
-    {
-        [154] = (true, true, true), [445] = (true, true, true), [446] = (true, true, true), // Mages.
-        [299] = (false, true, true), [317] = (false, true, true), // Ghosts.
-        [354] = (true, true, true), [519] = (true, true, true), // Liches.
-        [504] = (false, false, true), [511] = (false, false, true), // Dragons.
-        [382] = (false, true, false), [534] = (false, true, false)
-    };
+    public const int ColdImmune = 0, DoesntEat = 1, Teleports = 2, Summons = 3, TurnsInvisible = 4, ArmageddonSafe = 5,
+        QuakeWalk = 6, Goblin = 7;
 
-    public static bool CanTeleport(int shape) => Flags.TryGetValue(shape, out var f) && f.Teleports;
-    public static bool CanSummon(int shape) => Flags.TryGetValue(shape, out var f) && f.Summons;
-    public static bool CanBeInvisible(int shape) => Flags.TryGetValue(shape, out var f) && f.TurnInvis;
+    static bool Has(int shape, int flag) => (ShapeCatalog.Current[shape].ActorFlags & (1 << flag)) != 0;
 
-    /// <summary>Exult <c>survives_armageddon</c> (<c>armageddon_safe</c>): Batlin (403, 482) and Lord British (466).</summary>
-    public static bool SurvivesArmageddon(int shape) => shape is 403 or 482 or 466;
+    public static bool CanTeleport(int shape) => Has(shape, Teleports);
+    public static bool CanSummon(int shape) => Has(shape, Summons);
+    public static bool CanBeInvisible(int shape) => Has(shape, TurnsInvisible);
+
+    /// <summary>Exult <c>survives_armageddon</c> (<c>armageddon_safe</c>): Black Gate's Batlin (403, 482) and Lord British (466).</summary>
+    public static bool SurvivesArmageddon(int shape) => Has(shape, ArmageddonSafe);
 }
 
-/// <summary>Loads <c>assets/data/monsters.csv</c>.</summary>
+/// <summary>MONSTERS.DAT (Exult <c>Monster_info</c>), a mod's over it.</summary>
 public sealed class MonsterTable
 {
     readonly Dictionary<int, MonsterRecord> _byShape = new();
@@ -89,133 +82,68 @@ public sealed class MonsterTable
 
     public bool Contains(int shape) => _byShape.ContainsKey(shape);
 
+    /// <summary>Exult <c>Monster_info::read</c>, entry by entry of MONSTERS.DAT.</summary>
     public static MonsterTable Load()
     {
         var table = new MonsterTable();
-        var path = Path.Combine(U7Paths.DataDir, "monsters.csv");
-        if (!File.Exists(path))
+        foreach (var (shape, b) in ShapeDataFile.Read("MONSTERS.DAT", 25))
         {
-            return table;
-        }
-
-        using var reader = new StreamReader(path);
-        var header = reader.ReadLine();
-        if (header is null)
-        {
-            return table;
-        }
-
-        var cols = header.Split(',');
-        int Col(string name)
-        {
-            for (var i = 0; i < cols.Length; i++)
-            {
-                if (cols[i].Equals(name, StringComparison.OrdinalIgnoreCase))
-                {
-                    return i;
-                }
-            }
-
-            return -1;
-        }
-
-        var iShape = Col("shape");
-        var iDel = Col("deleted");
-        var iStr = Col("strength");
-        var iDex = Col("dexterity");
-        var iInt = Col("intelligence");
-        var iAlign = Col("alignment");
-        var iCombat = Col("combat");
-        var iArmor = Col("armor");
-        var iWpn = Col("weapon");
-        var iReach = Col("reach");
-        var iImm = Col("immune");
-        var iVuln = Col("vulnerable");
-        var iCantDie = Col("cant_die");
-        var iCantYell = Col("cant_yell");
-        var iFlags = Col("move_flags");
-        var iFlagBits = Col("flags");
-        var iMode = Col("attack_mode");
-        var iEquip = Col("equip_offset");
-        var iSleepSafe = Col("sleep_safe");
-        var iCharmSafe = Col("charm_safe");
-        var iCurseSafe = Col("curse_safe");
-        var iParalysisSafe = Col("paralysis_safe");
-        var iPoisonSafe = Col("poison_safe");
-        var iPowerSafe = Col("power_safe");
-        var iCantBleed = Col("cant_bleed");
-        var iDeathSafe = Col("death_safe");
-        var iSplits = Col("splits");
-        var iIntB1 = Col("xp_unknown_bit");
-
-        string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
-        int Num(string[] c, int i, int fallback = 0) =>
-            int.TryParse(Get(c, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)
-                ? v
-                : fallback;
-
-        while (reader.ReadLine() is { } line)
-        {
-            var c = line.Split(',');
-            var shape = Num(c, iShape, -1);
-            if (shape < 0 || Num(c, iDel) != 0)
+            if (b is null)
             {
                 continue;
             }
 
-            var rec = new MonsterRecord
+            var flags = b[7];
+            var attackMode = b[11] & 7;
+            // Exult read_info: MONSTERS.DAT's own teleport, summon and invisible bits move to the shape's actor flags.
+            var extra = b[13];
+            if (shape < ShapeCatalog.Current.Shapes.Length)
+            {
+                ShapeCatalog.Current[shape].ActorFlags |= ((extra & 1) != 0 ? 1 << ActorFlags.Teleports : 0) |
+                                                           ((extra & 2) != 0 ? 1 << ActorFlags.Summons : 0) |
+                                                           ((extra & 4) != 0 ? 1 << ActorFlags.TurnsInvisible : 0);
+            }
+
+            table._byShape[shape] = new MonsterRecord
             {
                 Shape = shape,
-                Strength = Num(c, iStr, 10),
-                Dexterity = Num(c, iDex, 10),
-                Intelligence = Num(c, iInt, 10),
-                Alignment = Num(c, iAlign),
-                Combat = Num(c, iCombat, 10),
-                Armor = Num(c, iArmor),
-                Weapon = Num(c, iWpn),
-                Reach = Math.Max(1, Num(c, iReach, 3)),
-                Immune = Num(c, iImm),
-                Vulnerable = Num(c, iVuln),
-                CantDie = Num(c, iCantDie) != 0,
-                CantYell = Num(c, iCantYell) != 0,
-                NoBody = Get(c, iFlags).Contains("no_body", StringComparison.OrdinalIgnoreCase),
-                SeeInvisible = (Num(c, iFlagBits) & (1 << 7)) != 0,
-                SleepSafe = Num(c, iSleepSafe) != 0,
-                CharmSafe = Num(c, iCharmSafe) != 0,
-                CurseSafe = Num(c, iCurseSafe) != 0,
-                ParalysisSafe = Num(c, iParalysisSafe) != 0,
-                PoisonSafe = Num(c, iPoisonSafe) != 0,
-                PowerSafe = Num(c, iPowerSafe) != 0,
-                CantBleed = Num(c, iCantBleed) != 0,
-                DeathSafe = Num(c, iDeathSafe) != 0,
-                Splits = Num(c, iSplits) != 0,
-                IntB1 = Num(c, iIntB1) != 0,
-                Flags = Num(c, iFlagBits),
-                MoveFlags = ParseMoveFlags(Get(c, iFlags)),
-                AttackModeClass = Math.Clamp(Num(c, iMode, 2), 0, 4),
-                EquipOffset = Num(c, iEquip)
+                SleepSafe = (b[0] & 1) != 0,
+                CharmSafe = (b[0] & 2) != 0,
+                Strength = b[0] >> 2,
+                CurseSafe = (b[1] & 1) != 0,
+                ParalysisSafe = (b[1] & 2) != 0,
+                Dexterity = b[1] >> 2,
+                PoisonSafe = (b[2] & 1) != 0,
+                IntB1 = (b[2] & 2) != 0,
+                Intelligence = b[2] >> 2,
+                Alignment = b[3] & 3,
+                Combat = b[3] >> 2,
+                Splits = (b[4] & 1) != 0,
+                CantDie = (b[4] & 2) != 0,
+                PowerSafe = (b[4] & 4) != 0,
+                DeathSafe = (b[4] & 8) != 0,
+                Armor = b[4] >> 4,
+                Reach = Math.Max(1, b[6] & 15),
+                Weapon = b[6] >> 4,
+                Flags = flags,
+                NoBody = (flags & (1 << 4)) != 0,
+                SeeInvisible = (flags & (1 << 7)) != 0,
+                MoveFlags = MoveFlagsOf(flags),
+                Vulnerable = b[8],
+                Immune = b[9],
+                CantYell = (b[10] & (1 << 5)) != 0,
+                CantBleed = (b[10] & (1 << 6)) != 0,
+                // Exult: 0 is invalid data from old ES versions, read as 2; else one less.
+                AttackModeClass = attackMode == 0 ? 2 : attackMode - 1,
+                EquipOffset = b[12]
             };
-            table._byShape[shape] = rec;
         }
 
         return table;
     }
 
-    static int ParseMoveFlags(string flags)
-    {
-        var result = 0;
-        foreach (var f in flags.Split('|'))
-        {
-            result |= f switch
-            {
-                "fly" => U7.Data.MoveFlags.Fly,
-                "walk" => U7.Data.MoveFlags.Walk,
-                "swim" => U7.Data.MoveFlags.Swim,
-                "ethereal" => U7.Data.MoveFlags.Ethereal,
-                _ => 0
-            };
-        }
-
-        return result;
-    }
+    /// <summary>Exult <c>Monster_info::Monster_flags</c> fly 0, swim 1, walk 2, ethereal 3 as the movement flags.</summary>
+    static int MoveFlagsOf(int flags) =>
+        ((flags & 1) != 0 ? U7.Data.MoveFlags.Fly : 0) | ((flags & 2) != 0 ? U7.Data.MoveFlags.Swim : 0) |
+        ((flags & 4) != 0 ? U7.Data.MoveFlags.Walk : 0) | ((flags & 8) != 0 ? U7.Data.MoveFlags.Ethereal : 0);
 }

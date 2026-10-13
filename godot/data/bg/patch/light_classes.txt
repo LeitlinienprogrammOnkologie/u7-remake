@@ -1,0 +1,18 @@
+#	What stops light (World/LightOcclusion.cs, docs/RENDERER.md 5.6): a shape's
+#	light class over the default rule (a translucent shape is glass and passes;
+#	a solid building piece, a door, or any solid thing three lifts tall or
+#	more is opaque; the rest, furniture included, is none).
+#	An entry is :shape or :first-last. A mod's file layers over this one.
+
+%%section version
+:1
+%%endsection
+
+%%section opaque
+%%endsection
+
+%%section glass
+%%endsection
+
+%%section none
+%%endsection

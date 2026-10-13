@@ -45,6 +45,14 @@ public static class WeatherLook
     // The user's picks (2026-10-08) from shots of Trinsic by day and night, each of three:
     /// <summary>Streaks with faint splashes (of a fine 1-pixel drizzle and a 1.6× downpour).</summary>
     public static RainLook Rain { get; } = new(11f, 0.5f, 0.5f, 1f, 0.35f);
+
+    /// <summary>
+    /// How much the rain and snow catch the lights' light (RENDERER.md 5.8,
+    /// R7: the weather is lit by the lights, not one brightness): a drop
+    /// in a pool's light brightens by this much of the light, in the
+    /// light's colour. 0 is the old look.
+    /// </summary>
+    public static float LightCatch { get; } = 1f;
     /// <summary>Big flakes, twice Exult's count (of specks at Exult's count and soft flakes at 1.5×).</summary>
     public static SnowLook Snow { get; } = new(3.8f, 0.9f, 3.5f, 2f);
     /// <summary>Large glints at full brightness (of 3 px and 5 px ones).</summary>

@@ -12,6 +12,9 @@ public static class U7Palette
 
     static FlexFile? _flex;
 
+    /// <summary>The game was switched (<see cref="U7.Core.GameContext.Switch"/>): PALETTES.FLX is the other game's.</summary>
+    public static void Reset() => _flex = null;
+
     /// <summary>
     /// <c>PALETTES.FLX</c> entry <paramref name="n"/> as stored, 6-bit, or
     /// null when the entry is missing (Exult <c>set_loaded</c> keeps the old

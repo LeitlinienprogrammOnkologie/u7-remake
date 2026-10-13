@@ -207,7 +207,7 @@ public sealed partial class ConversationPanel : Control
         // Speaker: the face that said the text, else the face shown last.
         var main = conv.TextFace >= 0 ? conv.TextFace : conv.LastFace;
         var mainFace = main >= 0 ? conv.Faces[main] : null;
-        var tex = mainFace is { } mf ? Shapes?.GetFace(mf.Shape, mf.Frame) : null;
+        var tex = mainFace is { } mf && Shown(mf.Shape) ? Shapes?.GetFace(mf.Shape, mf.Frame) : null;
         _portrait.Texture = tex;
         _portraitBox.Visible = tex is not null;
         if (tex is not null)
@@ -221,10 +221,13 @@ public sealed partial class ConversationPanel : Control
         {
             // Exult show_avatar_choices: the avatar's face while it picks an answer, here in the second
             // speaker's place (the user's pick, 2026-10-10), which it takes for the choice.
-            sideFace = (U7.Actors.AvatarLook.FaceShape, U7.Actors.AvatarLook.FaceFrame(U7.Actors.AvatarLook.IsFemale(vm.Avatar)));
+            // Exult checks Petra's swap first (GetFaceReplacement(0)).
+            sideFace = U7.Actors.AvatarLook.FaceReplacement(vm.Avatar, U7.Actors.AvatarLook.FaceShape) is var petra and not 0
+                ? (petra, 0)
+                : U7.Actors.AvatarLook.Face(vm.Avatar, U7.Actors.AvatarLook.IsFemale(vm.Avatar));
         }
 
-        _sidePortrait.Texture = sideFace is { } sf ? Shapes?.GetFace(sf.Shape, sf.Frame) : null;
+        _sidePortrait.Texture = sideFace is { } sf && Shown(sf.Shape) ? Shapes?.GetFace(sf.Shape, sf.Frame) : null;
         _sidePortrait.Visible = _sidePortrait.Texture is not null;
 
         var name = main >= 0 ? conv.FaceNames[main] : "";
@@ -286,6 +289,12 @@ public sealed partial class ConversationPanel : Control
         vm.Choose(text, index);
         Refresh();
     }
+
+    /// <summary>
+    /// Exult <c>Conversation::paint_faces</c>: face 277 is never drawn, in either
+    /// game (Black Gate's dream voice, 0x614; Serpent Isle's Nightmare Smith).
+    /// </summary>
+    static bool Shown(int faceShape) => faceShape != 277;
 
     static Button MakeButton(string text)
     {
@@ -390,8 +399,9 @@ public sealed partial class ConversationPanel : Control
             upper = false;
         }
 
-        // '@' is the originals' quote mark (Exult Text_effect shows it as '"').
-        return sb.ToString().Replace('\n', ' ').Replace('@', '"');
+        // '@' is the originals' quote mark (Exult Text_effect shows it as '"'); a tab is
+        // a space (Exult Font's Is_space), as in Elynor's "open<tab>the package".
+        return sb.ToString().Replace('\n', ' ').Replace('\t', ' ').Replace('@', '"');
     }
 
     /// <summary>Next page of this text, else let the usecode continue.</summary>

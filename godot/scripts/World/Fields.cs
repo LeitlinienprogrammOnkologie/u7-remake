@@ -36,16 +36,8 @@ public sealed class Fields
         _runner = runner;
     }
 
-    /// <summary>Exult <c>Shape_info::get_field_type</c>, or -1.</summary>
-    public static int TypeOf(int shape) => shape switch
-    {
-        895 => Fire,
-        902 => Sleep,
-        900 => Poison,
-        756 => Caltrops,
-        825 => Campfire,
-        _ => -1
-    };
+    /// <summary>Exult <c>Shape_info::get_field_type</c> (<c>shape_info.txt</c>'s field_type), or -1.</summary>
+    public static int TypeOf(int shape) => ShapeCatalog.Current[shape].FieldType;
 
     /// <summary>Exult <c>Actor::step</c>'s <c>activate_eggs</c> for the fields: those under the tile stepped onto, at its lift.</summary>
     public void Stepped(U7Object actor)

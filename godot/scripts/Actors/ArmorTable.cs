@@ -1,6 +1,4 @@
-using System.Globalization;
-using System.IO;
-using U7.Core;
+using U7.Data;
 
 namespace U7.Actors;
 
@@ -12,7 +10,7 @@ public sealed class ArmorRecord
     public int Immunity;
 }
 
-/// <summary>Loads <c>assets/data/armor.csv</c>.</summary>
+/// <summary>ARMOR.DAT (Exult <c>Armor_info</c>), a mod's over it.</summary>
 public sealed class ArmorTable
 {
     readonly Dictionary<int, ArmorRecord> _byShape = new();
@@ -20,61 +18,16 @@ public sealed class ArmorTable
     public ArmorRecord? this[int shape] =>
         _byShape.TryGetValue(shape, out var rec) ? rec : null;
 
+    /// <summary>Exult <c>Armor_info::read</c>, entry by entry of ARMOR.DAT.</summary>
     public static ArmorTable Load()
     {
         var table = new ArmorTable();
-        var path = Path.Combine(U7Paths.DataDir, "armor.csv");
-        if (!File.Exists(path))
+        foreach (var (shape, b) in ShapeDataFile.Read("ARMOR.DAT", 10))
         {
-            return table;
-        }
-
-        using var reader = new StreamReader(path);
-        var header = reader.ReadLine();
-        if (header is null)
-        {
-            return table;
-        }
-
-        var cols = header.Split(',');
-        int Col(string name)
-        {
-            for (var i = 0; i < cols.Length; i++)
+            if (b is not null)
             {
-                if (cols[i].Equals(name, StringComparison.OrdinalIgnoreCase))
-                {
-                    return i;
-                }
+                table._byShape[shape] = new ArmorRecord { Shape = shape, Protection = b[0], Immunity = b[2] };
             }
-
-            return -1;
-        }
-
-        var iShape = Col("shape");
-        var iProt = Col("protection");
-        var iImm = Col("immunity");
-
-        string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
-        int Num(string[] c, int i, int fallback = 0) =>
-            int.TryParse(Get(c, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)
-                ? v
-                : fallback;
-
-        while (reader.ReadLine() is { } line)
-        {
-            var c = line.Split(',');
-            var shape = Num(c, iShape, -1);
-            if (shape < 0)
-            {
-                continue;
-            }
-
-            table._byShape[shape] = new ArmorRecord
-            {
-                Shape = shape,
-                Protection = Math.Max(0, Num(c, iProt)),
-                Immunity = Num(c, iImm)
-            };
         }
 
         return table;

@@ -244,7 +244,7 @@ public sealed class Barge
     }
 
     /// <summary>Exult <c>face_direction</c>: 0-7, north first.</summary>
-    void FaceDirection(int dir)
+    public void FaceDirection(int dir)
     {
         switch ((4 + dir / 2 - Obj.BargeDir) % 4)
         {

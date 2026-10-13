@@ -119,12 +119,38 @@ public sealed class Conversation
         LastFace = slot;
     }
 
-    /// <summary>Exult <c>Conversation::change_face_frame(frame, slot)</c>.</summary>
+    /// <summary>Exult <c>Conversation::change_face_frame(frame, slot)</c>: the slot's face in another frame, and it speaks next.</summary>
     public void ChangeFaceFrame(int frame, int slot)
     {
         if ((uint)slot < (uint)Faces.Length && Faces[slot] is { } f)
         {
+            LastFace = slot;
             Faces[slot] = (f.Shape, frame);
+        }
+    }
+
+    /// <summary>Exult <c>Conversation::set_slot</c> (SI's <c>set_conversation_slot</c>): which face speaks next.</summary>
+    public void SetSlot(int slot) => LastFace = slot;
+
+    /// <summary>Exult <c>Conversation::remove_slot_face</c>: that slot's face goes; the last face left speaks next.</summary>
+    public void RemoveSlotFace(int slot)
+    {
+        if ((uint)slot >= (uint)Faces.Length || Faces[slot] is null)
+        {
+            return;
+        }
+
+        Faces[slot] = null;
+        FaceNames[slot] = "";
+        FaceCount = Math.Max(0, FaceCount - 1);
+        if (TextFace == slot)
+        {
+            TextFace = -1;
+        }
+
+        if (LastFace == slot)
+        {
+            LastFace = Array.FindLastIndex(Faces, f => f is not null);
         }
     }
 

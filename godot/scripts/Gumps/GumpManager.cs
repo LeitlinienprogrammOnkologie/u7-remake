@@ -45,6 +45,11 @@ public sealed class GumpManager
     public Func<bool>? IsCombatOn { get; set; }
     /// <summary>GUMPS.VGA, for gumps laid out from their art's sizes (the spellbook).</summary>
     public VgaShapeFile? GumpsVga { get; set; }
+    /// <summary>Exult <c>can_use_paperdolls</c>: Serpent Isle's paperdoll art is there, so actors show as paperdolls.</summary>
+    public bool PaperdollsAvailable { get; set; }
+    /// <summary>The weapons and ammunition (the paperdoll's quiver shows ammo in the hand only for a weapon that fires it).</summary>
+    public WeaponTable? Weapons { get; set; }
+    public AmmoTable? Ammo { get; set; }
     /// <summary>Runs a spell's usecode (function, caster) as a double-click.</summary>
     public Action<int, U7Object>? CastSpell { get; set; }
     /// <summary>
@@ -143,6 +148,11 @@ public sealed class GumpManager
         else if (shapenum == SpellbookGump.BookShape && obj is not null && GumpsVga is not null)
         {
             gump = new SpellbookGump(obj, x, y, GumpsVga, Spellbook.Available(obj, Quantities));
+        }
+        else if (actorGump && obj is not null && PaperdollsAvailable && PaperdollGump.CanShow(obj, Catalog.Dolls, Catalog))
+        {
+            // Exult Gump_manager::add_gump: with paperdolls, an actor's gump is its paperdoll.
+            gump = new PaperdollGump(obj, x, y, shapenum >= 0 ? shapenum : U7Constants.GumpActorMale, Catalog.Dolls);
         }
         else if (actorGump && obj is not null)
         {

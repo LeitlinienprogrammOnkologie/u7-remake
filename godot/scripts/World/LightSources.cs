@@ -23,34 +23,19 @@ public static class LightSources
     /// <summary>
     /// Exult <c>Shape_info::get_object_light</c>: 0 unless the shape has
     /// TFA's light-source flag, else its <c>light_data</c> entry for the
-    /// frame (data/bg/shape_info.txt), else 1, a candle. Black Gate's
-    /// flagged shapes are 179, 198, 338, 435, 440, 442, 526, 534, 551, 553,
-    /// 701, 739, 825 and 895. The file's "198:/-1/3" line is read as line 198
-    /// of the section with no shape number, so it becomes an entry for shape
-    /// 0 and shape 198 stays a candle; flaming oil (782) has an entry but no flag.
+    /// frame (the game's <c>shape_info.txt</c>), else 1, a candle. In Black
+    /// Gate the file's "198:/-1/3" line is read as line 198 of the section
+    /// with no shape number, so it becomes an entry for shape 0 and shape 198
+    /// stays a candle; flaming oil (782) has an entry but no flag.
     /// </summary>
     public static int Brightness(ShapeCatalog catalog, int shape, int frame)
     {
-        if ((uint)shape >= U7Constants.MaxShapes || !catalog[shape].LightSource)
+        if ((uint)shape >= (uint)catalog.Shapes.Length || !catalog[shape].LightSource)
         {
             return 0;
         }
 
-        frame &= 31;
-        return shape switch
-        {
-            179 => frame == 0 ? 0 : 5, // lightning
-            338 => frame switch // lit light source
-            {
-                2 or 7 or 8 or 9 or 12 => 2,
-                3 or 4 or 5 or 10 or 11 => 5,
-                _ => 1
-            },
-            435 or 551 or 553 or 701 => 5, // sconce, fire sword, firedoom staff, torch
-            526 or 825 => 7, // lamp, campfire
-            739 => frame < 8 ? (frame & 3) * 2 : 1, // firepit
-            _ => 1
-        };
+        return ShapeInfoText.Find(catalog[shape].Lights, frame & 31, -1, e => (e.Frame, e.Quality))?.Value ?? 1;
     }
 
     /// <summary>Exult <c>Game_object::get_center_tile</c> (x and y).</summary>

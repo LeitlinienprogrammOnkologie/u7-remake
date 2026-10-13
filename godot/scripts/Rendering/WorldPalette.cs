@@ -27,6 +27,14 @@ public sealed class WorldPalette
 
     /// <summary>Each row as set, before rotation (8-bit RGB).</summary>
     readonly byte[][] _rows = [new byte[768], new byte[768]];
+    /// <summary>The day palette, which true colour is anchored in.</summary>
+    readonly byte[] _day;
+    /// <summary>The rows' slopes for true colour, made when first asked for.</summary>
+    PaletteSlopes? _slopes;
+    bool _slopesStale = true;
+    /// <summary>Modern colour's lookup tables (<see cref="ColourLut"/>), made when first asked for and again when the rows change.</summary>
+    ColourLut? _lut;
+    bool _lutStale = true;
     readonly byte[] _rgba = new byte[Rows * 256 * 4];
     readonly Image _image;
     /// <summary>Exult's <c>last_rotate</c>.</summary>
@@ -56,6 +64,7 @@ public sealed class WorldPalette
 
     public WorldPalette(ReadOnlySpan<byte> dayRgb)
     {
+        _day = dayRgb[..768].ToArray();
         dayRgb[..768].CopyTo(_rows[0]);
         dayRgb[..768].CopyTo(_rows[1]);
         Build();
@@ -77,8 +86,59 @@ public sealed class WorldPalette
     {
         ambientRgb[..768].CopyTo(_rows[0]);
         litRgb[..768].CopyTo(_rows[1]);
+        _slopesStale = true;
+        _lutStale = true;
         Build();
         Update();
+    }
+
+    /// <summary>
+    /// Modern colour's tables for the two rows (RENDERER.md 5.5), built from
+    /// the slopes when the rows have changed since, or when the user's size
+    /// (<see cref="ArtLook.LutSize"/>) has: only while modern true colour shows.
+    /// </summary>
+    public ColourLut Lut()
+    {
+        Slopes();
+        if (_lut is null || _lut.Size != ArtLook.LutSize)
+        {
+            _lut = new ColourLut(_day, ArtLook.LutSize);
+            _lutStale = true;
+        }
+
+        if (_lutStale)
+        {
+            _lut.Build(_slopes!, _rows[0], _rows[1]);
+            _lutStale = false;
+        }
+
+        return _lut;
+    }
+
+    /// <summary>For the console: the tables' size, build time and how far they stray from the rows' own colours.</summary>
+    public string LutReport()
+    {
+        var lut = Lut();
+        var (ambientMean, ambientMax) = lut.Error(_rows[0], false);
+        var (litMean, litMax) = lut.Error(_rows[1], true);
+        return $"colour tables {lut.Size}^3, built in {lut.LastBuildMs:0.0} ms; on the palette's own colours the ambient table strays " +
+               $"{ambientMean:0.00} levels on average, {ambientMax} at most, the lit table {litMean:0.00} and {litMax}";
+    }
+
+    /// <summary>
+    /// How the two rows change the art's own colours (<see cref="PaletteSlopes"/>),
+    /// fitted again when the rows have changed since: only while true colour shows.
+    /// </summary>
+    public ImageTexture Slopes()
+    {
+        _slopes ??= new PaletteSlopes(_day);
+        if (_slopesStale)
+        {
+            _slopes.Build(_rows[0], _rows[1]);
+            _slopesStale = false;
+        }
+
+        return _slopes.Texture;
     }
 
     /// <summary>

@@ -97,12 +97,6 @@ public static class Equipment
             alt2 = ReadySpot.Lhand;
         }
 
-        if (preferred == ReadySpot.Invalid)
-        {
-            // Exult (shapevga.cc): what READY.DAT leaves out is 'backpack' in Black Gate.
-            preferred = ReadySpot.Back;
-        }
-
         if (preferred == ReadySpot.Lhand)
         {
             if (rec.IsObjectAllowed(obj.Frame, ReadySpot.Rhand))

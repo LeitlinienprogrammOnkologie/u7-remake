@@ -8,14 +8,17 @@ namespace U7.Actors;
 /// Exult <c>Talk_schedule</c>: the NPC comes up to the avatar, calling out
 /// now and then ("Avatar!" and the like, TEXT.FLX 0x14-0x16), and once within
 /// 5 tiles and able to reach it, faces it and starts a conversation (its
-/// usecode, as a double-click). Black Gate's usecode sets it for NPCs that
-/// want a word.
+/// usecode, as a double-click in Black Gate, Serpent Isle's chat event).
+/// The usecode sets it for NPCs that want a word.
 /// </summary>
-public class TalkSchedule(NpcBrain brain, int firstBark, int lastBark) : Schedule(brain)
+public class TalkSchedule(NpcBrain brain, int firstBark, int lastBark, int eventId) : Schedule(brain)
 {
     int _phase;
 
-    public TalkSchedule(NpcBrain brain) : this(brain, TextMessages.FirstTalk, TextMessages.LastTalk)
+    /// <summary>Exult's <c>Talk_schedule(npc)</c>: a double-click in Black Gate, <c>chat</c> in Serpent Isle.</summary>
+    public TalkSchedule(NpcBrain brain)
+        : this(brain, TextMessages.FirstTalk, TextMessages.LastTalk,
+            (int)(GameContext.IsBg ? U7.Usecode.UsecodeEvent.DoubleClick : U7.Usecode.UsecodeEvent.Chat))
     {
     }
 
@@ -87,7 +90,7 @@ public class TalkSchedule(NpcBrain brain, int firstBark, int lastBark) : Schedul
                 Start(Std, 250);
                 return;
             case 4:
-                if (Runner.Activate?.Invoke(Npc) ?? false)
+                if (Runner.Activate?.Invoke(Npc, eventId) ?? false)
                 {
                     // Exult stops the NPC and leaves the rest to the usecode.
                     Brain.StopAction();
@@ -121,7 +124,8 @@ public class TalkSchedule(NpcBrain brain, int firstBark, int lastBark) : Schedul
 /// </summary>
 public sealed class ArrestAvatarSchedule : TalkSchedule
 {
-    public ArrestAvatarSchedule(NpcBrain brain) : base(brain, TextMessages.FirstArrest, TextMessages.LastArrest)
+    public ArrestAvatarSchedule(NpcBrain brain)
+        : base(brain, TextMessages.FirstArrest, TextMessages.LastArrest, (int)U7.Usecode.UsecodeEvent.DoubleClick)
     {
         Npc.AssignedUsecode = Guards.ArrestUsecode;
     }

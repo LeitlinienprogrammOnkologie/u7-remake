@@ -18,6 +18,10 @@ public sealed class GameClock
     public int TotalMinutes => TotalHours * 60 + Minute;
     /// <summary>Exult <c>Game_window::special_light</c>: the game minute a light spell ends, 0 for none.</summary>
     public int SpecialLight { get; set; }
+    /// <summary>Exult <c>Game_window::ambient_light</c>: usecode lights the scene as the light spell does (<c>ambient_light</c>, Serpent Isle's cutscenes).</summary>
+    public bool AmbientLight { get; set; }
+    /// <summary>Exult <c>infravision_active</c>: the day palette whatever the hour (<c>infravision</c>).</summary>
+    public bool Infravision { get; set; }
     /// <summary>Exult <c>Game_clock::overcast</c>: the clouds that make the day overcast; overcast while above 0.</summary>
     public int Overcast { get; private set; }
     /// <summary>Exult <c>Game_clock::fog</c>: the fogs going on.</summary>
@@ -81,7 +85,8 @@ public sealed class GameClock
     /// </summary>
     public bool LightSpellShows(bool dungeon)
     {
-        if (SpecialLight == 0)
+        // Exult is_special_light: usecode's ambient light counts as the spell.
+        if (SpecialLight == 0 && !AmbientLight)
         {
             return false;
         }

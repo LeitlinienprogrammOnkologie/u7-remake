@@ -40,6 +40,8 @@ public sealed class UsecodeScript
     public bool Done => _i >= _cnt;
     public bool Activated => _i > 0;
     public bool NoHalt => _noHalt;
+    /// <summary>Exult <c>kill_barks</c> (<c>clear_item_say</c>): the script's later barks are not said.</summary>
+    public bool KilledBarks { get; set; }
 
     public UsecodeScript(UsecodeMachine vm, U7Object obj, UsecodeValue code, double delaySeconds)
     {
@@ -286,7 +288,11 @@ public sealed class UsecodeScript
                 case Say:
                 {
                     var str = _code.GetElem(++_i);
-                    _vm.Bark(Obj, str.IsString ? str.StrValue : str.IntValue.ToString());
+                    if (!KilledBarks)
+                    {
+                        _vm.Bark(Obj, str.IsString ? str.StrValue : str.IntValue.ToString());
+                    }
+
                     break;
                 }
                 case Step:

@@ -99,14 +99,11 @@ public sealed class CombatEngine
     /// <summary>Exult <c>Effects_manager</c>, for explosions.</summary>
     public U7.World.EffectsManager? Effects { get; set; }
 
-    /// <summary>Exult <c>data/bg/shape_info.txt</c> explosions: the SPRITES.VGA explosion of a weapon or missile (default 5).</summary>
-    static readonly Dictionary<int, int> ExplosionSprites = new()
-    {
-        [399] = 13, [639] = 8, [554] = 19, [78] = 4, [621] = 4, [702] = 4, [704] = 4, [565] = 18, [287] = 23
-    };
+    /// <summary>Exult <c>Shape_info::get_explosion_sprite</c>: the SPRITES.VGA explosion of a weapon or missile (<c>shape_info.txt</c>'s explosions; default 5).</summary>
+    int ExplosionSprite(int shape) => _catalog[shape].Explosion?.Sprite ?? 5;
 
-    /// <summary>Exult <c>volatile_explosive</c> (BG): shapes that blow up readily, the powder keg.</summary>
-    static bool IsVolatile(int shape) => shape == 704;
+    /// <summary>Exult <c>is_explosive</c> (<c>volatile_explosive</c>): shapes that blow up readily, Black Gate's powder keg.</summary>
+    bool IsVolatile(int shape) => _catalog[shape].Volatile;
 
     public CombatEngine(GameMap map, U7Object avatar, ShapeCatalog catalog)
     {
@@ -1546,7 +1543,7 @@ public sealed class CombatEngine
             attacker = _avatar;
         }
 
-        var blast = effects.AddSprite(ExplosionSprites.GetValueOrDefault(shape, 5), pos);
+        var blast = effects.AddSprite(ExplosionSprite(shape), pos);
         blast.AtQuarter = e =>
         {
             // (Exult removes the exploding object even if it is an actor, which a wielded powder keg could make so.)
@@ -2394,7 +2391,7 @@ public sealed class CombatEngine
             return;
         }
 
-        var sprite = ExplosionSprites.GetValueOrDefault(weapon, 5);
+        var sprite = ExplosionSprite(weapon);
         var h = new HomingMissile
         {
             Weapon = weapon,
@@ -2765,9 +2762,9 @@ public sealed class CombatEngine
 
         victim.SetFlag(ObjFlag.Dead);
         victim.SetProp(ActorProp.Health, 0);
-        // Exult Actor::die: Hook and Dracothraxus (the dragon carrying the
-        // scroll 797 of quality 241, frame 4) run their usecode first.
-        if (DeathUsecode is not null && (victim.Shape == 0x1FA || victim.Shape == 0x1F8 && IsDraco(victim)))
+        // Exult Actor::die: in Black Gate, Hook and Dracothraxus (the dragon
+        // carrying the scroll 797 of quality 241, frame 4) run their usecode first.
+        if (DeathUsecode is not null && GameContext.IsBg && (victim.Shape == 0x1FA || victim.Shape == 0x1F8 && IsDraco(victim)))
         {
             DeathUsecode(victim, () =>
             {

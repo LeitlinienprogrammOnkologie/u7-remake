@@ -1,6 +1,6 @@
 """Upscale the original art 4x with an AI model, frame by frame.
 
-    scripts/upscale/.venv/Scripts/python scripts/upscale/generate.py --model nxbrz [--file shapes|sprites] [--shapes 0-1023]
+    scripts/upscale/.venv/Scripts/python scripts/upscale/generate.py --model nxbrz [--file shapes|sprites|gumps|faces|paperdolls] [--shapes 0-1023]
 
 Each frame is shown to the model in the day palette with its edge colours
 bled outward (so it doesn't mix in black), and terrain tiles in the context
@@ -29,7 +29,15 @@ PAD = 8
 # (a floor, wall or roof), shown to the model among copies of itself.
 BUILT = 0.85
 
-FILES = {"shapes": "SHAPES.VGA", "sprites": "SPRITES.VGA", "gumps": "GUMPS.VGA", "faces": "FACES.VGA"}
+# The files as the game builds them (u7art.game_file): Black Gate's, Serpent
+# Isle's imports and paperdolls, Exult's own art.
+FILES = {"shapes": "SHAPES.VGA", "sprites": "SPRITES.VGA", "gumps": "GUMPS.VGA", "faces": "FACES.VGA",
+         "paperdolls": "PAPERDOL.VGA"}
+
+
+def is_translucent(file: str, shape: int, translucent: frozenset[int]) -> bool:
+    """Sprites are; the others by the shapes' TFA flag, as the packs were made (the paperdolls never)."""
+    return file == "sprites" or (file != "paperdolls" and shape in translucent)
 
 
 def work_dir(model: str, file: str) -> Path:
@@ -147,8 +155,14 @@ def tile_input(vga: u7art.VgaFile, shape: int, frame: int) -> np.ndarray:
     return np.pad(pal[grid], ((PAD, PAD), (PAD, PAD), (0, 0)), mode="symmetric")
 
 
-def run(model: str, file: str, shapes: range, limit: int | None, redo_filled: bool = False) -> None:
-    vga = u7art.VgaFile(FILES[file])
+def run(model: str, file: str, shapes: range | None, limit: int | None, redo_filled: bool = False) -> int:
+    """Upscales the frames not done yet; returns how many it made."""
+    vga = u7art.game_file(file)
+    if vga is None:
+        print(f"{file}: not there (Serpent Isle isn't installed)", flush=True)
+        return 0
+    if shapes is None:
+        shapes = range(len(vga.records))
     out = work_dir(model, file)
     out.mkdir(parents=True, exist_ok=True)
     up = Upscaler(model)
@@ -170,11 +184,11 @@ def run(model: str, file: str, shapes: range, limit: int | None, redo_filled: bo
                 o = (PAD + u7art.TILE) * SCALE
                 crop = big[o:o + u7art.TILE * SCALE, o:o + u7art.TILE * SCALE]
             else:
-                is_translucent = file == "sprites" or shape in translucent
-                big = up(frame_input(frame, is_translucent))
+                see_through = is_translucent(file, shape, translucent)
+                big = up(frame_input(frame, see_through))
                 o = PAD * SCALE
                 crop = big[o:o + frame.height * SCALE, o:o + frame.width * SCALE]
-                built = built_context(frame, shape, f, is_translucent)
+                built = built_context(frame, shape, f, see_through)
                 if built is not None:
                     # What shows of the piece in the world from its context; what its neighbours hide, alone.
                     context, visible = built
@@ -185,10 +199,11 @@ def run(model: str, file: str, shapes: range, limit: int | None, redo_filled: bo
             done += 1
             if limit is not None and done >= limit:
                 print(f"{done} frames in {time.time() - started:.0f}s", flush=True)
-                return
+                return done
             if done % 500 == 0:
                 print(f"{model} {file}: {done} frames, shape {shape}, {time.time() - started:.0f}s", flush=True)
     print(f"{model} {file}: {done} frames in {time.time() - started:.0f}s", flush=True)
+    return done
 
 
 def parse_range(text: str) -> range:
@@ -200,11 +215,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, choices=sorted(MODELS))
     ap.add_argument("--file", default="shapes", choices=sorted(FILES))
-    ap.add_argument("--shapes", default="0-1023")
+    ap.add_argument("--shapes", help="a range such as 0-1023; all of the file by default")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--redo-filled", action="store_true", help="again the pieces built into floors, walls and roofs")
     args = ap.parse_args()
-    run(args.model, args.file, parse_range(args.shapes), args.limit, args.redo_filled)
+    run(args.model, args.file, parse_range(args.shapes) if args.shapes else None, args.limit, args.redo_filled)
 
 
 if __name__ == "__main__":

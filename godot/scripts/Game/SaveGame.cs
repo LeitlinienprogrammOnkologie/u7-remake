@@ -67,8 +67,17 @@ public static class SaveGame
         NpcDat.SaveMonsters(tmp, monsters, map);
         if (usecode is not null)
         {
+            // Exult Usecode_internal::write: any game but Black Gate keeps a keyring.
+            if (!GameContext.IsBg)
+            {
+                File.WriteAllBytes(Path.Combine(tmp, KeyringName),
+                    usecode.Keyring.SelectMany(k => BitConverter.GetBytes((ushort)k)).ToArray());
+            }
+
             File.WriteAllBytes(Path.Combine(tmp, "FLAGINIT"), usecode.GFlags);
-            UsecodeDat.Write(tmp, usecode.Party?.Members.Select(m => m.NpcNum).ToList() ?? [], usecode.Timers);
+            UsecodeDat.Write(tmp, usecode.Party?.Members.Select(m => m.NpcNum).ToList() ?? [], usecode.Timers, usecode.SavedPos);
+            UsecodeVars.Write(tmp, usecode);
+            usecode.Schedules?.Table.Write(tmp, npcs.Count);
         }
 
         using (var w = new BinaryWriter(File.Create(Path.Combine(tmp, GwinName))))
@@ -87,10 +96,10 @@ public static class SaveGame
         }
 
         shot?.SavePng(Path.Combine(tmp, ShotFile));
-        var identity = Path.Combine(U7Paths.RepoRoot, "u7", "GAMEDAT", "IDENTITY");
-        if (File.Exists(identity))
+        // Exult: GAMEDAT's IDENTITY is INITGAME.DAT's, which loading checks.
+        if (U7Paths.IdentityFile is { } identity)
         {
-            File.Copy(identity, Path.Combine(tmp, "IDENTITY"));
+            File.WriteAllBytes(Path.Combine(tmp, IdentityName), identity);
         }
 
         KeepUnwritten(dir, tmp, keepShot: false);
@@ -159,6 +168,83 @@ public static class SaveGame
     /// <summary>Exult <c>gamewin.dat</c>; saves made before this used the name GWIN.DAT.</summary>
     const string GwinName = "GAMEWIN.DAT";
     const string OldGwinName = "GWIN.DAT";
+    const string IdentityName = "IDENTITY";
+    /// <summary>Exult <c>KEYRINGDAT</c>: the keyring's keys, two bytes each.</summary>
+    public const string KeyringName = "KEYRING.DAT";
+
+    /// <summary>Exult <c>Keyring::read</c>: the loaded game's keys (none in a new game or an old save).</summary>
+    public static IEnumerable<int> ReadKeyring()
+    {
+        var data = U7Paths.ReadGameDat(KeyringName) ?? [];
+        for (var i = 0; i + 1 < data.Length; i += 2)
+        {
+            yield return BitConverter.ToUInt16(data, i);
+        }
+    }
+    /// <summary>The files beside the slots that belong to a mode's saves (Exult's <c>&lt;SAVEGAME&gt;</c>).</summary>
+    static readonly string[] ModeFiles = [LastFile, "endgame.flg", "quotes.flg"];
+
+    /// <summary>
+    /// The game the slot was saved in, by its IDENTITY (Exult
+    /// <c>get_game_identity</c>); null for a save without one or of a game
+    /// not known.
+    /// </summary>
+    public static GameType? SlotGame(string slot) =>
+        U7Paths.ReadIdentity(Path.Combine(SlotDir(slot), IdentityName)) is { } id ? GameContext.TypeOf(id) : null;
+
+    /// <summary>
+    /// Saves from before the modes had folders (<c>saves/&lt;slot&gt;</c>) are
+    /// Black Gate's: they move to <c>saves/bg</c>, with the files beside them,
+    /// unless a slot of that name is there already. Run at each start, so a
+    /// save written by an older build follows too.
+    /// </summary>
+    public static void MoveLegacySaves()
+    {
+        var root = U7Paths.SavesRoot;
+        if (!Directory.Exists(root))
+        {
+            return;
+        }
+
+        var bg = Path.Combine(root, "bg");
+        var moved = 0;
+        try
+        {
+            foreach (var dir in Directory.GetDirectories(root))
+            {
+                var name = Path.GetFileName(dir);
+                if (name is "bg" or "si" or "saga" || !File.Exists(Path.Combine(dir, "NPC.DAT")) ||
+                    Directory.Exists(Path.Combine(bg, name)))
+                {
+                    continue;
+                }
+
+                Directory.CreateDirectory(bg);
+                Directory.Move(dir, Path.Combine(bg, name));
+                moved++;
+            }
+
+            foreach (var file in ModeFiles)
+            {
+                var from = Path.Combine(root, file);
+                if (File.Exists(from) && !File.Exists(Path.Combine(bg, file)))
+                {
+                    Directory.CreateDirectory(bg);
+                    File.Move(from, Path.Combine(bg, file));
+                }
+            }
+        }
+        catch (IOException ex)
+        {
+            // Another game starting at the same time may be moving them.
+            GD.PushWarning($"moving saves to {bg}: {ex.Message}");
+        }
+
+        if (moved > 0)
+        {
+            GD.Print($"moved {moved} Black Gate saves to {bg}");
+        }
+    }
 
     /// <summary>The loaded save's <see cref="GwinState"/>; null for a new game or an unreadable file.</summary>
     public static GwinState? ReadGwin()

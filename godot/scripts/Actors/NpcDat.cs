@@ -58,6 +58,7 @@ public static class NpcDat
         NumFixed = num1;
         var count = num1 + num2;
         var npcs = new List<U7Object?>(count);
+        var polymorphs = new List<(U7Object Npc, int Shape)>();
         var spawned = 0;
         for (var i = 0; i < count; i++)
         {
@@ -69,7 +70,7 @@ public static class NpcDat
                 map.TakeFromWorld(avatar);
             }
 
-            ReadActor(r, dest, i, map, fixFirst);
+            polymorphs.Add((dest, ReadActor(r, dest, i, map, fixFirst)));
             dest.NpcNum = i;
             dest.IsActor = true;
             dest.Kind = ObjectKind.Actor;
@@ -113,8 +114,41 @@ public static class NpcDat
             GD.Print("npc.dat: sex flags from before fix_first, flipped");
         }
 
-        // Exult read_npcs: the avatar takes its sex's shape.
+        // Saves written before 2026-10-12 held a skin byte of 0 for everyone (Exult writes -1, 255 read
+        // back); skin 0 is one of Serpent Isle's, so Iolo carrying it marks such a save: no skin then.
+        if (!fixFirst && npcs.Count > 1 && npcs[1] is { SkinColor: 0 })
+        {
+            foreach (var n in npcs)
+            {
+                if (n is not null)
+                {
+                    n.SkinColor = -1;
+                }
+            }
+        }
+
+        // Exult read_npcs: the avatar takes its skin and sex's shape.
         AvatarLook.SetActorShape(map, avatar);
+        // Exult Actor::read: the polymorphed take their other shape ("try to fix messed-up flag").
+        foreach (var (npc, shape) in polymorphs)
+        {
+            if (shape == PolymorphDefault)
+            {
+                Polymorph.SetDefault(map, npc, avatar);
+            }
+            else if (npc.GetFlag(ObjFlag.Polymorph))
+            {
+                if (shape != npc.Shape)
+                {
+                    Polymorph.Set(map, npc, avatar, shape);
+                }
+                else
+                {
+                    npc.ClearFlag(ObjFlag.Polymorph);
+                }
+            }
+        }
+
         foreach (var id in new[] { 0, 1, 2, 11, 13, 14 })
         {
             if ((uint)id >= (uint)npcs.Count || npcs[id] is not { } n)
@@ -139,7 +173,8 @@ public static class NpcDat
         return npcs;
     }
 
-    static void ReadActor(Cursor r, U7Object npc, int num, GameMap map, bool fixFirst)
+    /// <returns>The record's polymorph shape (Exult's second 16-bit shape), or <see cref="PolymorphDefault"/> where Exult sets the default.</returns>
+    static int ReadActor(Cursor r, U7Object npc, int num, GameMap map, bool fixFirst)
     {
         var locx = r.U1();
         var locy = r.U1();
@@ -147,10 +182,20 @@ public static class NpcDat
         npc.Shape = shnum & 0x3ff;
         npc.Frame = shnum >> 10;
         var iflag1 = r.U2();
+        // Exult Actor::read: bit 2, a usecode function assigned by number; bit 3, by name; bit 4, a skin byte.
+        var usecodeNameUsed = !fixFirst && (iflag1 & 8) != 0;
+        var usecodeAssigned = usecodeNameUsed || (!fixFirst && (iflag1 & 4) != 0);
+        var extendedSkin = !fixFirst && (iflag1 & 16) != 0;
         var schunk = r.U1();
         r.U1(); // map_num, discarded for new game
         var usefun = r.U2();
         npc.Tz = usefun >> 12;
+        // NPCs 0-255 always run 0x400 + their number (unless named, below); later ones keep an assigned number.
+        var fun = usefun & 0xfff;
+        npc.AssignedUsecode = num is >= 0 and < 256 || usecodeNameUsed || fun == 0xfff ||
+                              (!usecodeAssigned && fun != 0x400 + num)
+            ? -1
+            : fun;
         npc.SetProp(ActorProp.Health, r.S1());
         r.Skip(3);
         var iflag2 = r.U2();
@@ -211,6 +256,7 @@ public static class NpcDat
         {
             var magicVal = r.U1();
             var manaVal = r.U1();
+            npc.Temperature = ((magicVal >> 2) & 0x38) + ((manaVal >> 5) & 7);
             if (num == 0)
             {
                 magic = magicVal & 0x1f;
@@ -221,6 +267,7 @@ public static class NpcDat
             {
                 magic = 0;
                 mana = 0;
+                npc.Ident = magicVal & 0x1f;
                 flags3 = manaVal;
             }
         }
@@ -228,8 +275,10 @@ public static class NpcDat
         {
             magic = unk0 & 0x7f;
             mana = unk1;
-            r.U1(); // temperature
-            flags3 = r.U1() & 7;
+            npc.Temperature = r.U1();
+            flags3 = r.U1();
+            npc.Ident = flags3 >> 3;
+            flags3 &= 7;
         }
 
         npc.SetProp(ActorProp.Magic, magic);
@@ -267,8 +316,21 @@ public static class NpcDat
         r.Skip(1);
         r.Skip(2);
         r.Skip(2);
-        r.U2(); // 16-bit shape
-        r.Skip(2); // polymorph
+        // Exult: the 16-bit shape (shapes past 1023; the avatar's is its skin's, set after the
+        // records), and the polymorph's shape; a new game's are garbage, and get the default.
+        var shape16 = r.U2();
+        int polymorph = (short)r.U2();
+        if (!fixFirst && shape16 != 0)
+        {
+            if (num != 0)
+            {
+                npc.Shape = shape16;
+            }
+        }
+        else
+        {
+            polymorph = PolymorphDefault;
+        }
         // Exult's own: all the flags, in saves only (garbage in INITGAME).
         if (fixFirst)
         {
@@ -296,14 +358,26 @@ public static class NpcDat
         else
         {
             // Flags 32 on, but not polymorph.
-            var polymorph = npc.GetFlag(ObjFlag.Polymorph);
+            var polymorphed = npc.GetFlag(ObjFlag.Polymorph);
             npc.Flags2 |= r.U4();
-            if (!polymorph)
+            if (!polymorphed)
             {
                 npc.ClearFlag(ObjFlag.Polymorph);
             }
         }
-        r.Skip(1); // extended skin
+
+        if (usecodeNameUsed)
+        {
+            // Resolved through the usecode's symbol table once it is loaded (Exult find_function).
+            npc.UsecodeName = Encoding.Latin1.GetString(r.D, r.I + 1, r.D[r.I]);
+            r.I += 1 + r.D[r.I];
+        }
+
+        var skin = r.U1();
+        if (extendedSkin)
+        {
+            npc.SkinColor = skin;
+        }
         r.Skip(14);
         var food = r.U1();
         npc.SetProp(ActorProp.FoodLevel, fixFirst ? 18 : food);
@@ -349,7 +423,11 @@ public static class NpcDat
         var tiley = locy & 0xf;
         npc.Tx = (scx + cx) * 16 + tilex;
         npc.Ty = (scy + cy) * 16 + tiley;
+        return polymorph;
     }
+
+    /// <summary>A record without a polymorph shape of its own: Exult's <c>set_polymorph_default</c> applies.</summary>
+    const int PolymorphDefault = int.MinValue;
 
     /// <summary>Exult <c>Game_window::write_npcs</c>: NPC.DAT with the fixed/extra counts.</summary>
     public static void Save(string dir, List<U7Object?> npcs, GameMap map)
@@ -443,13 +521,19 @@ public static class NpcDat
         var cy = npc.Ty / 16;
         w.Write((byte)(((cx % 16) << 4) | (npc.Tx % 16)));
         w.Write((byte)(((cy % 16) << 4) | (npc.Ty % 16)));
-        w.Write((byte)(npc.Shape & 0xff));
-        w.Write((byte)(((npc.Shape >> 8) & 3) | ((npc.Frame & 63) << 2)));
+        // Exult Actor::write: the actor's own shape, a polymorph's after it.
+        var shape = Polymorph.RealShape(npc);
+        w.Write((byte)(shape & 0xff));
+        w.Write((byte)(((shape >> 8) & 3) | ((npc.Frame & 63) << 2)));
         var hasContents = npc.Contents.Count > 0 && !npc.Unused;
-        w.Write((ushort)((hasContents ? 1 : 0) | 2 | 16));
+        var assigned = npc.AssignedUsecode >= 0;
+        var named = assigned && !string.IsNullOrEmpty(npc.UsecodeName);
+        w.Write((ushort)((hasContents ? 1 : 0) | 2 | 16 | (named ? 8 : assigned ? 4 : 0)));
         w.Write((byte)((cy / 16) * 12 + cx / 16));
         w.Write((byte)0); // map
-        w.Write((ushort)((npc.Tz & 15) << 12)); // usecode fun 0 = default
+        // Exult get_usecode() & 0xfff, the lift above it; an NPC without one gets its shape's.
+        var usecode = npc.GetUsecode() is >= 0 and var u ? u : npc.Shape;
+        w.Write((ushort)((usecode & 0xfff) | ((npc.Tz & 15) << 12)));
         w.Write((sbyte)Math.Clamp(npc.GetProp(ActorProp.Health), -128, 127));
         w.Write((byte)0);
         w.Write((ushort)0);
@@ -476,8 +560,10 @@ public static class NpcDat
         w.Write((byte)npc.EffectiveAlignment);
         w.Write((byte)(npc.GetProp(ActorProp.Magic) | 0x80));
         w.Write((byte)npc.GetProp(ActorProp.Mana));
-        w.Write((byte)0); // temperature
-        w.Write((byte)(npc.GetFlag(ObjFlag.Met) ? 1 : 0)); // flags3
+        w.Write((byte)npc.Temperature);
+        var flags3 = (npc.GetFlag(ObjFlag.Met) ? 1 : 0) | (npc.GetFlag(ObjFlag.NoSpellCasting) ? 2 : 0) |
+                     (npc.GetFlag(ObjFlag.SiZombie) ? 4 : 0) | ((npc.Ident & 0x1f) << 3);
+        w.Write((byte)flags3);
         w.Write((ushort)npc.FaceNum);
         w.Write((byte)0);
         w.Write((uint)npc.GetProp(ActorProp.Exp));
@@ -497,13 +583,20 @@ public static class NpcDat
         w.Write((byte)0);
         w.Write((ushort)0);
         w.Write((ushort)0);
-        w.Write((ushort)npc.Shape);
-        w.Write((ushort)0); // polymorph
+        w.Write((ushort)shape);
+        w.Write((ushort)(npc.GetFlag(ObjFlag.Polymorph) ? npc.Shape : 0));
         w.Write(npc.Flags);
         w.Write((byte)npc.ScheduleDestTz);
         w.Write((byte)0);
         w.Write(npc.Flags2);
-        w.Write((byte)0); // skin
+        if (named)
+        {
+            var nm = Encoding.Latin1.GetBytes(npc.UsecodeName!);
+            w.Write((byte)nm.Length);
+            w.Write(nm);
+        }
+
+        w.Write((byte)npc.SkinColor);
         for (var i = 0; i < 14; i++) w.Write((byte)0);
         w.Write((byte)npc.GetProp(ActorProp.FoodLevel));
         for (var i = 0; i < 7; i++) w.Write((byte)0);

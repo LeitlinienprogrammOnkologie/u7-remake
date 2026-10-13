@@ -17,6 +17,11 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 STATIC = ROOT / "u7" / "STATIC"
+# Serpent Isle's files, which Black Gate borrows from when they are there (as Exult's does).
+SERPENT = ROOT / "serpent" / "STATIC"
+# Exult's own Black Gate data and art the game reads (godot/data/bg).
+EXULT_BG = ROOT / "godot" / "data" / "bg"
+FIRST_IMPORT = 2048
 DATA = ROOT / "assets" / "data"
 HIRES = ROOT / "assets" / "hires"
 
@@ -111,12 +116,125 @@ def _decode_rle(rec: bytes, off: int) -> Frame:
     return Frame(xleft, yabove, xright, ybelow, True, index, opaque)
 
 
+def _find(folder: Path, name: str) -> Path | None:
+    """A file in the folder by name, any case; None when it (or the folder) isn't there."""
+    if not folder.is_dir():
+        return None
+    for p in folder.iterdir():
+        if p.name.lower() == name.lower():
+            return p
+    return None
+
+
+def read_shape_list(index: Path) -> list[bytes]:
+    """Exult's expack index (.in): the archive name, then ':n:file.shp' or
+    'file.shp' numbered on from the line before (Data/ShapeList.cs)."""
+    records: list[bytes] = []
+    n = 0
+    for line in index.read_text(encoding="latin-1").splitlines()[1:]:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith(":"):
+            num, _, line = line[1:].partition(":")
+            n = int(num)
+        while len(records) <= n:
+            records.append(b"")
+        shp = index.parent / line
+        records[n] = shp.read_bytes() if shp.exists() else b""
+        n += 1
+    return records
+
+
+def shape_imports(section: str) -> list[tuple[int, int]]:
+    """Exult's shape_files.txt imports (Data/ShapeFiles.cs): (number here,
+    Serpent Isle's), a '%name' taking the next number from 2048."""
+    out: list[tuple[int, int]] = []
+    path = EXULT_BG / "shape_files.txt"
+    if not path.exists():
+        return out
+    inside = False
+    nxt = FIRST_IMPORT
+    for line in path.read_text(encoding="latin-1").splitlines():
+        line = line.strip()
+        if line.startswith("%%section"):
+            inside = line.split()[-1] == section
+            continue
+        if line.startswith("%%endsection"):
+            inside = False
+            continue
+        if not inside or not line.startswith(":"):
+            continue
+        src, _, dest = line[1:].partition("/")
+        if any(s == int(src) for _, s in out):
+            continue
+        if dest.strip().startswith("%"):
+            out.append((nxt, int(src)))
+            nxt += 1
+        else:
+            out.append((int(dest), int(src)))
+    return out
+
+
+def shape_additions() -> list[tuple[int, bytes]]:
+    """The remake's new shapes (godot/data/bg/patch/shape_additions.txt,
+    Data/ShapeAdditions.cs): (number, the shape's bytes), the art an Exult
+    shape file beside it or Serpent Isle's (si:<n>)."""
+    out: list[tuple[int, bytes]] = []
+    path = EXULT_BG / "patch" / "shape_additions.txt"
+    if not path.exists():
+        return out
+    inside = False
+    serpent = None
+    for line in path.read_text(encoding="latin-1").splitlines():
+        line = line.strip()
+        if line.startswith("%%section"):
+            inside = line.split()[-1] == "shapes"
+            continue
+        if line.startswith("%%endsection"):
+            inside = False
+            continue
+        if not inside or not line.startswith(":"):
+            continue
+        fields = line[1:].split("/")
+        if len(fields) < 4:
+            continue
+        dest, art = int(fields[0]), fields[1].strip()
+        if art.lower().startswith("si:"):
+            si = _find(SERPENT, "SHAPES.VGA")
+            if si is None:
+                continue
+            serpent = serpent or read_flex(si)
+            out.append((dest, serpent[int(art[3:])]))
+        elif (path.parent / art).exists():
+            out.append((dest, (path.parent / art).read_bytes()))
+    return out
+
+
+def _layer(records: list[bytes], over: list[bytes]) -> list[bytes]:
+    """Exult Vga_file: a later source's shape wins where it has data."""
+    records = list(records) + [b""] * max(0, len(over) - len(records))
+    for i, rec in enumerate(over):
+        if rec:
+            records[i] = rec
+    return records
+
+
+def _import(records: list[bytes], source: list[bytes], imports: list[tuple[int, int]]) -> list[bytes]:
+    """Exult Vga_file::import_shapes: another game's shape at a number here."""
+    for dest, src in imports:
+        if src < len(source) and source[src]:
+            records = records + [b""] * max(0, dest + 1 - len(records))
+            records[dest] = source[src]
+    return records
+
+
 class VgaFile:
     """A SHAPES.VGA-style file: RLE shapes, or raw 8x8 tiles (the terrain)."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, records: list[bytes] | None = None):
         self.name = name
-        self.records = read_flex(STATIC / name)
+        self.records = records if records is not None else read_flex(STATIC / name)
 
     def frame_count(self, shape: int) -> int:
         rec = self.records[shape] if shape < len(self.records) else b""
@@ -174,18 +292,18 @@ def special_mask(frame: Frame, translucent: bool) -> np.ndarray:
 
 
 @lru_cache(maxsize=None)
-def world_tiles() -> np.ndarray:
-    """The world's flat terrain as tile ids (shape << 5 | frame), -1 where a
-    cell is an RLE object: 3072 x 3072 (U7MAP chunks of U7CHUNKS terrains)."""
-    shapes = VgaFile("SHAPES.VGA")
+def chunk_templates() -> tuple[np.ndarray, np.ndarray]:
+    """U7CHUNKS, Exult's Chunk_terrain: each terrain's 256 cells (16 x 16
+    tiles, row by row) as shape and frame arrays, (count, 256) each."""
     chunks = (STATIC / "U7CHUNKS").read_bytes()
     count = len(chunks) // 512
     cells = np.frombuffer(chunks[:count * 512], np.uint8).reshape(count, 256, 2).astype(np.int32)
-    shape = cells[:, :, 0] + 256 * (cells[:, :, 1] & 3)
-    frame = (cells[:, :, 1] >> 2) & 0x1F
-    raw = np.array([shapes.is_tile(s) for s in range(1024)])
-    ids = np.where(raw[shape], (shape << 5) | frame, -1).reshape(count, 16, 16)
+    return cells[:, :, 0] + 256 * (cells[:, :, 1] & 3), (cells[:, :, 1] >> 2) & 0x1F
 
+
+@lru_cache(maxsize=None)
+def chunk_map() -> np.ndarray:
+    """U7MAP: the terrain of each of the world's 192 x 192 chunks, [cy, cx]."""
     data = (STATIC / "U7MAP").read_bytes()
     terrain = np.zeros((192, 192), np.int32)
     off = 0
@@ -194,7 +312,18 @@ def world_tiles() -> np.ndarray:
         block = np.frombuffer(data[off:off + 512], "<u2").reshape(16, 16)
         terrain[scy:scy + 16, scx:scx + 16] = block
         off += 512
-    world = ids[terrain]  # (192, 192, 16, 16)
+    return terrain
+
+
+@lru_cache(maxsize=None)
+def world_tiles() -> np.ndarray:
+    """The world's flat terrain as tile ids (shape << 5 | frame), -1 where a
+    cell is an RLE object: 3072 x 3072 (U7MAP chunks of U7CHUNKS terrains)."""
+    shapes = VgaFile("SHAPES.VGA")
+    shape, frame = chunk_templates()
+    raw = np.array([shapes.is_tile(s) for s in range(1024)])
+    ids = np.where(raw[shape], (shape << 5) | frame, -1).reshape(len(shape), 16, 16)
+    world = ids[chunk_map()]  # (192, 192, 16, 16)
     return world.transpose(0, 2, 1, 3).reshape(192 * 16, 192 * 16)
 
 
@@ -222,3 +351,35 @@ def tile_neighbours() -> dict[int, dict[tuple[int, int], int]]:
                 seen.add(c)
                 out.setdefault(c, {})[(dx, dy)] = int(k % 65536)
     return out
+
+
+def game_file(file: str) -> VgaFile | None:
+    """A shape file as the remake builds it (Rendering/ShapeCache,
+    Data/ShapeCatalog): Black Gate's, with the remake's new shapes (the keyring) and Serpent Isle's skin bodies
+    (shapes) and paperdoll markers (gumps) imported at 2048 and up when SI
+    is installed, Exult's skin faces at face 5000, and the paperdolls (SI's
+    PAPERDOL.VGA with Exult's Black Gate art over it). None for the
+    paperdolls without Serpent Isle."""
+    si_shapes, si_gumps, si_dolls = (_find(SERPENT, n) for n in ("SHAPES.VGA", "GUMPS.VGA", "PAPERDOL.VGA"))
+    if file == "paperdolls":
+        if si_dolls is None or si_gumps is None:
+            return None
+        records = read_flex(si_dolls)
+        extra = EXULT_BG / "flx" / "bg_paperdol.in"
+        if extra.exists():
+            records = _layer(records, read_shape_list(extra))
+        return VgaFile("PAPERDOL.VGA", records)
+    name = {"shapes": "SHAPES.VGA", "sprites": "SPRITES.VGA", "gumps": "GUMPS.VGA", "faces": "FACES.VGA"}[file]
+    records = read_flex(STATIC / name)
+    if file == "shapes" and si_shapes is not None:
+        records = _import(records, read_flex(si_shapes), shape_imports("multiracial_imports"))
+    if file == "shapes":
+        for dest, rec in shape_additions():
+            records = _import(records, [rec], [(dest, 0)])
+    elif file == "gumps" and si_gumps is not None and si_dolls is not None:
+        records = _import(records, read_flex(si_gumps), shape_imports("gump_imports"))
+    elif file == "faces":
+        faces = EXULT_BG / "flx" / "bg_mr_faces.in"
+        if faces.exists():
+            records = _layer(records, read_shape_list(faces))
+    return VgaFile(name, records)

@@ -15,10 +15,13 @@ public sealed class VgaShapeFile
 {
     const int TileBytes = ShapeFrame.TileSize * ShapeFrame.TileSize;
 
-    readonly FlexFile? _flex;
+    /// <summary>Exult <c>Vga_file</c>'s sources: for each shape, the last with data in that slot wins (a mod's or Exult's own art over the game's).</summary>
+    readonly List<IShapeSource> _layers = new();
+    /// <summary>Exult <c>imported_shape_table</c>: shapes taken from another game's file, by the number they get here.</summary>
+    readonly Dictionary<int, (IShapeSource Source, int Shape)> _imports = new();
     /// <summary>A single shape's file (Exult <c>Shape_file</c>), in place of a FLEX.</summary>
     readonly byte[]? _single;
-    readonly FrameInfo[][] _frames;
+    FrameInfo[]?[] _frames;
 
     VgaShapeFile(byte[] single)
     {
@@ -45,11 +48,12 @@ public sealed class VgaShapeFile
 
         try
         {
-            _flex = new FlexFile(path);
-            _frames = new FrameInfo[_flex.Count][];
-            for (var s = 0; s < _flex.Count; s++)
+            var flex = new FlexFile(path);
+            _layers.Add(flex);
+            _frames = new FrameInfo[flex.Count][];
+            for (var s = 0; s < flex.Count; s++)
             {
-                _frames[s] = ParseExtents(_flex.Get(s));
+                _frames[s] = ParseExtents(flex.Get(s));
             }
         }
         catch (Exception ex)
@@ -59,7 +63,98 @@ public sealed class VgaShapeFile
         }
     }
 
+    /// <summary>A shape file built from sources (Exult's own art lists), the first one's slots first.</summary>
+    public VgaShapeFile(IShapeSource first)
+    {
+        _frames = [];
+        AddLayer(first);
+    }
+
     public int ShapeCount => _frames.Length;
+
+    /// <summary>Exult <c>Vga_file::load</c> with a further source: its shapes replace those slots it has data for.</summary>
+    public void AddLayer(IShapeSource source)
+    {
+        _layers.Add(source);
+        Grow(source.Count);
+        for (var s = 0; s < source.Count; s++)
+        {
+            if (!source.Get(s).IsEmpty && !_imports.ContainsKey(s))
+            {
+                _frames[s] = ParseExtents(source.Get(s));
+            }
+        }
+    }
+
+    /// <summary>Exult <c>Vga_file::import_shapes</c>: another file's shape at a number of this one (from 2048 for Serpent Isle's).</summary>
+    public void Import(IShapeSource source, int srcShape, int dest)
+    {
+        if (source.Get(srcShape).IsEmpty || dest < 0)
+        {
+            return;
+        }
+
+        _imports[dest] = (source, srcShape);
+        Grow(dest + 1);
+        _frames[dest] = ParseExtents(source.Get(srcShape));
+    }
+
+    void Grow(int count)
+    {
+        if (count > _frames.Length)
+        {
+            Array.Resize(ref _frames, count);
+        }
+    }
+
+    /// <summary>A shape's bytes: an import, else the last source with data in its slot.</summary>
+    ReadOnlySpan<byte> Entry(int shape)
+    {
+        if (_single is not null)
+        {
+            return _single;
+        }
+
+        if (_imports.TryGetValue(shape, out var imp))
+        {
+            return imp.Source.Get(imp.Shape);
+        }
+
+        for (var i = _layers.Count - 1; i >= 0; i--)
+        {
+            var entry = _layers[i].Get(shape);
+            if (!entry.IsEmpty)
+            {
+                return entry;
+            }
+        }
+
+        return ReadOnlySpan<byte>.Empty;
+    }
+
+    /// <summary>Whether a shape is the game's own file's: no later source (a mod's, Exult's) and no import in its slot.</summary>
+    public bool IsOriginal(int shape)
+    {
+        if (_single is not null)
+        {
+            return true;
+        }
+
+        if (_imports.ContainsKey(shape))
+        {
+            return false;
+        }
+
+        for (var i = _layers.Count - 1; i >= 0; i--)
+        {
+            if (!_layers[i].Get(shape).IsEmpty)
+            {
+                return i == 0;
+            }
+        }
+
+        return false;
+    }
 
     public int FrameCount(int shape) =>
         (uint)shape < (uint)_frames.Length && _frames[shape] is { } list ? list.Length : 0;
@@ -89,7 +184,7 @@ public sealed class VgaShapeFile
             return null;
         }
 
-        var entry = _single ?? _flex!.Get(shape);
+        var entry = Entry(shape);
         if (IsRle(entry))
         {
             var nframes = RleFrameCount(entry);

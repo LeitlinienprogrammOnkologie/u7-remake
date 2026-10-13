@@ -11,7 +11,7 @@ namespace U7.Usecode;
 /// Every intrinsic gets 12 parameters, those not passed 0 (Exult's default
 /// <c>Usecode_value</c>); one without a port logs and returns 0.
 /// </summary>
-public sealed class BgIntrinsics
+public sealed partial class BgIntrinsics
 {
     static readonly string[] Names =
     [
@@ -48,7 +48,22 @@ public sealed class BgIntrinsics
         "direction_from", "get_item_flag", "set_item_flag", "clear_item_flag",
         "set_path_failure", "fade_palette", "get_party_list2", "in_combat",
         "start_blocking_speech", "is_water", "reset_conv_face", "set_camera",
-        "get_dead_party", "view_tile", "telekenesis", "a_or_an"
+        "get_dead_party", "view_tile", "telekenesis", "a_or_an",
+        // Exult bgintrinsics.h past the originals: its own and Serpent Isle's, for mods.
+        "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN", "UNKNOWN",
+        "UNKNOWN", "approach_avatar", "get_attack_mode", "center_view", "get_body_npc",
+        "get_npc_id", "set_npc_id", "get_oppressor", "get_readied", "get_weapon", "modify_schedule",
+        "printf", "remove_cont_items", "remove_from_area", "revert_schedule", "run_schedule",
+        "set_barge_dir", "set_intercept_item", "set_new_schedules", "set_opponent",
+        "si_path_run_usecode", "begin_casting_mode", "get_usecode_fun", "get_map_num",
+        "create_new_object2", "add_cont_items", "clear_item_say", "save_pos",
+        "teleport_to_saved_pos", "set_camera", "set_polymorph", "infravision", "display_map_ex",
+        "book_mode_ex", "show_npc_face0", "show_npc_face1", "remove_npc_face0", "remove_npc_face1",
+        "set_conversation_slot", "is_dest_reachable", "set_npc_name", "set_usecode_fun",
+        "get_item_weight", "remove_all_spells", "get_skin_colour", "change_npc_face0",
+        "change_npc_face1", "get_temperature", "set_temperature", "get_temperature_zone",
+        "get_npc_warmth", "has_spell", "remove_spell", "ambient_light", "create_barge_object",
+        "in_usecode_path", "fade_palette_sleep", "close_gumps2", "close_gump2", "game_day"
     ];
 
     readonly UsecodeMachine _vm;
@@ -56,8 +71,14 @@ public sealed class BgIntrinsics
 
     public BgIntrinsics(UsecodeMachine vm) => _vm = vm;
 
+    /// <summary>The handler's name: Black Gate's table, then Serpent Isle's own (<see cref="SiIntrinsics.SiOnly"/>).</summary>
     public static string Name(int id) =>
-        (uint)id < (uint)Names.Length ? Names[id] : $"unknown_{id:X2}";
+        (uint)id < (uint)Names.Length ? Names[id]
+        : id - SiIntrinsics.FirstSiOnly is var si && (uint)si < (uint)SiIntrinsics.SiOnly.Length ? SiIntrinsics.SiOnly[si]
+        : $"unknown_{id:X2}";
+
+    /// <summary>The handler of a name (its first number in Black Gate's table), 0xff (none) for a name it lacks.</summary>
+    public static int IdOf(string name) => Array.IndexOf(Names, name) is var i and >= 0 ? i : 0xff;
 
     public UsecodeValue Call(int id, UsecodeValue[] p, int n) =>
         id switch
@@ -196,7 +217,7 @@ public sealed class BgIntrinsics
             0x6d => OnBarge(),
             0x46 => SitDown(p),
             0x85 => IsNotBlocked(p),
-            0x7d => PathRunUsecode(p),
+            0x7d => PathRunUsecode(p, n),
             0x8b => SetPathFailure(p),
             0x52 => AddSpell(p),
             0x7b => ObjSpriteEffect(p),
@@ -209,6 +230,67 @@ public sealed class BgIntrinsics
             0x75 => RunEndgame(p),
             0x7a => CallGuards(),
             0x7c => AttackAvatar(),
+            0xa0 => ApproachAvatar(p),
+            0xa2 => CenterView(p),
+            0xa4 => GetNpcId(p),
+            0xa5 => SetNpcId(p),
+            0xa9 => ModifySchedule(p),
+            0xac => RemoveFromArea(p),
+            0xad => RevertSchedule(p),
+            0xae => RunSchedule(p),
+            0xb0 => SetInterceptItem(p),
+            0xb1 => SetNewSchedules(p),
+            0xb5 => GetUsecodeFun(p),
+            0xba => SavePos(p),
+            0xbb => TeleportToSavedPos(p),
+            0xbc => SetCamera(p),
+            0xc1 => ShowNpcFace(p, 0),
+            0xc2 => ShowNpcFace(p, 1),
+            0xc3 => RemoveSlotFace(0),
+            0xc4 => RemoveSlotFace(1),
+            0xc5 => SetConversationSlot(p),
+            0xc7 => SetNpcName(p),
+            0xc8 => SetUsecodeFun(p),
+            0xcc => ChangeNpcFace(p, 0),
+            0xcd => ChangeNpcFace(p, 1),
+            0xd7 => FadePaletteSleep(p),
+            0xda => UsecodeValue.FromInt(_vm.Clock?.Day ?? 0),
+            0x2d => GetMusicTrack(),
+            0x34 or 0xaa => ErrorMessage(p, n),
+            0xa1 => GetAttackMode(p),
+            0xa3 => GetBodyNpc(p),
+            0xa6 => GetOppressor(p),
+            0xa7 => GetReadied(p),
+            0xa8 => GetWeapon(p),
+            0xab => RemoveContItems(p),
+            0xaf => SetBargeDir(p),
+            0xb2 => SetOpponent(p),
+            0xb3 => SiPathRunUsecode(p),
+            0xb4 => BeginCastingMode(p, n),
+            0xb6 => GetMapNum(p),
+            0xb7 => CreateNewObject2(p),
+            0xb8 => AddContItems(p),
+            0xb9 => ClearItemSay(p),
+            0xbd => SetPolymorph(p),
+            0xbe => Infravision(p),
+            0xbf => DisplayMapEx(p),
+            0xc0 => BookModeEx(p, n),
+            0xc6 => IsDestReachableIntrinsic(p),
+            0xc9 => GetItemWeight(p),
+            0xca => RemoveAllSpells(p),
+            0xcb => GetSkinColour(),
+            0xce => GetTemperature(p),
+            0xcf => SetTemperature(p),
+            0xd0 => GetTemperatureZone(p),
+            0xd1 => GetNpcWarmth(p),
+            0xd2 => HasSpell(p),
+            0xd3 => RemoveSpell(p),
+            0xd4 => AmbientLight(p),
+            0xd5 => CreateBargeObject(p, n),
+            0xd6 => InUsecodePath(p),
+            0xd8 => CloseGumps2(),
+            0xd9 => CloseGump2(p),
+            >= SiIntrinsics.FirstSiOnly => CallSiOnly(id, p, n),
             _ => Stub(id, p, n)
         };
 
@@ -281,7 +363,8 @@ public sealed class BgIntrinsics
         return UsecodeValue.FromInt(low + _vm.Random(high - low + 1) - 1);
     }
 
-    UsecodeValue ShowNpcFace(UsecodeValue[] p)
+    /// <summary>Exult <c>show_npc_face</c>; <paramref name="slot"/> 0 or 1 for SI's <c>show_npc_face0/1</c>, -1 the free one.</summary>
+    UsecodeValue ShowNpcFace(UsecodeValue[] p, int slot = -1)
     {
         // Exult: the text said so far shows first, under the face that said it.
         _vm.ShowPendingText();
@@ -293,25 +376,22 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
-        if (shape == AvatarLook.FaceShape)
-        {
-            // Exult get_face_shape: face 0 is the avatar's, in its sex's frame (the NPC's if one was given).
-            frame = AvatarLook.FaceFrame(AvatarLook.IsFemale(item is { IsActor: true } ? item : _vm.Avatar));
-        }
+        (shape, frame) = AvatarFace(shape, frame, item);
 
         // The panel names a speaker the player already knows (Exult sets met here,
         // so a first meeting stays nameless until the next conversation).
         var name = item is { NpcNum: >= 0 } && (item.NpcNum == 0 || item.GetFlag(U7.Actors.ObjFlag.Met))
             ? item.NpcName
             : "";
-        if (item is { NpcNum: >= 0 })
+        // Exult: in Black Gate only (Serpent Isle's usecode sets it itself).
+        if (GameContext.IsBg && item is { NpcNum: >= 0 })
         {
             item.SetFlag(U7.Actors.ObjFlag.Met);
         }
 
         _vm.AfterText(() =>
         {
-            _vm.Conv.ShowFace(shape, frame, name);
+            _vm.Conv.ShowFace(shape, frame, name, slot);
             _vm.NotifyFaces();
         });
         return Zero();
@@ -322,7 +402,7 @@ public sealed class BgIntrinsics
     {
         _vm.ShowPendingText();
         var item = _vm.GetItem(p[0]);
-        var shape = FaceShape(p[0], item);
+        var (shape, _) = AvatarFace(FaceShape(p[0], item), 0, item);
         if (shape >= 0)
         {
             _vm.AfterText(() =>
@@ -335,7 +415,34 @@ public sealed class BgIntrinsics
         return Zero();
     }
 
+    /// <summary>
+    /// Exult <c>get_face_shape</c>'s special case: face 0 is the avatar's,
+    /// its skin's face (by the sex of the NPC given, else the avatar's).
+    /// </summary>
+    (int Shape, int Frame) AvatarFace(int shape, int frame, U7Object? item) =>
+        shape == AvatarLook.FaceShape
+            ? AvatarLook.Face(_vm.Avatar, AvatarLook.IsFemale(item is { IsActor: true } ? item : _vm.Avatar))
+            : (shape, frame);
+
+    /// <summary>
+    /// Exult <c>Usecode_internal::get_face_shape</c>: the speaker's face shape
+    /// (0 the avatar's, -1 none), Petra's swap applied; in Serpent Isle the
+    /// Nightmare Smith (NPC 277 calling with the Guardian's face, 296) has
+    /// face 277, which is never drawn ("but don't mess up Guardian").
+    /// </summary>
     int FaceShape(UsecodeValue arg, U7Object? item)
+    {
+        var shape = SpeakerFace(arg, item);
+        if (shape < 0)
+        {
+            return shape;
+        }
+
+        shape = AvatarLook.FaceReplacement(_vm.Avatar, shape);
+        return GameContext.IsSi && shape == 296 && _vm.CurrentFrame?.Caller is { IsActor: true, NpcNum: 277 } ? 277 : shape;
+    }
+
+    int SpeakerFace(UsecodeValue arg, U7Object? item)
     {
         if (arg.IsPtr)
         {
@@ -584,12 +691,18 @@ public sealed class BgIntrinsics
     UsecodeValue ExecuteUsecodeArray(UsecodeValue[] p, bool delayed)
     {
         var obj = _vm.GetItem(p[0]);
+        // Exult create_script's "pure kludge for SI wells": the script goes to the well's top.
+        if (GameContext.IsSi && p[0] is { IsArray: true, ArraySize: 2 } wells && obj is { Shape: 470, Tz: 0 } &&
+            _vm.GetItem(wells.GetElem(1)) is { Shape: 470, Tz: 2 } top)
+        {
+            obj = top;
+        }
         var code = p[1];
         var ticks = 1;
         if (delayed)
         {
             // Exult: BG infinite-loop guard for internal_exec + [.., .., 0x6f7].
-            if (_vm.CurrentFrame?.EventId == (int)UsecodeEvent.InternalExec && code.ArraySize == 3 &&
+            if (GameContext.IsBg && _vm.CurrentFrame?.EventId == (int)UsecodeEvent.InternalExec && code.ArraySize == 3 &&
                 code.GetElem(2).IntValue == 0x6f7)
             {
                 return Zero();
@@ -787,6 +900,12 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
+        // Exult: in Serpent Isle an NPC on a usecode path gives the walk-to schedule ("a bug in the Fawn Trial").
+        if (GameContext.IsSi && _vm.Schedules?.BrainOf(npc)?.CurrentAction is IfElsePathAction)
+        {
+            return UsecodeValue.FromInt(U7.Actors.ScheduleType.WalkToSchedule);
+        }
+
         return UsecodeValue.FromInt(_vm.Schedules?.GetActualType(npc) ?? npc.ScheduleType);
     }
 
@@ -871,6 +990,12 @@ public sealed class BgIntrinsics
         }
 
         U7.Actors.ActorProp.Set(item, prop, delta);
+        if (prop == U7.Actors.ActorProp.SexFlag)
+        {
+            // Exult set_type_flag / clear_type_flag: set_actor_shape.
+            AvatarLook.SetActorShape(_vm.Map, item);
+        }
+
         return UsecodeValue.FromInt(1);
     }
 
@@ -1351,7 +1476,7 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
-        var spot = ReadySpot.FromBg((int)p[1].IntValue);
+        var spot = UsecodeSpot((int)p[1].IntValue);
         var shape = (int)p[2].IntValue;
         var frame = (int)p[3].IntValue;
         var obj = spot <= ReadySpot.Ucont ? Equipment.GetReadied(npc, spot) : null;
@@ -1427,15 +1552,13 @@ public sealed class BgIntrinsics
     {
         var text = p[1];
         var cnt = text.IsArray ? Math.Max(1, text.ArraySize) : 1;
-        var canRead = _vm.Avatar?.GetFlag(ObjFlag.Read) == true;
         var lines = new string[cnt];
         for (var i = 0; i < cnt; i++)
         {
-            var line = (text.IsArray && text.ArraySize > 0 ? text.GetElem(i) : text).StrValue ?? "";
-            lines[i] = canRead ? Gumps.SignGump.Readable(line) : line;
+            lines[i] = (text.IsArray && text.ArraySize > 0 ? text.GetElem(i) : text).StrValue ?? "";
         }
 
-        _vm.ShowSign(new Gumps.SignGump((int)p[0].IntValue, lines));
+        _vm.ShowSign(new Gumps.SignGump((int)p[0].IntValue, lines, _vm.Avatar?.GetFlag(ObjFlag.Read) == true));
         return Zero();
     }
 
@@ -1453,7 +1576,15 @@ public sealed class BgIntrinsics
             return Zero();
         }
 
-        _vm.SetBook(obj.Shape == 797 ? new U7.Gumps.ScrollGump() : new U7.Gumps.BookGump());
+        // Exult: the serpentine scroll (707) and book (705) in serpent runes (font 8) unless the avatar can read them.
+        var font = _vm.Avatar?.GetFlag(ObjFlag.Read) == true ? U7Constants.BookFont : 8;
+        _vm.SetBook(obj.Shape switch
+        {
+            707 => new U7.Gumps.ScrollGump(font),
+            705 => new U7.Gumps.BookGump(font),
+            797 => new U7.Gumps.ScrollGump(),
+            _ => new U7.Gumps.BookGump()
+        });
         return Zero();
     }
 
@@ -1468,10 +1599,21 @@ public sealed class BgIntrinsics
         if (_vm.InterceptItem is { } obj)
         {
             _vm.InterceptItem = null;
+            _vm.InterceptTile = null;
             var arr = UsecodeValue.FromArray(4, UsecodeValue.FromObject(obj));
             arr.PutElem(1, UsecodeValue.FromInt(obj.Tx));
             arr.PutElem(2, UsecodeValue.FromInt(obj.Ty));
             arr.PutElem(3, UsecodeValue.FromInt(obj.Tz));
+            return arr;
+        }
+
+        if (_vm.InterceptTile is { } t)
+        {
+            _vm.InterceptTile = null;
+            var arr = UsecodeValue.FromArray(4, UsecodeValue.FromObject(null));
+            arr.PutElem(1, UsecodeValue.FromInt(t.Tx));
+            arr.PutElem(2, UsecodeValue.FromInt(t.Ty));
+            arr.PutElem(3, UsecodeValue.FromInt(t.Tz));
             return arr;
         }
 
@@ -1772,45 +1914,75 @@ public sealed class BgIntrinsics
     U7Object? _pathNpc;
 
     /// <summary>
-    /// Exult <c>UI_path_run_usecode(loc, fun, item, event)</c> (Black Gate:
-    /// no free spot sought, no failure run unless set): the avatar walks
-    /// there with the party and then runs the function on the item; 0 if
-    /// there is no way there.
+    /// Exult <c>UI_path_run_usecode(loc, fun, item, event[, simode])</c>: the
+    /// avatar walks there with the party and then runs the function on the
+    /// item; in Serpent Isle (or asked) to a free spot near it; 0 if there is
+    /// no way there.
     /// </summary>
-    UsecodeValue PathRunUsecode(UsecodeValue[] p)
+    UsecodeValue PathRunUsecode(UsecodeValue[] p, int n)
     {
-        var npc = _vm.Avatar;
+        var simode = n > 4 ? p[4].IntValue != 0 : GameContext.IsSi;
+        return UsecodeValue.FromInt(PathRunUsecode(_vm.Avatar, p[0], (int)p[1].GetElem0().IntValue, _vm.GetItem(p[2]),
+            (int)p[3].IntValue, simode, always: false, companions: true) ? 1 : 0);
+    }
+
+    /// <summary>
+    /// Exult <c>Usecode_internal::path_run_usecode</c>: the NPC walks to the
+    /// place (with <paramref name="findFree"/> a free spot near it, rising up
+    /// to 3, else at its own lift) and runs the function on the item there,
+    /// or only walks without an item; the companions come along if asked; with
+    /// <paramref name="always"/> a failed walk runs it too, with event 14.
+    /// False if there is no way there.
+    /// </summary>
+    bool PathRunUsecode(U7Object npc, UsecodeValue loc, int fun, U7Object? obj, int eventId, bool findFree, bool always,
+        bool companions)
+    {
         _pathNpc = npc;
-        var fun = (int)p[1].GetElem0().IntValue;
-        var obj = _vm.GetItem(p[2]);
-        var size = p[0].ArraySize;
+        var size = loc.ArraySize;
         if (size < 2 || _vm.Schedules is not { } runner)
         {
-            return Zero();
+            return false;
         }
 
-        var dest = new TileCoord((int)p[0].GetElem(0).IntValue, (int)p[0].GetElem(1).IntValue,
-            size == 3 ? Math.Max(0, (int)p[0].GetElem(2).IntValue) : 0);
+        var src = new TileCoord(npc.Tx, npc.Ty, npc.Tz);
+        var dest = new TileCoord((int)loc.GetElem(0).IntValue, (int)loc.GetElem(1).IntValue,
+            size == 3 ? Math.Max(0, (int)loc.GetElem(2).IntValue) : 0);
+        if (findFree)
+        {
+            // "Now works with SI lightning platform": a rise of 3 allowed.
+            if ((_vm.Map.FindSpot(dest, 3, npc, 3) ?? _vm.Map.FindSpot(dest with { Tz = src.Tz }, 3, npc)) is { } free)
+            {
+                dest = free;
+            }
+
+            // Exult's kludge for the Iron Maiden loop in Serpent Isle.
+            if (fun == 0x60a && ObjectGeometry.Distance(npc, dest) <= 1)
+            {
+                return true;
+            }
+        }
+
         IActorAction? action = obj is null
             ? PathWalk.Astar(_vm.Map, npc, dest)
-            : new IfElsePathAction(_vm.Map, npc, dest, new UsecodeAction(fun, obj, (int)p[3].IntValue));
+            : new IfElsePathAction(_vm.Map, npc, dest, new UsecodeAction(fun, obj, eventId),
+                always ? new UsecodeAction(fun, obj, SiPathFailEvent) : null);
         // Exult set_get_party: the companions come along, and are called after the last step.
         switch (action)
         {
             case null:
-                return Zero();
-            case PathWalk walk:
+                return false;
+            case PathWalk walk when companions:
                 walk.GetParty = true;
                 walk.LastStep = runner.AvatarWalkEnded;
                 break;
-            case IfElsePathAction ifElse:
+            case IfElsePathAction ifElse when companions:
                 ifElse.GetParty = true;
                 ifElse.LastStep = runner.AvatarWalkEnded;
                 break;
         }
 
         runner.StartAction(npc, action, U7Constants.StandardDelayMs, 0);
-        return UsecodeValue.FromInt(action is IfElsePathAction { DoneAndFailed: true } ? 0 : 1);
+        return action is not IfElsePathAction { DoneAndFailed: true };
     }
 
     /// <summary>Exult <c>UI_set_path_failure(fun, item, event)</c>: what the last <c>path_run_usecode</c> walker does if it cannot get there.</summary>
@@ -1920,14 +2092,46 @@ public sealed class BgIntrinsics
             }
 
             var prev = quantity;
-            quantity = Quantities.Add(member, quantity, shape, qual, frame, dontCreate: false, temp);
+            quantity = Quantities.Add(member, quantity, shape, qual, frame, dontCreate: false, GameContext.IsBg && temp);
             if (quantity < prev)
             {
                 got.Add(member);
             }
         }
 
-        return UsecodeValue.FromObjects(got);
+        var result = UsecodeValue.FromObjects(got);
+        if (GameContext.IsBg)
+        {
+            return result;
+        }
+
+        // Exult for Serpent Isle: the rest is put on the ground by the avatar, and the count appended.
+        var todo = quantity;
+        frame = frame == U7Constants.AnyShape ? 0 : frame;
+        while (todo > 0 && _vm.Map.FindSpot(new TileCoord(_vm.Avatar.Tx, _vm.Avatar.Ty, _vm.Avatar.Tz), 3, shape, frame, 2) is { } pos)
+        {
+            var obj = Quantities.NewItem(shape, frame);
+            if (qual != U7Constants.AnyShape)
+            {
+                obj.Quality = qual;
+            }
+
+            obj.SetFlag(U7.Actors.ObjFlag.OkayToTake);
+            if (temp)
+            {
+                obj.SetFlag(U7.Actors.ObjFlag.Temporary);
+            }
+
+            _vm.Map.PlaceInWorld(obj, pos.Tx, pos.Ty, pos.Tz);
+            todo--;
+            if (todo > 0)
+            {
+                todo = Quantities.Modify(obj, todo, out _);
+            }
+        }
+
+        result.Concat(UsecodeValue.FromInt(quantity - todo));
+        return result;
     }
 
     /// <summary>
@@ -1935,13 +2139,15 @@ public sealed class BgIntrinsics
     /// world, pushed on last_created. Monster shapes become neutral monsters in
     /// the wait schedule.
     /// </summary>
-    UsecodeValue CreateNewObject(UsecodeValue[] p)
+    UsecodeValue CreateNewObject(UsecodeValue[] p) => UsecodeValue.FromObject(CreateObject((int)p[0].IntValue, equip: false));
+
+    /// <summary>Exult <c>Usecode_internal::create_object</c>: <paramref name="equip"/> gives a monster its equipment.</summary>
+    U7Object CreateObject(int shape, bool equip)
     {
-        var shape = (int)p[0].IntValue;
         U7Object obj;
         if (_vm.Combat is { } combat && (combat.IsMonsterShape(shape) || _vm.Catalog[shape].IsNpcClass))
         {
-            obj = combat.CreateMonster(shape, 0, U7.Actors.ScheduleType.Wait, U7.Actors.Alignment.Neutral);
+            obj = combat.CreateMonster(shape, 0, U7.Actors.ScheduleType.Wait, U7.Actors.Alignment.Neutral, equip);
             obj.Alignment = U7.Actors.Alignment.Neutral;
         }
         else
@@ -1951,7 +2157,7 @@ public sealed class BgIntrinsics
         }
 
         _vm.LastCreated.Add(obj);
-        return UsecodeValue.FromObject(obj);
+        return obj;
     }
 
     /// <summary>Exult <c>UI_set_last_created(item)</c>: take it off the map (or out of its container) onto last_created.</summary>
@@ -2252,6 +2458,16 @@ public sealed class BgIntrinsics
         var obj = _vm.GetItem(p[0]);
         if (obj is not null)
         {
+            // Exult's fix for the broken trap switch in Serpent Isle's Temple of Discipline: the
+            // trap's eggs (shape 0xc8 within 15 tiles) go too, so it stays disarmed.
+            if (GameContext.IsSi && _vm.CurrentFrame?.Function.Id == 0x70e && obj is { Shape: 0x113, Quality: 0xd })
+            {
+                foreach (var egg in _vm.Map.EggsNear(obj.Tx, obj.Ty, 15).Where(e => e.Shape == 0xc8).ToList())
+                {
+                    _vm.Map.RemoveObject(egg);
+                }
+            }
+
             _vm.Map.RemoveObject(obj);
         }
 
@@ -2269,6 +2485,309 @@ public sealed class BgIntrinsics
             _vm.SetCamera?.Invoke(obj);
         }
 
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>approach_avatar(npc)</c> (<c>Actor::approach_another</c>): an
+    /// NPC within 10 tiles is there already; else it walks up fast from where
+    /// it is, or from off the screen. Exult also holds the game up to 2/5 s
+    /// for its arrival (<c>Wait_for_arrival</c>); not here.
+    /// </summary>
+    UsecodeValue ApproachAvatar(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is not { IsActor: true } actor || actor.IsDead)
+        {
+            return Zero();
+        }
+
+        if (ObjectGeometry.Distance(actor, _vm.Avatar) < 10)
+        {
+            return UsecodeValue.FromInt(1);
+        }
+
+        return UsecodeValue.FromInt(_vm.Schedules?.ApproachAnother(actor, _vm.Avatar) == true ? 1 : 0);
+    }
+
+    /// <summary>Exult <c>center_view(item)</c>: the view centred on the item's tile (an actor's too, without following it).</summary>
+    UsecodeValue CenterView(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { } obj)
+        {
+            _vm.CenterView?.Invoke(new TileCoord(obj.Tx, obj.Ty, obj.Tz));
+        }
+
+        return Zero();
+    }
+
+    UsecodeValue GetNpcId(UsecodeValue[] p) =>
+        UsecodeValue.FromInt(_vm.GetItem(p[0]) is { IsActor: true } actor ? actor.Ident : 0);
+
+    /// <summary>Exult <c>set_npc_id(npc, id)</c>: a byte usecode keeps on the actor (saved as 5 bits).</summary>
+    UsecodeValue SetNpcId(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { IsActor: true } actor)
+        {
+            actor.Ident = (byte)p[1].IntValue;
+        }
+
+        return Zero();
+    }
+
+    /// <summary>The NPC whose schedules usecode changes: Exult's <c>Npc_actor</c>s (the avatar keeps none).</summary>
+    U7Object? ScheduledNpc(UsecodeValue arg) =>
+        _vm.GetItem(arg) is { IsActor: true, NpcNum: > 0 } npc ? npc : null;
+
+    /// <summary>Exult <c>modify_schedule(npc, time, schedule, [x, y])</c>: one time slot's schedule and spot.</summary>
+    UsecodeValue ModifySchedule(UsecodeValue[] p)
+    {
+        if (ScheduledNpc(p[0]) is { } npc && _vm.Schedules is { } runner)
+        {
+            var time = (int)p[1].IntValue;
+            runner.Table.SetTimeType(npc.NpcNum, time, (int)p[2].IntValue);
+            runner.Table.SetTimeLocation(npc.NpcNum, time, (int)p[3].GetElem(0).IntValue, (int)p[3].GetElem(1).IntValue);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>set_new_schedules(npc, time, schedule, [x, y])</c>, or with
+    /// arrays of times and schedules and a flat array of spots: the NPC's
+    /// whole list replaced.
+    /// </summary>
+    UsecodeValue SetNewSchedules(UsecodeValue[] p)
+    {
+        if (ScheduledNpc(p[0]) is not { } npc || _vm.Schedules is not { } runner)
+        {
+            return Zero();
+        }
+
+        var list = new List<(int, int, int, int)>();
+        if (!p[1].IsArray)
+        {
+            list.Add(((int)p[1].IntValue, (int)p[2].IntValue, (int)p[3].GetElem(0).IntValue, (int)p[3].GetElem(1).IntValue));
+        }
+        else
+        {
+            for (var i = 0; i < p[1].ArraySize; i++)
+            {
+                list.Add(((int)p[1].GetElem(i).IntValue, (int)p[2].GetElem(i).IntValue,
+                    (int)p[3].GetElem(i * 2).IntValue, (int)p[3].GetElem(i * 2 + 1).IntValue));
+            }
+        }
+
+        runner.Table.SetSchedules(npc.NpcNum, list);
+        return Zero();
+    }
+
+    /// <summary>Exult <c>revert_schedule(npc)</c>: the NPC's schedules from <c>STATIC/SCHEDULE.DAT</c> again.</summary>
+    UsecodeValue RevertSchedule(UsecodeValue[] p)
+    {
+        if (ScheduledNpc(p[0]) is { } npc)
+        {
+            _vm.Schedules?.Table.Revert(npc.NpcNum);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>run_schedule(npc)</c>: back to the schedule of the hour.</summary>
+    UsecodeValue RunSchedule(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { IsActor: true } npc)
+        {
+            _vm.Schedules?.RunSchedule(npc);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>remove_from_area(shape, frame, [x, y], [x2, y2])</c>: every such thing standing in the rectangle goes.</summary>
+    UsecodeValue RemoveFromArea(UsecodeValue[] p)
+    {
+        var shape = (int)p[0].IntValue;
+        var frame = (int)p[1].IntValue;
+        var x0 = (int)p[2].GetElem(0).IntValue;
+        var y0 = (int)p[2].GetElem(1).IntValue;
+        var x1 = (int)p[3].GetElem(0).IntValue;
+        var y1 = (int)p[3].GetElem(1).IntValue;
+        if (x1 < x0 || y1 < y0)
+        {
+            return Zero();
+        }
+
+        var found = new List<U7Object>();
+        for (var cx = x0 / U7Constants.TilesPerChunk; cx <= x1 / U7Constants.TilesPerChunk; cx++)
+        {
+            for (var cy = y0 / U7Constants.TilesPerChunk; cy <= y1 / U7Constants.TilesPerChunk; cy++)
+            {
+                found.AddRange(_vm.Map.ObjectsInChunk(cx, cy).Where(o =>
+                    o.Shape == shape && o.Frame == frame && o.Tx >= x0 && o.Tx <= x1 && o.Ty >= y0 && o.Ty <= y1));
+            }
+        }
+
+        foreach (var obj in found)
+        {
+            _vm.Map.RemoveObject(obj);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>get_usecode_fun(item)</c>: the function it runs (an actor's assigned or own, else its shape's).</summary>
+    UsecodeValue GetUsecodeFun(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is not { } obj)
+        {
+            return Zero();
+        }
+
+        var fun = obj.IsActor || obj.IsEgg ? obj.GetUsecode() : -1;
+        return UsecodeValue.FromInt(fun >= 0 ? fun : _vm.GetItemFun(obj));
+    }
+
+    /// <summary>
+    /// Exult <c>set_usecode_fun(item, fun)</c>: an actor (or a usecode egg)
+    /// runs that function; an actor keeps its name from UCC's table, which a
+    /// save writes instead of the number; a negative one clears it.
+    /// </summary>
+    UsecodeValue SetUsecodeFun(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is not { } obj)
+        {
+            return Zero();
+        }
+
+        var fun = (int)p[1].IntValue;
+        if (obj.IsActor)
+        {
+            obj.AssignedUsecode = fun < 0 ? -1 : fun;
+            obj.UsecodeName = fun < 0 ? null : _vm.File.Symbols?.Find(fun)?.Name;
+        }
+        else if (obj.IsEgg && obj.EggType == U7.World.EggType.Usecode)
+        {
+            obj.EggData2 = fun;
+        }
+
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>set_intercept_item(item or [x, y(, z)] or [obj, x, y, z])</c>:
+    /// the next <c>click_on_item</c> answers with it at once; anything else,
+    /// the avatar's tile.
+    /// </summary>
+    UsecodeValue SetInterceptItem(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { } obj)
+        {
+            _vm.InterceptItem = obj;
+            _vm.InterceptTile = null;
+            return Zero();
+        }
+
+        var size = p[0].ArraySize;
+        var off = size == 4 ? 1 : 0;
+        _vm.InterceptTile = size is >= 2 and <= 4
+            ? new TileCoord((int)p[0].GetElem(off).IntValue, (int)p[0].GetElem(1 + off).IntValue,
+                size >= 3 ? (int)p[0].GetElem(2 + off).IntValue : 0)
+            : new TileCoord(_vm.Avatar.Tx, _vm.Avatar.Ty, _vm.Avatar.Tz);
+        return Zero();
+    }
+
+    /// <summary>Exult <c>save_pos(item)</c>: where <c>teleport_to_saved_pos</c> goes back to, kept in <c>usecode.dat</c>.</summary>
+    UsecodeValue SavePos(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { } obj)
+        {
+            _vm.SavedPos = new TileCoord(obj.Tx, obj.Ty, obj.Tz);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>teleport_to_saved_pos(avatar)</c>: the party back to the saved spot (a bad one, Exult's Monitor fix for old games).</summary>
+    UsecodeValue TeleportToSavedPos(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) == _vm.Avatar)
+        {
+            if (_vm.SavedPos.Tx is < 0 or >= U7Constants.NumTiles)
+            {
+                _vm.SavedPos = new TileCoord(719, 2608, 1);
+            }
+
+            _vm.TeleportParty?.Invoke(_vm.SavedPos);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>set_npc_name(npc, name)</c>.</summary>
+    UsecodeValue SetNpcName(UsecodeValue[] p)
+    {
+        if (_vm.GetItem(p[0]) is { IsActor: true } npc)
+        {
+            npc.NpcName = p[1].StrValue ?? "";
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>remove_npc_face0/1</c>: the pending text first, then that slot's face goes.</summary>
+    UsecodeValue RemoveSlotFace(int slot)
+    {
+        _vm.ShowPendingText();
+        _vm.AfterText(() =>
+        {
+            _vm.Conv.RemoveSlotFace(slot);
+            _vm.NotifyFaces();
+        });
+        return Zero();
+    }
+
+    /// <summary>Exult <c>change_npc_face0/1(frame)</c>: the pending text first, then that slot's face in another frame, speaking next.</summary>
+    UsecodeValue ChangeNpcFace(UsecodeValue[] p, int slot)
+    {
+        _vm.ShowPendingText();
+        var frame = (int)p[0].IntValue;
+        _vm.AfterText(() =>
+        {
+            _vm.Conv.ChangeFaceFrame(frame, slot);
+            _vm.NotifyFaces();
+        });
+        return Zero();
+    }
+
+    /// <summary>Exult <c>set_conversation_slot(0 or 1)</c>: which face speaks next.</summary>
+    UsecodeValue SetConversationSlot(UsecodeValue[] p)
+    {
+        var slot = (int)p[0].IntValue;
+        _vm.AfterText(() => _vm.Conv.SetSlot(slot));
+        return Zero();
+    }
+
+    /// <summary>
+    /// Exult <c>fade_palette_sleep(cycles, 1, in_out)</c>: a fade with the
+    /// sleep music (track 33 going dark, after the text said so far; 31
+    /// waking, the hour's palette again).
+    /// </summary>
+    UsecodeValue FadePaletteSleep(UsecodeValue[] p)
+    {
+        var cycles = (int)p[0].IntValue;
+        var fadeIn = p[2].IntValue != 0;
+        if (!fadeIn)
+        {
+            _vm.ShowPendingText();
+            _vm.Music?.Start(33, false);
+        }
+        else
+        {
+            _vm.Music?.Start(31, false);
+            _vm.Lighting?.ResetPalette();
+        }
+
+        _vm.StartFade(cycles, fadeIn);
         return Zero();
     }
 
@@ -2314,8 +2833,12 @@ public sealed class BgIntrinsics
     /// <summary>Exult <c>sailor</c>: the barge's current captain (the Ferryman or the sails).</summary>
     U7Object? _sailor;
 
-    /// <summary>Exult <c>Is_moving_barge_flag</c> (BG): on_moving_barge and active_barge.</summary>
-    static bool IsMovingBargeFlag(int fnum) => fnum is U7.Actors.ObjFlag.OnMovingBarge or U7.Actors.ObjFlag.ActiveBarge;
+    /// <summary>Exult <c>Is_moving_barge_flag</c>: in Serpent Isle also its own flag 17 (the ice raft needs 10 too).</summary>
+    static bool IsMovingBargeFlag(int fnum) =>
+        fnum is U7.Actors.ObjFlag.OnMovingBarge or U7.Actors.ObjFlag.ActiveBarge || (GameContext.IsSi && fnum == SiOnMovingBarge);
+
+    /// <summary>Exult <c>si_on_moving_barge</c>.</summary>
+    const int SiOnMovingBarge = 17;
 
     UsecodeValue SetItemFlag(UsecodeValue[] p)
     {

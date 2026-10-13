@@ -1,0 +1,12 @@
+#	The bridge's new shapes (the remake's Data/ShapeAdditions.cs).
+#	:shape/art/the shape whose information it takes/name
+#	The Serpent of Blackrock the avatar brings back from Ultima Underworld II:
+#	Serpent Isle's own art (shape 262), read from its files, never copied.
+
+%%section version
+:1
+%%endsection
+
+%%section shapes
+:1101/si:262/914/blackrock serpent
+%%endsection

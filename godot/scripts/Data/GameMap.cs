@@ -37,6 +37,8 @@ public sealed class GameMap
     readonly byte[]?[][] _dungeonLevels;
     /// <summary>Exult <c>Chunk_cache</c> blocked flags: what solid objects occupy, per tile and lift.</summary>
     public ChunkBlocking Blocking { get; }
+    /// <summary>What stops light, per tile and lift (RENDERER.md 5.6), kept as <see cref="Blocking"/> is.</summary>
+    public U7.World.LightOcclusion LightBlocking { get; }
     /// <summary>
     /// Exult <c>Chunk_cache</c>'s doors: each chunk's doors in its list's
     /// order, built on first use (<see cref="FindDoor"/>), then kept as
@@ -78,6 +80,7 @@ public sealed class GameMap
     {
         Catalog = catalog;
         Blocking = new ChunkBlocking(this);
+        LightBlocking = new U7.World.LightOcclusion(this);
         ChunkObjects = new List<U7Object>[U7Constants.NumChunks][];
         _dungeonLevels = new byte[]?[U7Constants.NumChunks][];
         _chunkEggs = new ChunkEggs?[U7Constants.NumChunks][];
@@ -280,6 +283,7 @@ public sealed class GameMap
         var cy = U7Constants.WrapChunk(obj.Ty / U7Constants.TilesPerChunk);
         ChunkObjects[cx][cy].Add(obj);
         Blocking.Update(obj, add: true);
+        LightBlocking.Update(obj, add: true);
         if (Catalog[obj.Shape].IsBuilding)
         {
             _covers.Clear();
@@ -314,6 +318,7 @@ public sealed class GameMap
         if (ChunkObjects[cx][cy].Remove(obj))
         {
             Blocking.Update(obj, add: false);
+            LightBlocking.Update(obj, add: false);
             if (Catalog[obj.Shape].IsBuilding)
             {
                 _covers.Clear();
@@ -404,15 +409,21 @@ public sealed class GameMap
                     }
 
                     var cmp = RenderOrdering.Compare(info, listInfos is null ? new RenderOrdering.Info(other, Catalog) : listInfos[i]);
+                    // Exult Map_chunk::add_dependencies: in Serpent Isle the Y shapes go over the Y depression.
+                    if (cmp == 0 && GameContext.IsSi && obj.Shape == 0xd1 && other is { Shape: 0xd1, Frame: 17 })
+                    {
+                        cmp = 1;
+                    }
+
                     if (cmp == 1)
                     {
-                        (obj.Dependencies ??= new HashSet<U7Object>()).Add(other);
-                        (other.Dependors ??= new HashSet<U7Object>()).Add(obj);
+                        (obj.Dependencies ??= new ObjectSet()).Add(other);
+                        (other.Dependors ??= new ObjectSet()).Add(obj);
                     }
                     else if (cmp == -1)
                     {
-                        (other.Dependencies ??= new HashSet<U7Object>()).Add(obj);
-                        (obj.Dependors ??= new HashSet<U7Object>()).Add(other);
+                        (other.Dependencies ??= new ObjectSet()).Add(obj);
+                        (obj.Dependors ??= new ObjectSet()).Add(other);
                     }
                 }
             }
@@ -1019,6 +1030,7 @@ public sealed class GameMap
         if (inWorld)
         {
             Blocking.Update(obj, add: false);
+            LightBlocking.Update(obj, add: false);
             if (Catalog[obj.Shape].IsBuilding || Catalog[shape].IsBuilding)
             {
                 _covers.Clear();
@@ -1048,6 +1060,7 @@ public sealed class GameMap
         if (inWorld)
         {
             Blocking.Update(obj, add: true);
+            LightBlocking.Update(obj, add: true);
         }
     }
 
@@ -1427,7 +1440,8 @@ public sealed class GameMap
 
     void AddDungeonTiles(int x0, int y0, int w, int h, int lift)
     {
-        var z = (byte)Math.Clamp(lift, 0, 255);
+        // Exult Map_chunk::add_dungeon_levels: "SI has roofs at random levels!!", so they count as 5.
+        var z = (byte)(GameContext.IsSi ? 5 : Math.Clamp(lift, 0, 255));
         for (var ty = y0; ty < y0 + h; ty++)
         {
             for (var tx = x0; tx < x0 + w; tx++)
@@ -1583,6 +1597,24 @@ public sealed class GameMap
             var scx = 16 * (schunk % 12);
             var i = 0;
             ParseIreg(data, ref i, scx, scy, null);
+            if (schunk == 10 * 12 + 11 && GameContext.IsSi)
+            {
+                FixSilverSeedLever();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Game_map::get_ireg_objects</c>' fixup for Serpent Isle: the
+    /// lever in the Silver Seed (shape 787, frame 5, at 2936,2726) moves to
+    /// 2937,2727,2. Both tiles are in one chunk, read but not yet set up.
+    /// </summary>
+    void FixSilverSeedLever()
+    {
+        var chunk = ChunkObjects[2936 / U7Constants.TilesPerChunk][2726 / U7Constants.TilesPerChunk];
+        if (chunk.FirstOrDefault(o => o is { Shape: 787, Frame: 5, Tx: 2936, Ty: 2726 }) is { } lever)
+        {
+            (lever.Tx, lever.Ty, lever.Tz) = (2937, 2727, 2);
         }
     }
 
@@ -1831,41 +1863,45 @@ public sealed class GameMap
         int shape, int frame, U7Object? parent, int readyIndex)
     {
         var info = Catalog[shape];
-        var skip = info.Name.Contains("jawbone", StringComparison.OrdinalIgnoreCase);
         var type = entry[4] + 256 * entry[5];
         // 13-byte entries are Exult Dead_body records: npc num at [8..9], lift at [10].
         var isBody = testlen == 13;
         var lift = NibbleSwap(entry[isBody ? 10 : 9]) & 0xf;
         var quality = entry.Length > 7 ? entry[7] : 0;
-        var liveNpc = isBody && entry.Length > 9 ? entry[8] | (entry[9] << 8) : -1;
+        // Exult read_ireg_objects for a body shape: whose body it is (the avatar has none).
+        var liveNpc = -1;
+        if (U7.Actors.Bodies.IsBodyShape(shape) && quality == 1 && entry.Length > 9 &&
+            (isBody || entry[8] >= 0x80 || GameContext.IsSi))
+        {
+            liveNpc = isBody ? entry[8] | (entry[9] << 8) : (entry[8] - 0x80) & 0xff;
+            liveNpc = liveNpc == 0 ? -1 : liveNpc;
+        }
         var flagByte = testlen == 13
             ? (entry.Length > 12 ? entry[12] : (byte)0)
             : (entry.Length > 11 ? entry[11] : (byte)0);
         uint flags = ((uint)(flagByte & 1) << 0) | (((uint)(flagByte >> 3) & 1u) << 11);
 
-        U7Object? obj = null;
-        if (!skip)
+        U7Object? obj;
+        if (parent is not null)
         {
-            if (parent is not null)
+            obj = MakeObject(tilex, tiley, lift, shape, frame, quality, ObjectKind.Ireg);
+            obj.Flags = flags;
+            obj.LiveNpcNum = liveNpc;
+            AddContained(parent, obj, readyIndex);
+        }
+        else
+        {
+            obj = null;
+            var wcx = scx + cx;
+            var wcy = scy + cy;
+            if ((uint)wcx < U7Constants.NumChunks && (uint)wcy < U7Constants.NumChunks)
             {
-                obj = MakeObject(tilex, tiley, lift, shape, frame, quality, ObjectKind.Ireg);
+                obj = MakeObject(
+                    wcx * 16 + tilex, wcy * 16 + tiley, lift, shape, frame, quality,
+                    ObjectKind.Ireg);
                 obj.Flags = flags;
                 obj.LiveNpcNum = liveNpc;
-                AddContained(parent, obj, readyIndex);
-            }
-            else
-            {
-                var wcx = scx + cx;
-                var wcy = scy + cy;
-                if ((uint)wcx < U7Constants.NumChunks && (uint)wcy < U7Constants.NumChunks)
-                {
-                    obj = MakeObject(
-                        wcx * 16 + tilex, wcy * 16 + tiley, lift, shape, frame, quality,
-                        ObjectKind.Ireg);
-                    obj.Flags = flags;
-                    obj.LiveNpcNum = liveNpc;
-                    ChunkObjects[wcx][wcy].Add(obj);
-                }
+                ChunkObjects[wcx][wcy].Add(obj);
             }
         }
 

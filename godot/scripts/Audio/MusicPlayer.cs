@@ -57,8 +57,20 @@ public sealed class MusicPlayer : IDisposable
     public static string TrackPath(int track) =>
         Path.Combine(U7Paths.AssetsDir, "audio", "music_mt32", $"{track:D4}_MT32MUS.MID");
 
-    /// <summary>Exult <c>MyMidiPlayer::start_music(num, repeat)</c>.</summary>
-    public bool Start(int track, bool repeat) => Start(TrackPath(track), -1, repeat, track);
+    /// <summary>
+    /// Exult <c>MyMidiPlayer::start_music(num, repeat)</c>. Black Gate's
+    /// tracks only: Serpent Isle's numbering and files (Exult
+    /// <c>Audio.cc</c>) wait for docs/SERPENT_ISLE.md's M7.
+    /// </summary>
+    public bool Start(int track, bool repeat) =>
+        GameContext.IsBg ? Start(TrackPath(track), -1, repeat, track) : StopFor($"music {track}: Serpent Isle's music isn't played yet");
+
+    bool StopFor(string why)
+    {
+        Stop();
+        LastError = why;
+        return false;
+    }
 
     /// <summary>
     /// Exult <c>start_music(fname, num, repeat)</c>: the music of another

@@ -1,6 +1,6 @@
 """Add the barges of INITGAME.DAT, with the objects that follow them, to a save made before barges were read.
 
-usage: python scripts/repair_barges.py <slot> [<slot> ...]   (saves/<slot>/)
+usage: python scripts/repair_barges.py <slot> [<slot> ...]   (saves/bg/<slot>/)
 Each barge entry and the entries after it up to the end of their list are appended to the
 save's U7IREGxx, ended by 01 (read back as a barge whose parts go into the world).
 A superchunk that already has a barge is left alone.
@@ -63,7 +63,7 @@ def has_barge(data):
 blocks = barge_blocks()
 for slot in sys.argv[1:]:
     for sc, items in blocks.items():
-        path = os.path.join(ROOT, "saves", slot, "U7IREG" + sc)
+        path = os.path.join(ROOT, "saves", "bg", slot, "U7IREG" + sc)
         data = open(path, "rb").read()
         if has_barge(data):
             print(slot, sc, "already has a barge")

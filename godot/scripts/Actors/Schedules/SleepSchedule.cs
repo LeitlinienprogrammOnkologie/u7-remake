@@ -10,12 +10,12 @@ namespace U7.Actors;
 /// </summary>
 public sealed class SleepSchedule(NpcBrain brain) : Schedule(brain)
 {
-    // Exult Sleep_schedule: BG bedspread frames 3..16; even = spread out.
-    const int Spread0 = 3;
-    const int Spread1 = 16;
+    // Exult Sleep_schedule: the bedspread frames, 3..16 in Black Gate, 7..20 in Serpent Isle; even = spread out.
+    static int Spread0 => GameContext.IsSi ? 7 : 3;
+    static int Spread1 => GameContext.IsSi ? 20 : 16;
 
-    /// <summary>Exult's BG beds: east-west (696), north-south (1011), and the gargoyles' futons (363, 312).</summary>
-    static readonly int[] BedShapes = [696, 1011, 363, 312];
+    /// <summary>Exult's beds: east-west (696), north-south (1011), and in Black Gate the gargoyles' futons (363, 312).</summary>
+    static int[] BedShapes => GameContext.IsSi ? [696, 1011] : [696, 1011, 363, 312];
 
     /// <summary>Exult <c>SleepUsecode</c>: what a nap in bed runs (BG 0x622: the hours, the fade, the dreams).</summary>
     const int SleepUsecode = 0x622;
@@ -214,7 +214,7 @@ public sealed class SleepSchedule(NpcBrain brain) : Schedule(brain)
         {
             _floorLoc = FloorSpot(_floorLoc ?? FloorBelow());
             var frnum = bed.Frame;
-            if (!_interrupted && newType != ScheduleType.Combat && frnum is >= Spread0 and <= Spread1 && frnum % 2 == 0 &&
+            if (!_interrupted && newType != ScheduleType.Combat && frnum >= Spread0 && frnum <= Spread1 && frnum % 2 == 0 &&
                 !IsBedOccupied(bed))
             {
                 makeBed = true;

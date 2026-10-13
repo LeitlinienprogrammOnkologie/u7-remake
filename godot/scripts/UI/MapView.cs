@@ -1,4 +1,5 @@
 using Godot;
+using U7.Core;
 using U7.Usecode;
 
 namespace U7.UI;
@@ -45,7 +46,8 @@ public sealed partial class MapView : Node2D
     }
 
     /// <summary>Whether this view paints <paramref name="picture"/> (the map, with its painting at hand).</summary>
-    public bool Paints(UsecodePicture picture) => picture.Sprite == BgIntrinsics.MapSprite && Map is not null;
+    /// <remarks>Britannia's painting; Serpent Isle shows its map sprite until a painting of it is fitted.</remarks>
+    public bool Paints(UsecodePicture picture) => picture.Sprite == BgIntrinsics.MapSprite && Map is not null && GameContext.IsBg;
 
     public override void _Process(double delta)
     {

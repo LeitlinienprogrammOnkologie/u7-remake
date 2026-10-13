@@ -1,0 +1,15 @@
+#	The remake's new shapes for Black Gate (Data/ShapeAdditions.cs).
+#	:shape/art/the shape whose information it takes/name
+#	The art is an Exult shape file beside this one, or Serpent Isle's
+#	(si:<shape>, when it is installed).
+#
+#	keyring.shp: Exult's BG Keyring mod (content/bgkeyring, GPL; Marzo Junior
+#	and the Exult team): frame 0 empty, 1-3 holding that many keys, 4 more.
+
+%%section version
+:1
+%%endsection
+
+%%section shapes
+:1100/keyring.shp/641/keyring
+%%endsection

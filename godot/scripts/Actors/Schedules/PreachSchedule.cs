@@ -61,7 +61,8 @@ public sealed class PreachSchedule(NpcBrain brain) : Schedule(brain)
                 }
                 else
                 {
-                    _state = Rng.Next(3) != 0 ? State.Exhort : Rng.Next(3) != 0 ? State.Visit : State.FindIcon;
+                    // Exult: a Serpent Isle preacher never goes to the icon.
+                    _state = Rng.Next(3) != 0 ? State.Exhort : GameContext.IsSi || Rng.Next(3) != 0 ? State.Visit : State.FindIcon;
                     Start(Std, 2000 + Rng.Next(2000));
                 }
 

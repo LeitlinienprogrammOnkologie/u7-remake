@@ -26,6 +26,13 @@ public sealed class VgaFont
     /// <summary>FONTS.VGA, loaded once.</summary>
     public static VgaShapeFile File => _file ??= new VgaShapeFile(Path.Combine(U7Paths.StaticDir, "FONTS.VGA"));
 
+    /// <summary>The game was switched (<see cref="GameContext.Switch"/>): FONTS.VGA is the other game's.</summary>
+    public static void Reset()
+    {
+        _file = null;
+        Fonts.Clear();
+    }
+
     /// <summary>The FONTS.VGA font, or -1 for one from elsewhere.</summary>
     public int Number { get; }
     public int HorLead { get; }

@@ -13,7 +13,10 @@ namespace U7.Actors;
 /// </summary>
 public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
 {
-    const int DoughShape = 658;
+    /// <summary>Exult's <c>dough_shp</c>: 658 in Black Gate; in Serpent Isle 863 (the flour's shape) from frame 16 on.</summary>
+    static int DoughShape => GameContext.IsSi ? 863 : 658;
+    /// <summary>The dough's first frame (flat; then the ball, then baking): 0, or 16 in Serpent Isle.</summary>
+    static int DoughFrame => GameContext.IsSi ? 16 : 0;
     const int FlourShape = 863;
     const int OvenShape = 831;
     const int StoveShape = 664;
@@ -124,14 +127,14 @@ public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
                 dough.ClearFlag(ObjFlag.OkayToTake);
                 var dir = ObjectGeometry.Direction(Npc, dough);
                 int[] knead = [ActorWalker.DirFrame(dir, 3), ActorWalker.DirFrame(dir, 0)];
-                if (dough.Frame == 0)
+                if (dough.Frame == DoughFrame)
                 {
-                    SetAction(new SequenceAction(100, new FramesAction(knead, 500), new FramesAction([1], 250, dough),
-                        new FramesAction(knead, 500), new FramesAction([2], 250, dough)));
+                    SetAction(new SequenceAction(100, new FramesAction(knead, 500), new FramesAction([DoughFrame + 1], 250, dough),
+                        new FramesAction(knead, 500), new FramesAction([DoughFrame + 2], 250, dough)));
                 }
-                else if (dough.Frame == 1)
+                else if (dough.Frame == DoughFrame + 1)
                 {
-                    SetAction(new SequenceAction(100, new FramesAction(knead, 500), new FramesAction([2], 250, dough)));
+                    SetAction(new SequenceAction(100, new FramesAction(knead, 500), new FramesAction([DoughFrame + 2], 250, dough)));
                 }
 
                 _state = State.RemoveFromOven;
@@ -246,7 +249,7 @@ public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
         if (inOven is null)
         {
             // Baking dough?
-            if (Nearby(npcpos, DoughShape, 20, InOvenQuality, 2) is [var baking, ..] && baking != dough)
+            if (Nearby(npcpos, DoughShape, 20, InOvenQuality, DoughFrame + 2) is [var baking, ..] && baking != dough)
             {
                 baking.ClearFlag(ObjFlag.OkayToTake);
                 _doughInOven = baking;
@@ -265,7 +268,12 @@ public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
             }
         }
 
-        if (dough is null && Nearby(npcpos, DoughShape, 20, DoughQuality) is [var leftover, ..] &&
+        // Exult: Serpent Isle's dough is only its three frames of the flour's shape.
+        List<U7Object> leftovers = GameContext.IsSi
+            ? [.. Nearby(npcpos, DoughShape, 20, DoughQuality, 16), .. Nearby(npcpos, DoughShape, 20, DoughQuality, 17),
+                .. Nearby(npcpos, DoughShape, 20, DoughQuality, 18)]
+            : Nearby(npcpos, DoughShape, 20, DoughQuality);
+        if (dough is null && leftovers is [var leftover, ..] &&
             leftover != Valid(_doughInOven))
         {
             // Unused dough on a table: walk to it if we can.
@@ -333,7 +341,7 @@ public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
             Map.RemoveObject(old);
         }
 
-        var dough = Map.CreateIregObject(DoughShape, 0);
+        var dough = Map.CreateIregObject(DoughShape, DoughFrame);
         Equipment.AddToActor(Npc, dough, Map.Catalog, Map, dontCheck: true);
         dough.Quality = DoughQuality;
         _dough = dough;
@@ -377,7 +385,8 @@ public sealed class BakeSchedule(NpcBrain brain) : Schedule(brain)
 
         var (x, y, w, h) = ObjectGeometry.Footprint(display);
         ObjectGeometry.PerimeterTile(x, y, w, h, Rng.Next(2 * w + 2 * h + 4), out var spot, out var spotOnTable);
-        var walk = PathTo(spot, 2);
+        // Exult: to the display table within 2 tiles, in Serpent Isle within 1.
+        var walk = PathTo(spot, GameContext.IsSi ? 1 : 2);
         // (Exult's perimeter tiles are at lift 0.)
         spotOnTable = spotOnTable with { Tz = spotOnTable.Tz + Map.Catalog[display.Shape].DimZ };
         // Set the bread down if the spot is free.

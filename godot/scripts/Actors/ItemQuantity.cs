@@ -11,21 +11,18 @@ namespace U7.Actors;
 /// </summary>
 public sealed class ItemQuantity
 {
-    /// <summary>Exult <c>shape_info.txt</c> quantity_frames (BG): bolts, arrows, musket ammo, lockpicks, money.</summary>
-    static readonly HashSet<int> QuantityFrameShapes = [417, 723, 948, 554, 556, 558, 560, 568, 722, 581, 627, 644];
+    /// <summary>Exult <c>Shape_info::has_quantity_frames</c> (<c>shape_info.txt</c>'s quantity_frames: Black Gate's ammunition, lockpicks, money).</summary>
+    public static bool HasQuantityFrames(int shape) => ShapeCatalog.Current[shape].QuantityFrames;
 
-    /// <summary>Exult <c>Shape_info::has_quantity_frames</c>.</summary>
-    public static bool HasQuantityFrames(int shape) => QuantityFrameShapes.Contains(shape);
-
-    /// <summary>Exult <c>shape_info.txt</c> locked_containers (BG).</summary>
-    static readonly HashSet<int> LockedContainers = [522, 798];
+    /// <summary>Exult <c>Shape_info::is_container_locked</c> (<c>shape_info.txt</c>'s locked_containers).</summary>
+    static bool IsLocked(int shape) => ShapeCatalog.Current[shape].Locked;
 
     /// <summary>Exult <c>Game_object::inside_locked</c>: some container holding it, at any depth, is locked.</summary>
     public static bool InsideLocked(U7Object obj)
     {
         for (var above = obj.Container; above is not null; above = above.Container)
         {
-            if (LockedContainers.Contains(above.Shape))
+            if (IsLocked(above.Shape))
             {
                 return true;
             }
@@ -48,7 +45,7 @@ public sealed class ItemQuantity
     }
 
     static bool CanBeAdded(U7Object cont, int shape, bool allowLocked = false) =>
-        cont.Shape != shape && (allowLocked || !LockedContainers.Contains(cont.Shape));
+        cont.Shape != shape && (allowLocked || !IsLocked(cont.Shape));
 
     /// <summary>Exult's shape, quality and frame test (any for <see cref="U7Constants.AnyShape"/>; the frame without its reflection).</summary>
     public static bool Matches(U7Object obj, int shape, int qual, int frame) =>
@@ -155,7 +152,7 @@ public sealed class ItemQuantity
         {
             obj.Frame = 0;
         }
-        else if (QuantityFrameShapes.Contains(obj.Shape))
+        else if (info.QuantityFrames)
         {
             var baseFrame = _ammo?[obj.Shape] is not null || info.ReadyType == ReadySpot.TripleBolts ? 24 : 0;
             obj.Frame = baseFrame + (newquant > 12 ? 7 : newquant > 6 ? 6 : newquant - 1);
@@ -195,7 +192,7 @@ public sealed class ItemQuantity
         }
 
         var hasQuantity = _catalog[shape].HasQuantity;
-        var hasQuantityFrames = hasQuantity && QuantityFrameShapes.Contains(shape);
+        var hasQuantityFrames = hasQuantity && _catalog[shape].QuantityFrames;
         var children = cont.Contents.Where(c => !c.Removed).ToList();
         foreach (var obj in children)
         {

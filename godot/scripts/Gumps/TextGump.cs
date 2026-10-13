@@ -27,7 +27,7 @@ public abstract class TextGump : Gump
         Font = VgaFont.Get(font);
     }
 
-    bool IsScroll => GumpShape == U7Constants.GumpScroll;
+    bool IsScroll => this is ScrollGump;
 
     /// <summary>Exult <c>Text_gump::add_text</c>: append, starting a new line unless the text ended a page.</summary>
     public void AddText(string str)
@@ -193,8 +193,9 @@ public abstract class TextGump : Gump
 /// <summary>Exult <c>Book_gump</c>: text on two facing pages.</summary>
 public sealed class BookGump : TextGump
 {
-    public BookGump(int font = U7Constants.BookFont)
-        : base(U7Constants.GumpBook, font)
+    /// <param name="gumpShape">Exult <c>book_mode_ex</c>'s own gump, or -1 for the game's book.</param>
+    public BookGump(int font = U7Constants.BookFont, int gumpShape = -1)
+        : base(gumpShape >= 0 ? gumpShape : U7Constants.GumpBook, font)
     {
     }
 
@@ -205,8 +206,9 @@ public sealed class BookGump : TextGump
 /// <summary>Exult <c>Scroll_gump</c>: one page of text.</summary>
 public sealed class ScrollGump : TextGump
 {
-    public ScrollGump(int font = U7Constants.BookFont)
-        : base(U7Constants.GumpScroll, font)
+    /// <param name="gumpShape">Exult <c>book_mode_ex</c>'s own gump, or -1 for the game's scroll.</param>
+    public ScrollGump(int font = U7Constants.BookFont, int gumpShape = -1)
+        : base(gumpShape >= 0 ? gumpShape : U7Constants.GumpScroll, font)
     {
     }
 

@@ -6,21 +6,19 @@ namespace U7.Usecode;
 /// <summary>
 /// Exult <c>usecode.dat</c> (<c>Usecode_internal::write</c> / <c>read</c>):
 /// the party in the order it joined, the usecode timers (game hour each was
-/// set) and a saved position. Its companion <c>usecode.var</c> holds usecode
-/// statics, which only Exult-compiled usecode has; Black Gate's never uses
-/// them, so it is written empty.
+/// set) and a saved position. Its companion <c>usecode.var</c> holds UCC's
+/// statics (<see cref="UsecodeVars"/>).
 /// </summary>
 public sealed class UsecodeDat
 {
     /// <summary>Exult <c>EXULT_PARTY_MAX</c>.</summary>
     public const int PartyMax = 8;
     public const string FileName = "USECODE.DAT";
-    public const string VarsFileName = "USECODE.VAR";
 
     /// <summary>Party members' NPC numbers, in party order.</summary>
     public List<int> Party { get; } = new();
     public Dictionary<int, int> Timers { get; } = new();
-    /// <summary>Exult <c>saved_pos</c> / <c>saved_map</c> (kept for Exult; Black Gate never sets them).</summary>
+    /// <summary>Exult <c>saved_pos</c> / <c>saved_map</c> (usecode's <c>save_pos</c>).</summary>
     public TileCoord SavedPos { get; private set; } = new(-1, -1, -1);
     public int SavedMap { get; private set; } = -1;
 
@@ -78,8 +76,8 @@ public sealed class UsecodeDat
         return dat;
     }
 
-    /// <summary>Exult <c>Usecode_internal::write</c>: <c>usecode.dat</c> and an empty <c>usecode.var</c>.</summary>
-    public static void Write(string dir, IReadOnlyList<int> party, IReadOnlyDictionary<int, int> timers)
+    /// <summary>Exult <c>Usecode_internal::write</c>'s <c>usecode.dat</c>.</summary>
+    public static void Write(string dir, IReadOnlyList<int> party, IReadOnlyDictionary<int, int> timers, TileCoord savedPos)
     {
         using (var w = new BinaryWriter(File.Create(Path.Combine(dir, FileName))))
         {
@@ -100,16 +98,10 @@ public sealed class UsecodeDat
             }
 
             w.Write((ushort)0xffff);
-            w.Write((short)-1); // saved position
-            w.Write((short)-1);
-            w.Write((short)-1);
-            w.Write((short)-1); // saved map
-        }
-
-        using (var w = new BinaryWriter(File.Create(Path.Combine(dir, VarsFileName))))
-        {
-            w.Write(0); // global statics
-            w.Write(0xffffffffu); // no function statics
+            w.Write((short)savedPos.Tx);
+            w.Write((short)savedPos.Ty);
+            w.Write((short)savedPos.Tz);
+            w.Write((short)(savedPos.Tx < 0 ? -1 : 0)); // saved map: Black Gate has one
         }
     }
 }

@@ -143,6 +143,36 @@ public static class ReadySpot
             23 => Scabbard,
             _ => Invalid
         };
+
+    /// <summary>Exult <c>Ready_spot_from_SI</c>: Serpent Isle's READY.DAT spots.</summary>
+    public static int FromSi(int spot) =>
+        spot switch
+        {
+            0x00 => Rhand,
+            0x01 => Lhand,
+            0x02 => Cloak,
+            0x03 => Neck,
+            0x04 => Head,
+            0x05 => Gloves,
+            0x06 => Ucont,
+            0x07 => Rfinger,
+            0x08 => Lfinger,
+            0x09 => Earrings,
+            0x0a => Ammo,
+            0x0b => Belt,
+            0x0c => Torso,
+            0x0d => Feet,
+            0x0e => Legs,
+            0x0f => Back,
+            0x10 => BackShield,
+            0x11 => Back2h,
+            0x12 => TripleBolts,
+            0x14 => BothHands,
+            0x15 => GlovesPair,
+            0x16 => NeckFill,
+            0x17 => Scabbard,
+            _ => Invalid
+        };
 }
 
 /// <summary>Exult <c>Schedule::Schedule_types</c>.</summary>
@@ -248,6 +278,9 @@ public static class ObjFlag
     public const int DontMove = 16;
     /// <summary>Exult-only <c>bg_dont_move</c> / <c>dont_render</c>.</summary>
     public const int BgDontMove = 22;
+
+    /// <summary>Exult <c>Actor::paint</c>'s flag: an actor with it isn't drawn, <c>bg_dont_render</c> (16) in Black Gate, <c>dont_render</c> (22) in Serpent Isle.</summary>
+    public static int DontRender => U7.Core.GameContext.IsSi ? BgDontMove : DontMove;
 
     /// <summary>Exult <c>Game_window::main_actor_dont_move</c>: the avatar is under usecode control.</summary>
     public static bool DontMoveMode(U7.Data.U7Object avatar) =>

@@ -1,6 +1,4 @@
-using System.Globalization;
-using System.IO;
-using U7.Core;
+using U7.Data;
 
 namespace U7.Actors;
 
@@ -56,7 +54,7 @@ public sealed class AmmoRecord
     }
 }
 
-/// <summary>Loads <c>assets/data/ammo.csv</c>.</summary>
+/// <summary>AMMO.DAT (Exult <c>Ammo_info</c>), a mod's over it.</summary>
 public sealed class AmmoTable
 {
     readonly Dictionary<int, AmmoRecord> _byShape = new();
@@ -68,80 +66,34 @@ public sealed class AmmoTable
     public bool InFamily(int shape, int family) =>
         shape == family || (this[shape] is { } a && a.Family == family);
 
+    /// <summary>Exult <c>Ammo_info::read</c>, entry by entry of AMMO.DAT.</summary>
     public static AmmoTable Load()
     {
         var table = new AmmoTable();
-        var path = Path.Combine(U7Paths.DataDir, "ammo.csv");
-        if (!File.Exists(path))
+        foreach (var (shape, b) in ShapeDataFile.Read("AMMO.DAT", 13))
         {
-            return table;
-        }
-
-        using var reader = new StreamReader(path);
-        var header = reader.ReadLine();
-        if (header is null)
-        {
-            return table;
-        }
-
-        var cols = header.Split(',');
-        int Col(string name)
-        {
-            for (var i = 0; i < cols.Length; i++)
-            {
-                if (cols[i].Equals(name, StringComparison.OrdinalIgnoreCase))
-                {
-                    return i;
-                }
-            }
-
-            return -1;
-        }
-
-        var iShape = Col("shape");
-        var iFamily = Col("family_shape");
-        var iSprite = Col("sprite_shape");
-        var iDmg = Col("damage");
-        var iType = Col("damage_type");
-        var iLucky = Col("lucky");
-        var iAuto = Col("autohit");
-        var iReturns = Col("returns");
-        var iNoBlock = Col("no_blocking");
-        var iDrop = Col("drop_type");
-        var iExplodes = Col("explodes");
-        var iHoming = Col("homing");
-        var iPowers = Col("powers");
-
-        string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
-        int Num(string[] c, int i, int fallback = 0) =>
-            int.TryParse(Get(c, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)
-                ? v
-                : fallback;
-
-        while (reader.ReadLine() is { } line)
-        {
-            var c = line.Split(',');
-            var shape = Num(c, iShape, -1);
-            if (shape < 0)
+            if (b is null)
             {
                 continue;
             }
 
+            var flags0 = b[5];
+            var homing = ((flags0 >> 4) & 3) == 3;
             table._byShape[shape] = new AmmoRecord
             {
                 Shape = shape,
-                Family = Num(c, iFamily, shape),
-                Sprite = Num(c, iSprite, -1),
-                Damage = Num(c, iDmg),
-                DamageType = Num(c, iType),
-                Lucky = Num(c, iLucky) != 0,
-                Autohit = Num(c, iAuto) != 0,
-                Returns = Num(c, iReturns) != 0,
-                NoBlocking = Num(c, iNoBlock) != 0,
-                DropType = Num(c, iDrop),
-                Explodes = Num(c, iExplodes) != 0,
-                Homing = Num(c, iHoming) != 0,
-                Powers = Num(c, iPowers)
+                Family = BitConverter.ToUInt16(b, 0),
+                Sprite = BitConverter.ToInt16(b, 2),
+                Damage = b[4],
+                Lucky = (flags0 & 1) != 0,
+                Autohit = ((flags0 >> 1) & 1) != 0,
+                Returns = ((flags0 >> 2) & 1) != 0,
+                NoBlocking = ((flags0 >> 3) & 1) != 0,
+                Homing = homing,
+                DropType = homing ? 0 : (flags0 >> 4) & 3,
+                Explodes = ((flags0 >> 6) & 1) != 0,
+                DamageType = (b[7] >> 4) & 15,
+                Powers = b[8]
             };
         }
 

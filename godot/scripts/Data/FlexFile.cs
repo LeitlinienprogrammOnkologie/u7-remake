@@ -2,11 +2,20 @@ using System.IO;
 
 namespace U7.Data;
 
+/// <summary>Entries by number, as a shape file reads them (a FLEX, or Exult's lists of shape files).</summary>
+public interface IShapeSource
+{
+    int Count { get; }
+
+    /// <summary>The entry's bytes, empty when there is none.</summary>
+    ReadOnlySpan<byte> Get(int index);
+}
+
 /// <summary>
 /// Ultima VII FLEX archive (Exult <c>files/Flex.*</c>).
 /// Header is 128 bytes, then <c>count</c> little-endian (offset, size) pairs.
 /// </summary>
-public sealed class FlexFile
+public sealed class FlexFile : IShapeSource
 {
     public const uint Magic1 = 0xffff1a00;
     public const int HeaderLength = 128;
@@ -15,6 +24,21 @@ public sealed class FlexFile
     public int Count { get; }
     readonly byte[] _data;
     readonly (int Offset, int Size)[] _entries;
+
+    /// <summary>Exult <c>Flex::is_flex</c>: whether the file has a FLEX's magic.</summary>
+    public static bool IsFlex(string path)
+    {
+        using var f = File.OpenRead(path);
+        if (f.Length < HeaderLength)
+        {
+            return false;
+        }
+
+        var magic = new byte[4];
+        f.Seek(80, SeekOrigin.Begin);
+        f.ReadExactly(magic);
+        return BitConverter.ToUInt32(magic) == Magic1;
+    }
 
     public FlexFile(string path)
     {

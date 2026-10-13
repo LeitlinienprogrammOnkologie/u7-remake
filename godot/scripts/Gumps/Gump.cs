@@ -13,20 +13,9 @@ public class Gump
 {
     public static readonly GumpArea DefaultArea = new(52, 22, 60, 40, 8, 64);
 
-    public static GumpArea AreaFor(int gumpShape) => gumpShape switch
-    {
-        U7Constants.GumpBox => new(46, 28, 74, 32, 8, 56),
-        U7Constants.GumpCrate => new(50, 20, 80, 24, 8, 64),
-        U7Constants.GumpBarrel => new(32, 32, 40, 40, 12, 124),
-        U7Constants.GumpBag => new(48, 20, 66, 44, 8, 66),
-        U7Constants.GumpBackpack => new(36, 36, 85, 40, 8, 62),
-        U7Constants.GumpBasket => new(42, 32, 70, 26, 8, 56),
-        U7Constants.GumpChest => new(40, 18, 60, 37, 8, 46),
-        U7Constants.GumpShipHold => new(38, 10, 82, 80, 8, 92),
-        U7Constants.GumpDrawer => new(36, 12, 70, 26, 8, 46),
-        U7Constants.GumpBody => new(36, 46, 84, 40, 8, 70),
-        _ => DefaultArea
-    };
+    /// <summary>Exult <c>Gump::set_object_area</c>: the game's <c>gump_area_info.txt</c> entry for the gump, else Exult's default container area.</summary>
+    public static GumpArea AreaFor(int gumpShape) =>
+        ShapeCatalog.Current.GumpAreas.TryGetValue(gumpShape, out var a) ? new(a.X, a.Y, a.W, a.H, a.CheckX, a.CheckY) : DefaultArea;
 
     public int X;
     public int Y;

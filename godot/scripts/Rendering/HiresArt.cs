@@ -23,6 +23,8 @@ public sealed class HiresArt
     HiresPack? _spritePack;
     HiresPack? _gumpPack;
     HiresPack? _facePack;
+    HiresPack? _paperdollPack;
+    HiresPack? _chunkPack;
     readonly Dictionary<(int Shape, int Frame), ShapeFrame?> _shapeFrames = new();
     readonly Dictionary<(int Sprite, int Frame), ShapeFrame?> _spriteFrames = new();
     long _cachedBytes;
@@ -56,17 +58,19 @@ public sealed class HiresArt
     /// </summary>
     public void UsePack(string? name, int scale)
     {
-        _shapePack = _spritePack = _gumpPack = _facePack = null;
+        _shapePack = _spritePack = _gumpPack = _facePack = _paperdollPack = _chunkPack = null;
         Pack = null;
         Scale = Math.Clamp(scale, 1, 8);
         if (name is not null)
         {
-            var dir = Path.Combine(U7Paths.AssetsDir, "hires", name);
+            var dir = Path.Combine(U7Paths.HiresDir, name);
             _shapePack = HiresPack.Open(Path.Combine(dir, "shapes.hrp"));
             _spritePack = HiresPack.Open(Path.Combine(dir, "sprites.hrp"));
             _gumpPack = HiresPack.Open(Path.Combine(dir, "gumps.hrp"));
             _facePack = HiresPack.Open(Path.Combine(dir, "faces.hrp"));
-            if ((_shapePack ?? _spritePack ?? _gumpPack ?? _facePack) is { } pack)
+            _paperdollPack = HiresPack.Open(Path.Combine(dir, "paperdolls.hrp"));
+            _chunkPack = HiresPack.Open(Path.Combine(dir, "chunks.hrp"));
+            if ((_shapePack ?? _spritePack ?? _gumpPack ?? _facePack ?? _paperdollPack ?? _chunkPack) is { } pack)
             {
                 Pack = name;
                 Scale = pack.Scale;
@@ -80,7 +84,32 @@ public sealed class HiresArt
     public string Describe() =>
         Pack is null
             ? $"original art at {Scale}"
-            : $"{Pack} at {Scale}: {_shapePack?.Count ?? 0} shape, {_spritePack?.Count ?? 0} sprite, {_gumpPack?.Count ?? 0} gump, {_facePack?.Count ?? 0} face frames";
+            : $"{Pack} (version {(_shapePack ?? _spritePack ?? _gumpPack ?? _facePack ?? _paperdollPack ?? _chunkPack)?.FormatVersion}) at {Scale}: " +
+              $"{_shapePack?.Count ?? 0} shape, {_spritePack?.Count ?? 0} sprite, {_gumpPack?.Count ?? 0} gump, " +
+              $"{_facePack?.Count ?? 0} face, {_paperdollPack?.Count ?? 0} paperdoll frames, {_chunkPack?.Count ?? 0} painted chunks " +
+              $"(paperdolls {(ArtLook.RedrawnPaperdolls ? "redrawn" : "original")})";
+
+    /// <summary>
+    /// A terrain (chunk template) painted whole, the pack's chunks.hrp made by
+    /// scripts/upscale/ground.py (assembled from painted materials) and
+    /// pack.py (the user's pick, 2026-10-12), at
+    /// the pack's scale; null where it isn't painted and its tiles show.
+    /// </summary>
+    public ShapeFrame? Terrain(int terrain) =>
+        _chunkPack is not null && _chunkPack.Scale == Scale ? AtScale(_chunkPack.Get(terrain, 0, ArtLook.Mix, ArtLook.TrueColour)) : null;
+
+    /// <summary>
+    /// A pack's frame at the buffer's scale: a version 3 frame painted at
+    /// another scale is resampled by nearest pixel (<see cref="ShapeFrame.Rescaled"/>),
+    /// so its placement is exact (RENDERER.md 5.4, R4).
+    /// </summary>
+    ShapeFrame? AtScale(ShapeFrame? frame) => frame is not null && frame.Scale16 != Scale * 16 ? frame.Rescaled(Scale * 16) : frame;
+
+    /// <summary>Whether the pack has the art's own colours (<see cref="ArtLook.TrueColour"/>; packs from version 2).</summary>
+    public bool HasColours => (_shapePack ?? _spritePack ?? _gumpPack ?? _facePack ?? _chunkPack)?.HasColours == true;
+
+    /// <summary>Whether the pack has redrawn paperdolls to switch to.</summary>
+    public bool HasPaperdolls => _paperdollPack is { Count: > 0 };
 
     /// <summary>
     /// For the gumps, pictures and faces: a pack's frame (SHAPES.VGA shapes and
@@ -100,9 +129,11 @@ public sealed class HiresArt
                     ? Sprite(shape, frame, Scale)
                     : null;
             case UiArt.Gump:
-                return _gumpPack?.Get(shape, VgaShapeFile.Wrap(frame, count), ArtLook.Mix);
+                return _gumpPack?.Get(shape, VgaShapeFile.Wrap(frame, count), ArtLook.Mix, ArtLook.TrueColour);
+            case UiArt.Paperdoll:
+                return ArtLook.RedrawnPaperdolls ? _paperdollPack?.Get(shape, frame, ArtLook.Mix, ArtLook.TrueColour) : null;
             default:
-                return _facePack?.Get(shape, VgaShapeFile.Wrap(frame, count), ArtLook.Mix);
+                return _facePack?.Get(shape, VgaShapeFile.Wrap(frame, count), ArtLook.Mix, ArtLook.TrueColour);
         }
     }
 
@@ -121,7 +152,7 @@ public sealed class HiresArt
 
         var made = _shapes.IsReflection(shape, frame) && _shapes.GetFrame8(shape, frame) is not null
             ? Shape(shape, frame & 0x1f, scale)?.Reflect()
-            : _shapePack?.Get(shape, frame, ArtLook.Mix) ?? _shapes.GetFrame8(shape, frame)?.Scaled(Scale);
+            : AtScale(_shapePack?.Get(shape, frame, ArtLook.Mix, ArtLook.TrueColour)) ?? _shapes.GetFrame8(shape, frame)?.Scaled(Scale);
         return Keep(_shapeFrames, (shape, frame), made);
     }
 
@@ -140,13 +171,13 @@ public sealed class HiresArt
 
         var made = _shapes.IsSpriteReflection(sprite, frame) && _shapes.GetSprite8(sprite, frame) is not null
             ? Sprite(sprite, frame & 0x1f, scale)?.Reflect()
-            : _spritePack?.Get(sprite, frame, ArtLook.Mix) ?? _shapes.GetSprite8(sprite, frame)?.Scaled(Scale);
+            : AtScale(_spritePack?.Get(sprite, frame, ArtLook.Mix, ArtLook.TrueColour)) ?? _shapes.GetSprite8(sprite, frame)?.Scaled(Scale);
         return Keep(_spriteFrames, (sprite, frame), made);
     }
 
     ShapeFrame? Keep(Dictionary<(int, int), ShapeFrame?> cache, (int, int) key, ShapeFrame? frame)
     {
-        var bytes = frame is null ? 0 : frame.Pixels.Length + (frame.Mix?.Length ?? 0);
+        var bytes = frame is null ? 0 : frame.Pixels.Length + (frame.Mix?.Length ?? 0) + (frame.Colour?.Length ?? 0) + (frame.Alpha?.Length ?? 0);
         if (_cachedBytes + bytes > CacheBudget)
         {
             Clear();
@@ -176,5 +207,6 @@ public enum UiArt
     Shape,
     Sprite,
     Gump,
-    Face
+    Face,
+    Paperdoll
 }

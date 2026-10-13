@@ -25,3 +25,14 @@ Thumbs.db
 __pycache__/
 # Hi-res art generator venv (scripts/upscale; see README)
 .venv/
+
+# Serpent Isle game data (GOG; Black Gate borrows its paperdolls, skins and shapes, Exult <SERPENT_STATIC>)
+/serpent/
+# Exult usecode compiler build (scripts/ucc/build.ps1)
+/scripts/ucc/build/
+/scripts/ucc/bin/
+# The user's painted faces (scripts/faces/prepare.py makes them ready into assets/faces)
+/u7-new-faces/
+/si-new-faces/
+# Serpent Isle voices made locally by scripts/bridge_speech.py
+/mods/eighteen/data/u7speech.spc

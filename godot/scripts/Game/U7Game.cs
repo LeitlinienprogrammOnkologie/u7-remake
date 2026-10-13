@@ -74,6 +74,7 @@ public partial class U7Game : Node2D
         try
         {
             U7Paths.Initialize();
+            SaveGame.MoveLegacySaves();
             _catalog = new ShapeCatalog();
             _shapes = new ShapeCache(_catalog);
             _map = new GameMap(_catalog);
@@ -96,12 +97,15 @@ public partial class U7Game : Node2D
                 _npcs = [avatar];
             }
 
+            ObjectNames.Npc = n => (uint)n < (uint)_npcs.Count ? _npcs[n] : null;
             _clock = new GameClock();
             var gwin = SaveGame.ReadGwin();
             if (gwin is { } g0)
             {
                 _clock.Set(g0.Day, g0.Hour, g0.Minute);
                 _clock.SpecialLight = g0.SpecialLight;
+                _clock.AmbientLight = g0.AmbientLight;
+                _clock.Infravision = g0.Infravision;
             }
 
             var schedTable = ScheduleTable.Load();
@@ -192,6 +196,17 @@ public partial class U7Game : Node2D
                 Animators = new Animators(_map, _clock),
                 Art = new HiresArt(_shapes)
             };
+            ArtLook.RedrawnPaperdolls = Settings.Get("art", "redrawn_paperdolls", false).AsBool();
+            ArtLook.PaintedFaces = Settings.Get("art", "painted_faces", true).AsBool();
+            ArtLook.TrueColour = Settings.Get("art", "true_colour", ArtLook.TrueColour).AsBool();
+            ArtLook.Renderer = Settings.Get("art", "renderer", ArtLook.Renderer).AsString();
+            ArtLook.StoreMb = Settings.Get("art", "store_mb", ArtLook.StoreMb).AsInt32();
+            ArtLook.Modern = Settings.Get("art", "modern", ArtLook.Modern).AsBool();
+            ArtLook.LutSize = Settings.Get("art", "lut", ArtLook.LutSize).AsInt32();
+            ArtLook.Occlusion = Settings.Get("art", "occlusion", ArtLook.Occlusion).AsBool();
+            ArtLook.Bloom = (float)Settings.Get("art", "bloom", ArtLook.Bloom).AsDouble();
+            ArtLook.BloomRadius = (float)Settings.Get("art", "bloom_radius", ArtLook.BloomRadius).AsDouble();
+            ArtLook.GumpPalette = Settings.Get("art", "gump_palette", ArtLook.GumpPalette).AsBool();
             _world.Art.UsePack(ArtLook.Pack, ArtLook.Scale);
             _shapes.Hires = _world.Art;
             AddChild(_world);
@@ -226,6 +241,9 @@ public partial class U7Game : Node2D
             _gumps.AlternateDrop = () => Input.IsKeyPressed(Key.Ctrl);
             _gumps.IsCombatOn = () => _combat.InCombat;
             _gumps.GumpsVga = _shapes.GumpsVga;
+            _gumps.PaperdollsAvailable = _shapes.Paperdolls is not null;
+            _gumps.Weapons = _combat.Weapons;
+            _gumps.Ammo = _combat.Ammo;
 
             var gumpLayer = new CanvasLayer { Name = "Gumps", Layer = 10 };
             AddChild(gumpLayer);
@@ -238,6 +256,7 @@ public partial class U7Game : Node2D
                 Map = _map,
                 Quantities = _combat.Quantities,
                 Zoom = _zoom,
+                World = _world,
                 TextureFilter = TextureFilterEnum.Nearest
             };
             gumpLayer.AddChild(_gumpView);
@@ -292,20 +311,42 @@ public partial class U7Game : Node2D
             GD.Print($"USECODE loaded: {usecodeFile.Count} functions.");
             _usecode = new UsecodeMachine(usecodeFile, _map, avatar);
             _usecode.Frame8 = _shapes.GetFrame8;
+            UsecodeVars.Read(_usecode);
+            if (!GameContext.IsBg)
+            {
+                _usecode.Keyring.UnionWith(SaveGame.ReadKeyring());
+            }
+
+            if (usecodeDat?.SavedPos is { Tx: >= 0 } saved)
+            {
+                _usecode.SavedPos = saved;
+            }
+
+            // Exult Actor::read: a function a save assigned by name runs through UCC's table (find_function).
+            foreach (var npc in _npcs)
+            {
+                if (npc?.UsecodeName is { } fname)
+                {
+                    npc.AssignedUsecode = usecodeFile.Symbols?.Find(fname)?.Value ?? -1;
+                }
+            }
             foreach (var (tnum, hours) in usecodeDat?.Timers ?? [])
             {
                 _usecode.Timers[tnum] = hours;
             }
 
-            // Exult Game_window::read: until the first scene (global flag 0x3b)
-            // has played, the avatar is invisible and under usecode control.
-            if (_usecode.GFlags[UsecodeMachine.DidFirstSceneFlag] == 0)
+            // Exult Game_window::read, for Black Gate: until the first scene (global
+            // flag 0x3b) has played, the avatar is invisible and under usecode control.
+            if (GameContext.IsBg)
             {
-                avatar.SetFlag(ObjFlag.DontMove);
-            }
-            else
-            {
-                avatar.ClearFlag(ObjFlag.DontMove);
+                if (_usecode.GFlags[UsecodeMachine.DidFirstSceneFlag] == 0)
+                {
+                    avatar.SetFlag(ObjFlag.DontMove);
+                }
+                else
+                {
+                    avatar.ClearFlag(ObjFlag.DontMove);
+                }
             }
 
             _usecode.Gumps = _gumps;
@@ -341,6 +382,7 @@ public partial class U7Game : Node2D
                 _avatar.ClearPath();
                 _cameraTile = null;
                 _viewTile = null;
+                CenterView(_avatar.Avatar);
                 _eggs.Activate(_avatar.Avatar, -1, -1);
             };
             _usecode.AvatarMovedByScript = actor =>
@@ -381,6 +423,7 @@ public partial class U7Game : Node2D
                 }
             };
             _usecode.Barges = _barges;
+            _usecode.CenterView = t => _cameraTile = t;
             _usecode.SetCamera = obj =>
             {
                 if (obj.IsActor)
@@ -399,13 +442,13 @@ public partial class U7Game : Node2D
                 _barges.SetMoving(_barges.Of(movingBarge), avatar);
             }
             // Walkers open doors through the doors' own usecode (Exult Path_walking_actor_action::open_door).
-            PathWalk.ActivateDoor = door => TryCallUsecode(UsecodeMachine.GetItemFun(door), door, UsecodeEvent.DoubleClick);
+            PathWalk.ActivateDoor = door => TryCallUsecode(_usecode!.GetItemFun(door), door, UsecodeEvent.DoubleClick);
             PathWalk.IsSentient = _combat.IsSentient;
             _combat.WeaponUsecode = (fun, target) => _usecode.Call(fun, target, UsecodeEvent.Weapon);
             _combat.DoSpeech = _usecode.DoSpeech;
             _combat.DeathUsecode = (npc, finish) => _usecode.WhenDone(() =>
             {
-                _usecode.Call(UsecodeMachine.GetShapeFun(npc.Shape), npc, UsecodeEvent.InternalExec);
+                _usecode.Call(_usecode.GetShapeFun(npc.Shape), npc, UsecodeEvent.InternalExec);
                 _conversation.Refresh();
                 _usecode.WhenDone(finish);
             });
@@ -419,7 +462,7 @@ public partial class U7Game : Node2D
             _schedules.ProximityUsecode = npc =>
             {
                 // Exult try_proximity_usecode: dont_halt, usecode2 <fun> npc_proximity, as a script.
-                var fun = npc.GetUsecode() >= 0 ? npc.GetUsecode() : UsecodeMachine.GetShapeFun(npc.Shape);
+                var fun = npc.GetUsecode() >= 0 ? npc.GetUsecode() : _usecode!.GetShapeFun(npc.Shape);
                 var code = UsecodeValue.FromArray(4);
                 code.PutElem(0, UsecodeValue.FromInt(0x23));
                 code.PutElem(1, UsecodeValue.FromInt(0x80));
@@ -440,14 +483,14 @@ public partial class U7Game : Node2D
             _schedules.Fight = _combat.Fight;
             _schedules.ReadyBestWeapon = npc => _combat.ReadyBestWeapon(npc);
             _schedules.Weapons = _combat.Weapons;
-            _schedules.Activate = obj =>
+            _schedules.Activate = (obj, eventId) =>
             {
                 if (UsecodeRunning)
                 {
                     return false;
                 }
 
-                RunUsecode(obj); // Exult Game_object::activate, as a double-click.
+                RunUsecode(obj, (UsecodeEvent)eventId); // Exult Game_object::activate.
                 return true;
             };
             _schedules.CallUsecode = (fun, item) => TryCallUsecode(fun, item, UsecodeEvent.DoubleClick);
@@ -494,7 +537,9 @@ public partial class U7Game : Node2D
             // Exult Game::show_menu: a start without a game to load shows the main menu, whose new game
             // asks for the avatar's name and sex first; the opening (the eggs round the avatar) waits for
             // them. The console names it itself (avatar), and opens the menu with `menu`.
-            if (U7Paths.GameDatOverride is null && string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("U7_AGENT")))
+            // Serpent Isle's shows (sigame.cc) are docs/SERPENT_ISLE.md's M7: until then it starts in the world.
+            if (U7Paths.GameDatOverride is null && GameContext.IsBg &&
+                string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("U7_AGENT")))
             {
                 ShowIntroThenMenu();
             }
@@ -506,7 +551,7 @@ public partial class U7Game : Node2D
             AgentInit();
 
             _ready = true;
-            GD.Print("Britannia loaded.");
+            GD.Print(GameContext.IsSi ? "Serpent Isle loaded." : "Britannia loaded.");
         }
         catch (Exception ex)
         {
@@ -772,7 +817,7 @@ public partial class U7Game : Node2D
         var extra = _usecode is { HudMessage.Length: > 0 } ? "" : _statusExtra;
         hud.Text =
             $"Ultima VII  {_clock.HudText()}  tile {av.Tx},{av.Ty}  lift {av.Tz}  zoom {_zoom:0.#}×\n" +
-            $"WASD/arrows walk · I inventory · C combat · F4 invincible · [ ] hour · right or left button walk · click name · double-click / E · F2 debug · F3 arena · PgUp/PgDn lift · M music · F5/F9 save/load · F6 die · Home Trinsic\n" +
+            $"WASD/arrows walk · I inventory · C combat · F4 invincible · [ ] hour · right or left button walk · click name · double-click / E · F2 debug · F3 arena · PgUp/PgDn lift · M music · F5/F9 save/load · F6 die · F7 paperdoll art · Home Trinsic\n" +
             $"hp {av.GetProp(ActorProp.Health)}  {(_combat.InCombat ? "combat" : "peace")}{_party.HudText()}" +
             (av.IsDead ? "  dead" : "") +
             (_combat.AvatarInvincible ? "  invincible" : "") +
@@ -840,6 +885,17 @@ public partial class U7Game : Node2D
     /// on free spots round it, and every egg round the new spot is tried
     /// (<c>try_all_eggs</c>) unless <paramref name="skipEggs"/>.
     /// </summary>
+    /// <summary>
+    /// Exult <c>Game_window::center_view</c>: the window is over the place at
+    /// once, so usecode asking what is on screen (<c>npc_nearby</c>) in the
+    /// same script sees the new place; the camera follows next frame.
+    /// </summary>
+    void CenterView(U7Object at)
+    {
+        var view = _combat.ViewTiles;
+        _combat.ViewTiles = view with { Position = new Vector2I(at.Tx - view.Size.X / 2, at.Ty - view.Size.Y / 2) };
+    }
+
     void TeleportParty(TileCoord t, bool skipEggs = false)
     {
         var av = _avatar.Avatar;
@@ -854,6 +910,7 @@ public partial class U7Game : Node2D
         _map.MoveObject(av, t.Tx, t.Ty, t.Tz);
         _cameraTile = null;
         _viewTile = null;
+        CenterView(av);
         _lighting.ResetPalette();
         _party.FollowTeleport();
         if (!skipEggs)
@@ -871,9 +928,9 @@ public partial class U7Game : Node2D
         var layer = new CanvasLayer { Name = "NewGame", Layer = 25 };
         AddChild(layer);
         _newGame = new NewGameView(_shapes) { Name = "NewGameView" };
-        _newGame.Finished = (name, female) =>
+        _newGame.Finished = (name, female, skin) =>
         {
-            SetAvatar(name, female);
+            SetAvatar(name, female, skin);
             layer.QueueFree();
             _newGame = null;
             _eggs.Activate(_avatar.Avatar, -1, -1);
@@ -892,11 +949,13 @@ public partial class U7Game : Node2D
     /// The new game's choice, as Exult's <c>Actor::read</c> applies it to NPC 0
     /// (<c>set_avname</c>, <c>set_avsex</c>) and <c>read_npcs</c> its shape.
     /// </summary>
-    void SetAvatar(string name, bool female)
+    void SetAvatar(string name, bool female, int skin = -1)
     {
         var av = _avatar.Avatar;
         av.NpcName = name;
         AvatarLook.SetFemale(av, female);
+        // Exult BG_Game::new_game: the skin chosen (the default skin, baseracesex, unless another).
+        av.SkinColor = skin >= 0 ? skin : AvatarLook.DefaultSkin;
         AvatarLook.SetActorShape(_map, av);
     }
 
@@ -917,7 +976,29 @@ public partial class U7Game : Node2D
             WriteFlag(EndgameFlag);
         }
 
-        PlayShow(view => new Endgame(view, _music, _clock.TotalHours, success), null);
+        PlayShow(view => new Endgame(view, _music, _clock.TotalHours, success), success ? AfterEndgame() : null);
+    }
+
+    /// <summary>
+    /// The remake's own, for the saga (Exult's game ends with the endgame): a
+    /// mod's usecode function named <c>AfterEndgame</c> takes over after a won
+    /// endgame (the bridge to Serpent Isle). The usecode that ran the endgame
+    /// is ended first, as it would never have gone on; without such a
+    /// function the game ends.
+    /// </summary>
+    Action? AfterEndgame()
+    {
+        if (_usecode?.File.Symbols?.Find("AfterEndgame") is not { } next)
+        {
+            return null;
+        }
+
+        return () =>
+        {
+            _usecode.Reset();
+            _usecode.Call(next.Value, _avatar.Avatar, UsecodeEvent.InternalExec);
+            _conversation.Refresh();
+        };
     }
 
     /// <summary>
@@ -980,7 +1061,7 @@ public partial class U7Game : Node2D
         _statusExtra = _combat.LastMessage;
     }
 
-    void RunUsecode(U7Object obj)
+    void RunUsecode(U7Object obj, UsecodeEvent eventId = UsecodeEvent.DoubleClick)
     {
         if (_usecode is null)
         {
@@ -1001,10 +1082,10 @@ public partial class U7Game : Node2D
             }
         }
 
-        var fun = obj.NpcNum >= 0 || obj.AssignedUsecode >= 0 ? obj.GetUsecode() : UsecodeMachine.GetItemFun(obj);
+        var fun = obj.NpcNum >= 0 || obj.AssignedUsecode >= 0 ? obj.GetUsecode() : _usecode!.GetItemFun(obj);
         if (fun < 0)
         {
-            fun = UsecodeMachine.GetShapeFun(obj.Shape);
+            fun = _usecode!.GetShapeFun(obj.Shape);
         }
 
         if (obj.IsActor && obj != _avatar.Avatar && _usecode.FailedCopyProtection)
@@ -1015,7 +1096,7 @@ public partial class U7Game : Node2D
         _statusExtra = obj.NpcNum >= 0
             ? $"usecode 0x{fun:X3}  npc {obj.NpcNum} {obj.NpcName}"
             : $"usecode 0x{fun:X3}  {obj.Shape}";
-        var rc = _usecode.Call(fun, obj, UsecodeEvent.DoubleClick);
+        var rc = _usecode.Call(fun, obj, eventId);
         if (rc < 0)
         {
             _statusExtra = _usecode.HudMessage;
@@ -1024,7 +1105,11 @@ public partial class U7Game : Node2D
         _conversation.Refresh();
     }
 
-    /// <summary>Loads the slot by restarting the scene on it (F9, the console's <c>load</c>); false when it holds no save.</summary>
+    /// <summary>
+    /// Loads the slot by restarting the scene on it (F9, the console's
+    /// <c>load</c>), in the game its IDENTITY names (a saga's either); false
+    /// when it holds no save.
+    /// </summary>
     bool LoadFrom(string slot)
     {
         if (!SaveGame.Exists(slot))
@@ -1032,9 +1117,33 @@ public partial class U7Game : Node2D
             return false;
         }
 
+        if (SaveGame.SlotGame(slot) is { } game && GameContext.Installed(game))
+        {
+            GameContext.Switch(GameContext.Mode, game);
+        }
+
         U7Paths.GameDatOverride = SaveGame.SlotDir(slot);
         SaveGame.SetLast(slot);
         GD.Print("loading " + U7Paths.GameDatOverride);
+        GetTree().ReloadCurrentScene();
+        return true;
+    }
+
+    /// <summary>
+    /// A new game in another mode (the console's <c>game</c>; later the
+    /// picker): the scene restarts on that mode's first game, from its
+    /// INITGAME.DAT. False when that game isn't installed.
+    /// </summary>
+    bool StartMode(PlayMode mode)
+    {
+        if (!GameContext.Installed(mode == PlayMode.SerpentIsle ? GameType.SerpentIsle : GameType.BlackGate))
+        {
+            return false;
+        }
+
+        GameContext.Switch(mode);
+        U7Paths.GameDatOverride = null;
+        GD.Print($"new game: {GameContext.Describe()}");
         GetTree().ReloadCurrentScene();
         return true;
     }

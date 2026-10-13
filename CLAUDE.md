@@ -19,6 +19,7 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
   game files (untracked). Check facts against them (USECODE, INITGAME.DAT,
   FACES.VGA, ...) with small Python scripts rather than assuming.
 - **Never commit** `u7/`, `exult/`, `assets/`, `saves/`, `modern fonts/`,
+  `u7-new-faces/`, `si-new-faces/`,
   `agent_io/` or `stub_report.txt` (copyright or local state; all gitignored).
   Fonts in `godot/fonts/` must be SIL OFL with their licence file.
 - **Keep the build clean:** `dotnet build godot/U7.csproj` must end with
@@ -77,7 +78,8 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
     (`scripts/painted_map_warp.py`; rerun it for a new painting).
   - **New game** (`UI/NewGameView`): the original title from MAINSHP.FLX
     over a dark wood & gold panel (name, Male / Female with the portrait,
-    Journey Onward).
+    Journey Onward); with Serpent Isle installed, a "Skin" row of the skins'
+    faces (2026-10-12, look A of three).
   - **Main menu** (`UI/MainMenuView`, Exult's `Game::show_menu`): look B
     of the mock-ups (2026-10-10): the same title with the new game
     screen's dark wood & gold panel of MedievalSharp buttons (Journey
@@ -95,6 +97,25 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
     turned back into palette art, its colours mixed between two entries,
     the sharp fill on. Made locally into `assets/hires/` (README); without
     it the original art shows.
+  - **Painted ground** (2026-10-12): an outside AI paints each ground
+    material once (sea, calm sea, grass, mud, sand, swamp, cave floor and
+    rock: seamless 512x512 textures), and `scripts/upscale/ground.py`
+    assembles every chunk template from them by the original's material
+    map (borders traced smooth at 4x, textures repeating every chunk so
+    chunks join); built floors keep their tile art. Painting chunks or
+    tiles one by one drifted between runs and left seams. The game draws
+    an assembled template as the chunk's ground in one piece
+    (`HiresArt.Terrain`, the pack's `chunks.hrp`); live page `ground.html`.
+  - **Faces** (2026-10-12): the user's painted portraits
+    (`u7-new-faces`, ready in `assets/faces/bg/` by
+    `scripts/faces/prepare.py`) in place of FACES.VGA's art everywhere,
+    smooth, at the original's height (`Rendering/PaintedFaces`; `art faces
+    off` for the original). Serpent Isle's (`si-new-faces`, their black
+    made see-through) are ready in `assets/faces/si/` for an SI game.
+  - **Paperdolls** (2026-10-12, Exult's SI paperdolls in Black Gate when
+    Serpent Isle is installed): SI's original art for now; redrawn on
+    demand (`scripts/upscale/missing.py --make` makes what is missing, F7
+    or `art paperdolls on` switches, kept in `saves/settings.cfg`).
   - **Mouse:** Exult's right-button walking, and the left button walks on
     open ground too (hold to steer, a quick click for a path).
   - **Cursors** (`UI/MouseCursor`): Exult's POINTERS.SHP frames at the
@@ -125,6 +146,16 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
     the fog count stays true, lightning can't stick or flash past its end,
     rain doesn't flicker back at its end. A storm's parts outliving its egg
     stays Exult's.
+  - **Gumps under the palette** (RENDERER.md 5.9, 2026-10-13): Exult's
+    rule, so gumps are dark at night and their flames cycle (`art gumps
+    off` for day colours).
+  - **Bloom and lit weather** (RENDERER.md 5.8, 2026-10-13, the user
+    taking either look): the glow's spill at 0.35 over 10 world pixels in
+    modern mode (`art bloom`); rain and snow brightened in the lights'
+    colours where they fall (`WeatherLook.LightCatch`).
+  - **Modern colour** (RENDERER.md 5.5, 2026-10-13): true colour through
+    the lookup tables and the remake's lights in linear light, on by
+    default; the user saw no discernible difference and took either look.
   - **Left to the best choice** (2026-10-09, `docs/AUDIT.md` D12, D18):
     roofs are Exult's `is_roof` on the chunk cache, actors counting, set
     when the avatar moves; a sleeper sent to sleep elsewhere gets up (Exult
@@ -144,18 +175,25 @@ godot/scripts/
               palettes, lettering), Endgame (Exult end_game and the
               credits), Intro (Exult play_intro)
   Data/       GameMap (chunks, IREG, eggs index, paint order), U7Object,
-              ShapeCatalog, FlexFile, VgaShapeFile + ShapeFrame (Exult Shape_frame:
+              ShapeCatalog (Exult read_info: TEXT.FLX names, TFA, WGTVOL,
+              OCCLUDE, READY, WIHH), ShapeDataFile (WEAPONS/AMMO/ARMOR/
+              MONSTERS.DAT), ShapeInfoText (shape_info.txt, bodies.txt,
+              container.dat per game) and EntryReader (Exult ReadInt), FlexFile, VgaShapeFile + ShapeFrame (Exult Shape_frame:
               SHAPES/SPRITES/GUMPS/FONTS/FACES.VGA frames by palette index),
               U7Palette (PALETTES.FLX, Get_color8), XformTables (XFORM.TBL),
               VgaFont (FONTS.VGA metrics, Exult paint_text_box), ObjectNames
               (Exult get_name: what a click shows), ChunkBlocking
               (Exult Chunk_cache blocked flags + is_blocked), IffFile and
               FlicFile (ENDGAME.DAT and its movies, Exult playfli),
-              HiresPack (the redrawn art's packs, scripts/upscale)
+              HiresPack (the redrawn art's packs, scripts/upscale),
+              ObjectSet (Exult Game_object_set: render dependencies in
+              creation order)
   Gumps/      GumpManager, GumpView (paints gumps and the open book), container,
               actor and stats gumps, TextGump (Exult Book/Scroll_gump page layout),
               SignGump (Exult Sign_gump: signs, tombstones, plaques)
-  Usecode/    UsecodeMachine (VM, waits, scripts), BgIntrinsics (intrinsic table),
+  Usecode/    UsecodeMachine (VM, waits, scripts), BgIntrinsics (intrinsic table;
+              BgIntrinsics.Extended: Exult's own and Serpent Isle's), SiIntrinsics
+              (SI's numbers mapped by name onto the same handlers),
               UsecodeScript (execute_usecode_array), Conversation (faces, answers, text)
   Actors/     NpcDat, ScheduleRunner (schedule ticking, slots, proximity),
               Schedules/ (one class per Exult schedule), ActorActions (Exult
@@ -164,7 +202,7 @@ godot/scripts/
               call_guards, attack_avatar; the arrest), Missile (Exult
               Projectile_effect, painted after the map), HomingMissile
               (Homing_projectile), PartyManager, Equipment, Inventory, AvatarLook
-              (the avatar's shape and face by sex),
+              (the avatar's shape and face by sex), Polymorph (Exult shape_save),
               ItemQuantity, ActorWalker (steps, Actor::is_blocked), tables
   World/      GameClock, EggHatcher, Pathfinder (Exult Find_path + clients),
               LightSources (Exult light rules: brightness, strength, carried
@@ -172,7 +210,8 @@ godot/scripts/
               snow, sparkles, fog, clouds, rain, lightning),
               EffectsManager (Exult Sprites_effect, SPRITES.VGA animations;
               the weather's time queue, set_weather), Animators (Exult
-              Frame_animator: animated shapes' frames on screen)
+              Frame_animator: animated shapes' frames on screen),
+              LightOcclusion (what stops light per tile and lift, RENDERER.md 5.6)
   Rendering/  WorldView (paints the map into IndexBuffer8, Exult's Image_buffer8:
               XFORM.TBL translucency, invisible actors, status outlines;
               shown through the world shader: ambient/lit palettes and
@@ -190,7 +229,14 @@ godot/scripts/
               index; RGBA shape textures for the gumps; gump, font and face
               frames), HiresArt (the art at 4x: a pack's frames or the
               original blown up, for the world and the gumps' textures),
-              ArtLook (the user's picks for it)
+              ArtLook (the user's picks for it), PaintedFaces (the user's
+              painted portraits for FACES.VGA), PaintStream (the command
+              stream WorldView records and a backend replays, RENDERER.md
+              R1), GpuCompositor (the stream resolved by a compute shader
+              into the same planes, `art renderer gpu`, RENDERER.md R2-R4),
+              ColourLut (modern colour's lookup tables, R5),
+              PlaneDump and RenderBench (the console's `art dump` and
+              `art bench`, docs/RENDERER.md R0)
   UI/         ConversationPanel, BarkOverlay, UiTheme, MouseCursor (Exult
               Mouse: POINTERS.SHP cursors and their flashes), EndgameView
               (the endgame's 320x200 picture and words), NewGameView (Exult
@@ -201,12 +247,39 @@ godot/scripts/
               PaintedMap (display_map's painted map, the tile -> pixel warp)
   Audio/      MusicPlayer (MIDI through the Windows synth), SpeechPlayer
               (Exult's speech) and VocFile (Exult VocAudioSample)
-  Core/       U7Paths (data paths, ReadGameDat), U7Constants, TileCoord,
+  Core/       GameContext (Exult Game: the game and mode a world loads in,
+              docs/SERPENT_ISLE.md), GameShapes (Exult get_shape: gumps by
+              name per game), U7Paths (data paths by game, ReadGameDat,
+              the mod's patch folder, Serpent Isle's files), U7Constants, TileCoord, Settings (saves/settings.cfg),
               Directions (Exult dir.cc: the 8 directions, steps, frame rotation)
-scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers),
+scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers;
+              render_suite.py: the renderer's regression suite, RENDERER.md 7;
+              cycling_check.py: does a dump's water cycle at the art's resolution;
+              shot_diff.py: two shots compared, a heat map of the difference),
+              usecode_disasm.py (a function of either game's USECODE, names resolved),
               painted_map_warp.py (fits godot/data/map/britannia_warp.txt),
+              bridge_speech.py (the bridge's voices from SI's INTRO.DAT),
               upscale/ (the art redrawn by AI models into assets/hires, in its
-              own venv: generate.py, pack.py, compare.py; see README)
+              own venv: generate.py, pack.py, missing.py, compare.py; sets.py
+              and world_view.py export the art as sets to paint anew, viewer.py
+              compares them with the paintings, ground.py the ground
+              assembled from painted materials (chunks.py: the templates),
+              testart.py the synthetic test packs of RENDERER.md R4;
+              see README),
+              faces/prepare.py (the painted faces into assets/faces),
+              ucc/ (Exult's usecode compiler built from exult/: build.ps1)
+mods/<name>/  Exult-format mods: src/ (UCC), data/ (Exult's patch folder,
+              --mod <name> or restart.ps1 -Mod <name>); function numbers
+              from 0xD00
+godot/data/bg/ Exult's Black Gate data (GPL: shape_info.txt, bodies.txt,
+              container.dat, gump_area_info.txt, avatar_data, paperdol_info,
+              shape_files, flx/) and patch/ (the remake's own additions, read
+              under any mod: shape_additions.txt, the keyring; light_classes.txt,
+              what stops light; its UCC in usecode/, numbers from 0xC00)
+godot/data/si/ Exult's Serpent Isle data (GPL), the same files
+docs/         BRIDGE.md (the adventure from Black Gate to Serpent Isle),
+              RENDERER.md (the renderer's audit and the GPU plan) and the
+              design notes
 ```
 
 ## Building and testing
@@ -223,6 +296,17 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
 
    Don't pipe `restart.ps1`'s output (`| Out-Null`, `| Select-Object`): the
    game inherits the pipe and the shell waits until it exits.
+
+   A mod (`mods/<name>/data`, Exult's patch folder) is played with
+   `restart.ps1 -Mod <name>`; its usecode is compiled with
+   `scripts/ucc/bin/ucc.exe -o mods/<name>/data/usecode <main>.uc` (build
+   UCC once with `pwsh scripts/ucc/build.ps1`).
+
+   Serpent Isle (`serpent/`, docs/SERPENT_ISLE.md) and the saga are played
+   with `restart.ps1 -Game si|saga` (Black Gate by default); the console's
+   `game [bg|si|saga]` tells or switches the mode. Saves are per mode:
+   `saves/bg/<slot>`, `saves/si/<slot>`, `saves/saga/<slot>`; `-Load` and
+   `load` take a slot of the current mode.
 
    Several games can run side by side (e.g. one per town for parallel
    play-testing): `restart.ps1 -Io agent_io/<name> [-Load <slot>]` starts
@@ -245,7 +329,7 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
      pass them without the `#` (`use 231108`). A load renumbers them.
    - `save <slot>` / `load <slot>` keep progress across restarts; `timer`
      lists or sets usecode timers.
-   - The user may have local saves `quest1`–`quest4`, Trinsic checkpoints
+   - The user may have local saves (in `saves/bg/`) `quest1`–`quest4`, Trinsic checkpoints
      (`quest4` = outside the east gate with Iolo and Spark; it carries stray
      flags and broken spellbooks from old bugs; in `quest1`–`quest4` the
      avatar is invisible, so the screen is grey: `setflag npc:0 invisible 0`),
@@ -254,15 +338,21 @@ scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers
      castle storeroom), `cove0` (Rudyom's Wand in hand), `minoc0`
      (Batlin's package delivered), `minoc1` (after the murder trail),
      `ship0` (on the Golden Ankh in barge mode) and `den1` (ashore at
-     Buccaneer's Den, the Golden Ankh at its pier). Saves from before barges
+     Buccaneer's Den, the Golden Ankh at its pier); `bridge0`–`bridge3`
+     (the bridge mod, `-Mod eighteen`: after the audience, after Britain,
+     before the Paws decision, after closing the shelter; `bridge4`-`bridge8`:
+     Act II begun, Minoc done, Mole met, the log back, Act II done;
+     `bridge9`/`bridge10`: after the UW2 card, after the Guardian's scroll). Saves from before barges
      were read lack the ships and the carpet: `scripts/repair_barges.py`.
      Don't count on them.
    - After a code change, the running game still has the old assembly:
      rebuild, then `restart.ps1`.
-3. For visuals, run windowed (no `--headless`) and use the console's `shot`
-   command, or a temporary `GetViewport().GetTexture().GetImage().SavePng()`.
+3. For visuals, run windowed (`restart.ps1 -Windowed`) and use the console's
+   `shot` command, or a temporary `GetViewport().GetTexture().GetImage().SavePng()`.
    This opens a window on the user's desktop, so keep it short and prefer
-   headless. End a windowed run with the console's `quit`.
+   headless. End a windowed run with the console's `quit`. A change to the
+   world's painting is checked with `python scripts/agent/render_suite.py
+   check` (headless; the golden planes are local, `golden` remakes them).
 4. Remove temporary debug code before finishing. Tag it (e.g. `// TMPTRACE`) so
    `sed -i '/TMPTRACE/d'` can strip it reliably.
 
@@ -273,7 +363,7 @@ game running. Never stop a Godot process whose command line lacks
 ## Data and engine facts worth knowing
 
 - **New game data:** a new game reads GAMEDAT files from `STATIC/INITGAME.DAT`
-  entries (`U7Paths.ReadGameDat`); saves read `saves/<slot>/`. `u7/GAMEDAT` is
+  entries (`U7Paths.ReadGameDat`); saves read `saves/<mode>/<slot>/`. `u7/GAMEDAT` is
   ignored on purpose: the GOG copy is a game already past the opening.
 - **Graphics come from the VGA files:** `ShapeCache` decodes SHAPES.VGA at
   runtime (`GetFrame8` by palette index, `Get` as RGBA textures), and
@@ -281,7 +371,8 @@ game running. Never stop a Godot process whose command line lacks
   shape PNGs in `assets/` are not read; those for gumps, fonts and faces are
   bogus 8×8 tiles anyway.
 - **Usecode reference:** `assets/usecode/usecode_disasm.txt` is the
-  disassembly. `assets/data/usecode.csv` has each function's externs (the
+  disassembly; `python scripts/usecode_disasm.py [--game si] 0x913` prints
+  any function of either game with its strings and intrinsic names. `assets/data/usecode.csv` has each function's externs (the
   `call n` targets). To read a function's strings, parse `u7/STATIC/USECODE`
   (u16 id, u16 length, then u16 data size and the data block).
 - **Event ids:** 0 proximity, 1 double-click, 2 internal exec (from scripts),
@@ -416,7 +507,14 @@ Next, in priority order:
    route). Nothing known is left; much of it was reached with shortcuts
    (`tp`, `create`, flags), so a new game played through would be the
    next test.
-2. **Walking follow-ups:** Exult's dormancy if the 32-tile activity range
+2. **Serpent Isle's engine** (docs/SERPENT_ISLE.md, M0-M8): M0 (the
+   game per world load, saves per mode), M1 (SI's world loads and
+   renders; the shapes' data read from the original files, not titan's
+   CSVs) and M2 (Exult's per-game data files, gumps by name, the shape
+   numbers made per game) and M3 (SI's usecode: intrinsics by name, the
+   SI-only ones, its opening played to the storm) are done; M4 (the
+   bridge's handoff, B5) is next.
+3. **Walking follow-ups:** Exult's dormancy if the 32-tile activity range
    ever shows its seams (`Actor::follow` and the follow schedule are
    ported, 2026-10-11).
 

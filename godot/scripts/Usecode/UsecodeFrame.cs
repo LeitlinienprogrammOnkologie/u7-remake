@@ -10,7 +10,13 @@ public enum UsecodeEvent
     EggProximity = 3,
     Weapon = 4,
     Readied = 5,
-    Unreadied = 6
+    Unreadied = 6,
+    /// <summary>Exult <c>died</c> ("in SI only, I think").</summary>
+    Died = 7,
+    /// <summary>Exult <c>chat</c>: an NPC wants to talk to the avatar (Serpent Isle's Talk schedule).</summary>
+    Chat = 9,
+    /// <summary>Exult <c>si_path_fail</c>.</summary>
+    SiPathFail = 14
 }
 
 /// <summary>
@@ -27,6 +33,8 @@ public sealed class UsecodeFrame
     public int SaveSp;
     public int CallDepth;
     public bool InitializingLoop;
+    /// <summary>Exult <c>except_stack</c>'s entry for this frame: where a caught abort resumes, -1 for none.</summary>
+    public int CatchIp = -1;
 
     public int NumArgs => Function.NumArgs;
     public int NumVars => Function.NumVars;

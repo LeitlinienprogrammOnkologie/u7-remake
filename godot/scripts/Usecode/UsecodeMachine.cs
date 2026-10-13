@@ -41,12 +41,15 @@ public enum UsecodeWait
 public sealed record UsecodePicture(int Sprite, int Frame, U7.Core.TileCoord? Mark, U7.Core.TileCoord? Area = null)
 {
     /// <summary>
-    /// Exult <c>Paint_map</c>: where a tile's mark goes on Black Gate's map
+    /// Exult <c>Paint_map</c>: where a tile's mark goes on the game's map
     /// sprite, a pixel from its top left (rounded as <c>lround</c> does).
     /// </summary>
     public static Godot.Vector2I MapSpritePixel(U7.Core.TileCoord t) =>
-        new((int)Math.Round(t.Tx / 16.05 + 5, MidpointRounding.AwayFromZero),
-            (int)Math.Round(t.Ty / 15.95 + 4, MidpointRounding.AwayFromZero));
+        U7.Core.GameContext.IsSi
+            ? new((int)Math.Round(t.Tx / 16.0 + 18, MidpointRounding.AwayFromZero),
+                (int)Math.Round(t.Ty / 16.0 + 9.4, MidpointRounding.AwayFromZero))
+            : new((int)Math.Round(t.Tx / 16.05 + 5, MidpointRounding.AwayFromZero),
+                (int)Math.Round(t.Ty / 15.95 + 4, MidpointRounding.AwayFromZero));
 }
 
 /// <summary>
@@ -99,6 +102,8 @@ public sealed class UsecodeMachine
     public int LastIp => _lastFrame?.InsIp ?? 0;
     public int LastEvent => _lastFrame?.EventId ?? 0;
     public string HudMessage { get; set; } = "";
+    /// <summary>Exult <c>Keyring</c> (keyring.cc): Serpent Isle's keys by quality, saved as <c>keyring.dat</c>.</summary>
+    public SortedSet<int> Keyring { get; } = new();
     /// <summary>The last global flags set (offset, value), for the debug text.</summary>
     readonly Queue<(int Offset, byte Value)> _flagLog = new();
     public event Action<string>? Say;
@@ -129,6 +134,10 @@ public sealed class UsecodeMachine
     public Action<U7Object>? AvatarMovedByScript { get; set; }
     /// <summary>Exult <c>Game_window::teleport_party</c>: the avatar and the party to a tile, the eggs there tried.</summary>
     public Action<TileCoord>? TeleportParty { get; set; }
+    /// <summary>Exult <c>center_view</c>: the view centred on a tile until the avatar moves.</summary>
+    public Action<TileCoord>? CenterView { get; set; }
+    /// <summary>Exult <c>saved_pos</c> (<c>save_pos</c>, <c>teleport_to_saved_pos</c>), kept in <c>usecode.dat</c>.</summary>
+    public TileCoord SavedPos { get; set; } = new(-1, -1, -1);
     /// <summary>
     /// Exult <c>move_object</c> of the avatar, after the move (from the tile
     /// given): its walk ends, the view goes there, and every egg round it is
@@ -641,6 +650,9 @@ public sealed class UsecodeMachine
     bool _pendingCallisPush;
     /// <summary>An ABRT/THROW waits for its pending text before it aborts.</summary>
     bool _abortAfterText;
+    UsecodeValue? _abortValue;
+    /// <summary>Exult <c>statics</c>: UCC's global statics (index 1 up), saved in <c>usecode.var</c>.</summary>
+    public List<UsecodeValue> Statics { get; } = new();
     readonly Random _rng = new();
     readonly BgIntrinsics _intrinsics;
 
@@ -670,21 +682,47 @@ public sealed class UsecodeMachine
         Array.Copy(data, GFlags, n);
     }
 
-    public static int GetShapeFun(int shape) => shape < 0x400 ? shape : 0x1000 + (shape - 0x400);
+    /// <summary>Exult <c>get_shape_fun</c>: shapes above 0x3FF from UCC's table, else the old 0x1000 + n rule.</summary>
+    public int GetShapeFun(int shape) =>
+        shape < 0x400 ? shape : File.Symbols?.GetHighShapeFun(shape) ?? 0x1000 + (shape - 0x400);
 
     /// <summary>
     /// Exult <c>Game_object::get_usecode</c> for an item: frame- or
-    /// quality-dependent usecode before the shape's function. Black Gate's only
-    /// entries (<c>data/bg/shape_info.txt</c>, frame_usecode) send books of
-    /// quality 100-179 to 0x638; the book function 0x282 ends at quality 99.
+    /// quality-dependent usecode (<c>shape_info.txt</c>'s frame_usecode: a
+    /// function by UCC name, else by number) before the shape's function.
+    /// Black Gate's send books of quality 100-179 to 0x638; the book function
+    /// 0x282 ends at quality 99.
     /// </summary>
-    public static int GetItemFun(U7Object item) =>
-        item.Shape == 642 && item.Quality is >= 100 and <= 179 ? 0x638 : GetShapeFun(item.Shape);
+    public int GetItemFun(U7Object item)
+    {
+        var info = Catalog[item.Shape];
+        if (U7.Data.ShapeInfoText.Find(info.FrameUsecodes, item.Frame, info.HasQuality ? item.Quality : -1, e => (e.Frame, e.Quality)) is { } use)
+        {
+            var fun = use.Name.Length > 0 ? File.Symbols?.Find(use.Name)?.Value ?? -1 : -1;
+            fun = fun == -1 ? use.Usecode : fun;
+            if (fun >= 0)
+            {
+                return fun;
+            }
+        }
 
-    public static bool IsObjectFun(int n) => n < 0x800;
+        return GetShapeFun(item.Shape);
+    }
+
+    /// <summary>Exult <c>is_object_fun</c>: whether a function takes the phantom item argument.</summary>
+    public bool IsObjectFun(int n) => File.Symbols?.IsObjectFun(n) ?? n < 0x800;
+
+    /// <summary>A UCC static: negative offsets are globals (Exult <c>statics[-offset]</c>), others the function's own; null when not set yet.</summary>
+    UsecodeValue? StaticAt(UsecodeFrame frame, int offset)
+    {
+        var list = offset < 0 ? Statics : frame.Function.Statics;
+        var i = Math.Abs(offset);
+        return i < list.Count ? list[i] : null;
+    }
 
     public int Call(int id, U7Object? item, UsecodeEvent ev)
     {
+
         if (InUsecode || WaitingForChoice)
         {
             // Called from within usecode (an intrinsic's death, eggs hatched by a move): Exult runs it
@@ -748,6 +786,9 @@ public sealed class UsecodeMachine
     /// target), then cleared.
     /// </summary>
     public U7Object? InterceptItem { get; set; }
+
+    /// <summary>Exult <c>intercept_tile</c>: a tile the next <c>click_on_item</c> answers with instead (no object).</summary>
+    public TileCoord? InterceptTile { get; set; }
 
     /// <summary>Exult's speech: U7SPEECH.SPC's voices (null: none plays).</summary>
     public U7.Audio.SpeechPlayer? Speech { get; set; }
@@ -831,7 +872,12 @@ public sealed class UsecodeMachine
 
         if (abort)
         {
-            Abort();
+            AbortFunction(_abortValue ?? UsecodeValue.FromInt(0));
+            _abortValue = null;
+            if (!_exitRun && _callStack.Count > 0)
+            {
+                Run();
+            }
         }
         else
         {
@@ -1191,7 +1237,13 @@ public sealed class UsecodeMachine
                 offset = opcode == UsecodeOp.LoopTop
                     ? ReadI16(code, ref frame.Ip)
                     : ReadI32(code, ref frame.Ip);
-                DoLoopTop(frame, local1, local2, local3, local4, offset, numLocals);
+                if ((uint)local1 >= (uint)numLocals || (uint)local2 >= (uint)numLocals ||
+                    (uint)local3 >= (uint)numLocals || (uint)local4 >= (uint)numLocals)
+                {
+                    break;
+                }
+
+                DoLoopTop(frame, local1, local2, local3, frame.Locals[local4], offset);
                 break;
             }
             case UsecodeOp.AddSv:
@@ -1269,21 +1321,20 @@ public sealed class UsecodeMachine
                 break;
             case UsecodeOp.Abrt:
             case UsecodeOp.Throw:
+            {
                 ShowPendingText();
-                if (opcode == UsecodeOp.Throw)
-                {
-                    Pop();
-                }
-
+                var thrown = opcode == UsecodeOp.Throw ? Pop() : UsecodeValue.FromString("abort executed");
                 if (Wait != UsecodeWait.None)
                 {
                     // Exult shows the pending text first: abort once it has been clicked away.
                     _abortAfterText = true;
+                    _abortValue = thrown;
                     return true;
                 }
 
-                Abort();
+                AbortFunction(thrown);
                 return true;
+            }
             case UsecodeOp.ConverseLoc:
                 _foundAnswer = true;
                 break;
@@ -1301,7 +1352,8 @@ public sealed class UsecodeMachine
                 var v = (byte)PopI();
                 if ((uint)offset < (uint)GFlags.Length)
                 {
-                    GFlags[offset] = v;
+                    // Exult's "KLUDGE for Monk Isle" in Serpent Isle: flag 0x272 stays clear.
+                    GFlags[offset] = offset == 0x272 && GameContext.IsSi ? (byte)0 : v;
                     _flagLog.Enqueue((offset, v));
                     if (_flagLog.Count > 16)
                     {
@@ -1363,6 +1415,119 @@ public sealed class UsecodeMachine
             case UsecodeOp.DbgLine:
                 ReadU16(code, ref frame.Ip);
                 break;
+            case UsecodeOp.DbgFunc:
+                frame.Ip += 4;
+                break;
+            case UsecodeOp.DbgFunc32:
+                frame.Ip += 8;
+                break;
+            case UsecodeOp.PushStatic:
+                offset = ReadI16(code, ref frame.Ip);
+                Push(StaticAt(frame, offset)?.Clone() ?? UsecodeValue.FromInt(0));
+                break;
+            case UsecodeOp.PopStatic:
+            {
+                offset = ReadI16(code, ref frame.Ip);
+                var list = offset < 0 ? Statics : frame.Function.Statics;
+                var i = Math.Abs(offset);
+                while (list.Count <= i)
+                {
+                    list.Add(new UsecodeValue());
+                }
+
+                list[i] = Pop();
+                break;
+            }
+            case UsecodeOp.AIdxS:
+            {
+                sval = PopI() - 1;
+                offset = ReadI16(code, ref frame.Ip);
+                if (StaticAt(frame, offset) is not { } val)
+                {
+                    Log($"static {offset} out of range in 0x{frame.Function.Id:X4}");
+                    PushI(0);
+                    break;
+                }
+
+                if (sval < 0 || (val.IsArray && sval >= val.ArraySize))
+                {
+                    PushI(0);
+                }
+                else
+                {
+                    Push(sval == 0 ? val.GetElem0().Clone() : val.GetElem(sval).Clone());
+                }
+
+                break;
+            }
+            case UsecodeOp.PopArrS:
+            {
+                offset = ReadI16(code, ref frame.Ip);
+                if (StaticAt(frame, offset) is not { } arr)
+                {
+                    // Exult leaves the index and value on the stack here.
+                    Log($"static {offset} out of range in 0x{frame.Function.Id:X4}");
+                    break;
+                }
+
+                var index = PopI() - 1;
+                var val = Pop();
+                if (index >= 0 && (index < arr.ArraySize || arr.Resize(index + 1)))
+                {
+                    arr.PutElem(index, val);
+                }
+
+                break;
+            }
+            case UsecodeOp.LoopTopS:
+            case UsecodeOp.LoopTopS32:
+            {
+                var local1 = ReadU16(code, ref frame.Ip);
+                var local2 = ReadU16(code, ref frame.Ip);
+                var local3 = ReadU16(code, ref frame.Ip);
+                var local4 = ReadI16(code, ref frame.Ip);
+                offset = opcode == UsecodeOp.LoopTopS
+                    ? ReadI16(code, ref frame.Ip)
+                    : ReadI32(code, ref frame.Ip);
+                if ((uint)local1 >= (uint)numLocals || (uint)local2 >= (uint)numLocals ||
+                    (uint)local3 >= (uint)numLocals || StaticAt(frame, local4) is not { } arr)
+                {
+                    break;
+                }
+
+                DoLoopTop(frame, local1, local2, local3, arr, offset);
+                break;
+            }
+            case UsecodeOp.CallO:
+            {
+                var caller = GetItem(Pop());
+                offset = ReadU16(code, ref frame.Ip);
+                CallFunction(offset, frame.EventId, caller, entrypoint: false, orig: true);
+                return true;
+            }
+            case UsecodeOp.CallInd:
+            case UsecodeOp.CallIndexOld:
+            case UsecodeOp.CallIndex:
+            {
+                var funid = PopI();
+                var caller = GetItem(Pop());
+                var numargs = opcode switch
+                {
+                    UsecodeOp.CallInd => 0,
+                    UsecodeOp.CallIndexOld => PopI(),
+                    _ => code[frame.Ip++]
+                };
+                CallFunction(funid, frame.EventId, caller, entrypoint: false, givenargs: numargs);
+                return true;
+            }
+            case UsecodeOp.TryStart:
+            case UsecodeOp.TryStart32:
+                offset = opcode == UsecodeOp.TryStart ? ReadI16(code, ref frame.Ip) : ReadI32(code, ref frame.Ip);
+                frame.CatchIp = frame.Ip + offset;
+                break;
+            case UsecodeOp.TryEnd:
+                frame.CatchIp = -1;
+                break;
             default:
                 Log($"unknown opcode 0x{(int)opcode:X2} in 0x{frame.Function.Id:X4} @ {frame.InsIp}");
                 Abort();
@@ -1372,15 +1537,9 @@ public sealed class UsecodeMachine
         return false;
     }
 
-    void DoLoopTop(UsecodeFrame frame, int local1, int local2, int local3, int local4, int offset, int numLocals)
+    /// <summary>Exult's LOOPTOP over a local's or (LOOPTOPS) a static's array.</summary>
+    void DoLoopTop(UsecodeFrame frame, int local1, int local2, int local3, UsecodeValue arr, int offset)
     {
-        if ((uint)local1 >= (uint)numLocals || (uint)local2 >= (uint)numLocals ||
-            (uint)local3 >= (uint)numLocals || (uint)local4 >= (uint)numLocals)
-        {
-            return;
-        }
-
-        var arr = frame.Locals[local4];
         var initializing = frame.InitializingLoop;
         frame.InitializingLoop = false;
         if (initializing && arr.IsUndefined)
@@ -1415,13 +1574,33 @@ public sealed class UsecodeMachine
         }
     }
 
-    public bool CallFunction(int funcid, int eventid, U7Object? caller, bool entrypoint, int givenargs = 0)
+    /// <summary>Exult <c>call_function</c>; <paramref name="orig"/> runs the function a patch replaced (CALLO).</summary>
+    public bool CallFunction(int funcid, int eventid, U7Object? caller, bool entrypoint, int givenargs = 0, bool orig = false)
     {
         var fun = File.Get(funcid);
         if (fun is null)
         {
             Log($"missing function 0x{funcid:X4}");
             return false;
+        }
+
+        if (orig)
+        {
+            // Exult has two layers (the game's, a patch's); the remake's
+            // additions make a third, so the function a running one replaced
+            // is that one's own original, not the top layer's.
+            if (_callStack.Count > 0 && _callStack[^1].Function is { } running && running.Id == funcid)
+            {
+                fun = running;
+            }
+
+            if (fun.Orig is null)
+            {
+                Log($"no original for 0x{funcid:X4}");
+                return false;
+            }
+
+            fun = fun.Orig;
         }
 
         int depth;
@@ -1488,6 +1667,36 @@ public sealed class UsecodeMachine
     }
 
     void ReturnFromProcedure() => PreviousStackFrame();
+
+    /// <summary>
+    /// Exult <c>abort_function</c>: leave frames until a caller's TRYSTART
+    /// catches (the thrown value pushed, its catch run), else end the run.
+    /// As in Exult, the throwing function's own try doesn't catch.
+    /// </summary>
+    void AbortFunction(UsecodeValue thrown)
+    {
+        while (_callStack.Count > 0)
+        {
+            var frame = _callStack[^1];
+            _callStack.RemoveAt(_callStack.Count - 1);
+            _sp = frame.SaveSp;
+            if (frame.CallDepth == 0 || _callStack.Count == 0)
+            {
+                break;
+            }
+
+            var parent = _callStack[^1];
+            if (parent.CatchIp >= 0)
+            {
+                parent.Ip = parent.CatchIp;
+                parent.CatchIp = -1;
+                Push(thrown);
+                return;
+            }
+        }
+
+        Abort();
+    }
 
     void Abort()
     {
@@ -1754,6 +1963,12 @@ public sealed class UsecodeMachine
             parms[i] = i < argc ? Pop() : UsecodeValue.FromInt(0);
         }
 
+        // Exult intrinsics_si: Serpent Isle's numbers name the same functions.
+        if (GameContext.IsSi)
+        {
+            id = SiIntrinsics.ToDispatch(id);
+        }
+
         _lastIntrinsic = id;
         _lastIntrinsicArgc = argc;
         return _intrinsics.Call(id, parms, argc);
@@ -1811,7 +2026,7 @@ public sealed class UsecodeMachine
         {
             var caller = _callStack[^1].Caller;
             // Exult's special case: palace guards, the Time Lord (0x269 in Black Gate).
-            if (caller is not null && !itemref.IsArray && (val == 0x269 || val == caller.Shape))
+            if (caller is not null && !itemref.IsArray && ((GameContext.IsBg && val == 0x269) || val == caller.Shape))
             {
                 return caller;
             }

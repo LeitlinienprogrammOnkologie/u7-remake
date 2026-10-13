@@ -41,28 +41,28 @@ public static class U7Constants
     public const int OriginalScreenW = 320;
     public const int OriginalScreenH = 200;
 
-    // GUMPS.VGA indices from Exult bggame.cc (Black Gate).
-    public const int GumpBox = 0;
-    public const int GumpCrate = 1;
-    public const int GumpCheck = 2;
-    public const int GumpBarrel = 8;
-    public const int GumpBag = 9;
-    public const int GumpBackpack = 10;
-    public const int GumpBasket = 11;
-    public const int GumpChest = 22;
-    public const int GumpHalo = 7;
-    public const int GumpCombatMode = 12;
-    public const int GumpDisk = 24;
-    public const int GumpHeart = 25;
-    public const int GumpShipHold = 26;
-    public const int GumpDrawer = 27;
-    /// <summary>Exult BG <c>gumps/book</c> and <c>gumps/scroll</c>.</summary>
-    public const int GumpBook = 32;
-    public const int GumpScroll = 55;
-    public const int GumpCombat = 46;
-    public const int GumpStats = 47;
+    // GUMPS.VGA shapes by Exult's names, per game (GameShapes: bggame.cc, sigame.cc).
+    public static int GumpBox => GameShapes.Get("gumps/box");
+    public static int GumpCrate => GameShapes.Get("gumps/crate");
+    public static int GumpCheck => GameShapes.Get("gumps/check");
+    public static int GumpBarrel => GameShapes.Get("gumps/barrel");
+    public static int GumpBag => GameShapes.Get("gumps/bag");
+    public static int GumpBackpack => GameShapes.Get("gumps/backpack");
+    public static int GumpBasket => GameShapes.Get("gumps/basket");
+    public static int GumpChest => GameShapes.Get("gumps/chest");
+    public static int GumpHalo => GameShapes.Get("gumps/halo");
+    public static int GumpCombatMode => GameShapes.Get("gumps/combatmode");
+    public static int GumpDisk => GameShapes.Get("gumps/disk");
+    public static int GumpHeart => GameShapes.Get("gumps/heart");
+    public static int GumpShipHold => GameShapes.Get("gumps/shipshold");
+    public static int GumpDrawer => GameShapes.Get("gumps/drawer");
+    public static int GumpBook => GameShapes.Get("gumps/book");
+    public static int GumpScroll => GameShapes.Get("gumps/scroll");
+    public static int GumpCombat => GameShapes.Get("gumps/combat");
+    public static int GumpStats => GameShapes.Get("gumps/statsdisplay");
+    public static int GumpBody => GameShapes.Get("gumps/body");
+    /// <summary>Black Gate's <c>Actor_gump</c> (Exult names none): the ready spots' overlay and the figure; Serpent Isle always has paperdolls.</summary>
     public const int GumpSpotOverlay = 48;
-    public const int GumpBody = 53;
     public const int GumpActorMale = 65;
     public const int StatsFont = 2;
     /// <summary>Exult <c>Text_gump</c>'s default font for books and scrolls.</summary>

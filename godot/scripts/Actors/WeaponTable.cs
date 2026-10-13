@@ -1,6 +1,4 @@
-using System.Globalization;
-using System.IO;
-using U7.Core;
+using U7.Data;
 
 namespace U7.Actors;
 
@@ -79,7 +77,7 @@ public sealed class WeaponRecord
     }
 }
 
-/// <summary>Loads <c>assets/data/weapons.csv</c>.</summary>
+/// <summary>WEAPONS.DAT (Exult <c>Weapon_info</c>), a mod's over it.</summary>
 public sealed class WeaponTable
 {
     readonly Dictionary<int, WeaponRecord> _byShape = new();
@@ -87,95 +85,41 @@ public sealed class WeaponTable
     public WeaponRecord? this[int shape] =>
         _byShape.TryGetValue(shape, out var rec) ? rec : null;
 
+    /// <summary>Exult <c>Weapon_info::read</c>, entry by entry of WEAPONS.DAT.</summary>
     public static WeaponTable Load()
     {
         var table = new WeaponTable();
-        var path = Path.Combine(U7Paths.DataDir, "weapons.csv");
-        if (!File.Exists(path))
+        foreach (var (shape, b) in ShapeDataFile.Read("WEAPONS.DAT", 21))
         {
-            return table;
-        }
-
-        using var reader = new StreamReader(path);
-        var header = reader.ReadLine();
-        if (header is null)
-        {
-            return table;
-        }
-
-        var cols = header.Split(',');
-        int Col(string name)
-        {
-            for (var i = 0; i < cols.Length; i++)
-            {
-                if (cols[i].Equals(name, StringComparison.OrdinalIgnoreCase))
-                {
-                    return i;
-                }
-            }
-
-            return -1;
-        }
-
-        var iShape = Col("shape");
-        var iDmg = Col("damage");
-        var iType = Col("damage_type");
-        var iRange = Col("range");
-        var iLucky = Col("lucky");
-        var iAuto = Col("autohit");
-        var iUses = Col("uses_name");
-        var iUsesNum = Col("uses");
-        var iAmmo = Col("ammo");
-        var iProj = Col("projectile");
-        var iReturns = Col("returns");
-        var iExplodes = Col("explodes");
-        var iNoBlock = Col("no_blocking");
-        var iDelete = Col("delete_depleted");
-        var iSpeed = Col("missile_speed");
-        var iRot = Col("rotation_speed");
-        var iFrames = Col("actor_frames");
-        var iUsecode = Col("usecode");
-        var iPowers = Col("powers");
-
-        string Get(string[] c, int i) => (uint)i < (uint)c.Length ? c[i] : "";
-        int Num(string[] c, int i, int fallback = 0) =>
-            int.TryParse(Get(c, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)
-                ? v
-                : fallback;
-
-        while (reader.ReadLine() is { } line)
-        {
-            var c = line.Split(',');
-            var shape = Num(c, iShape, -1);
-            if (shape < 0)
+            if (b is null)
             {
                 continue;
             }
 
-            var uses = Get(c, iUses);
-            var usesNum = Num(c, iUsesNum, 0);
+            var (flags0, range, flags1, flags2) = (b[5], b[6], b[7], b[8]);
+            var speed = (flags2 >> 5) & 7;
+            var uses = (range >> 1) & 3;
             table._byShape[shape] = new WeaponRecord
             {
                 Shape = shape,
-                Damage = Math.Max(0, Num(c, iDmg, 1)),
-                DamageType = Num(c, iType),
-                Range = Math.Max(1, Num(c, iRange, 3)),
-                Lucky = Num(c, iLucky) != 0,
-                Autohit = Num(c, iAuto) != 0,
-                Melee = usesNum == 0 || uses.Contains("melee", StringComparison.OrdinalIgnoreCase) ||
-                        string.IsNullOrEmpty(uses),
-                Uses = usesNum,
-                Ammo = Num(c, iAmmo, -1),
-                Projectile = Num(c, iProj, -1),
-                Returns = Num(c, iReturns) != 0,
-                Explodes = Num(c, iExplodes) != 0,
-                NoBlocking = Num(c, iNoBlock) != 0,
-                DeleteDepleted = Num(c, iDelete) != 0,
-                MissileSpeed = Num(c, iSpeed, 4),
-                RotationSpeed = Num(c, iRot),
-                ActorFrames = Num(c, iFrames, 2),
-                Usecode = Num(c, iUsecode),
-                Powers = Num(c, iPowers)
+                Ammo = BitConverter.ToInt16(b, 0),
+                Projectile = BitConverter.ToInt16(b, 2),
+                Damage = b[4],
+                Lucky = (flags0 & 1) != 0,
+                Explodes = ((flags0 >> 1) & 1) != 0,
+                NoBlocking = ((flags0 >> 2) & 1) != 0,
+                DeleteDepleted = ((flags0 >> 3) & 1) != 0,
+                DamageType = (flags0 >> 4) & 15,
+                Autohit = (range & 1) != 0,
+                Uses = uses,
+                Melee = uses == WeaponRecord.UsesMelee,
+                Range = Math.Max(1, range >> 3),
+                Returns = (flags1 & 1) != 0,
+                MissileSpeed = ((flags1 >> 2) & 3) != 0 ? 4 : speed == 0 ? 3 : speed < 3 ? 2 : 1,
+                RotationSpeed = (flags1 >> 4) & 15,
+                ActorFrames = flags2 & 15,
+                Powers = b[9],
+                Usecode = BitConverter.ToUInt16(b, 11)
             };
         }
 

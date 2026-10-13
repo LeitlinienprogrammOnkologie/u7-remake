@@ -673,8 +673,9 @@ public sealed partial class SaveLoadView : Control
             var y = ShotY + 2 + (big ? i : i / 2) * step;
             DrawStyleBox(_faceBox, At(x - 4, y - 4, w + 8, h + 8));
             var p = party[i];
-            var frame = i == 0 ? AvatarLook.FaceFrame(p.Shape == AvatarLook.FemaleShape) : 0;
-            if (_shapes.GetFace(p.Face, frame) is { } face)
+            // The avatar's face is its skin's: the one whose body it was saved with.
+            var (faceShape, frame) = i == 0 ? AvatarLook.FaceOfBody(p.Shape) : (p.Face, 0);
+            if (_shapes.GetFace(faceShape, frame) is { } face)
             {
                 var size = new Vector2(face.GetWidth(), face.GetHeight());
                 var fit = Math.Min(w / size.X, h / size.Y);

@@ -14,8 +14,30 @@ namespace U7.Actors;
 /// </summary>
 public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, ScheduleRunner schedules, PartyManager party)
 {
-    /// <summary>Exult <c>get_guard_shape</c>: Black Gate has the one guard everywhere.</summary>
-    public const int GuardShape = 0x3b2;
+    /// <summary>
+    /// Exult <c>Game_window::get_guard_shape</c>, by where the avatar is:
+    /// Black Gate has the one guard everywhere; Serpent Isle has rangers in
+    /// Moonshade, Fawn's guards and Monitor's pikemen, and none elsewhere (-1).
+    /// </summary>
+    public int GuardShape
+    {
+        get
+        {
+            if (!GameContext.IsSi)
+            {
+                return 0x3b2;
+            }
+
+            var (tx, ty) = (avatar.Tx, avatar.Ty);
+            return tx >= 2054 && ty >= 1698 && tx < 2590 && ty < 2387 ? 0x103 // Moonshade's rangers.
+                : tx >= 895 && ty >= 1604 && tx < 1173 && ty < 1960 ? 0x17d // Fawn's guards.
+                : tx >= 670 && ty >= 2430 && tx < 1135 && ty < 2800 ? 0xe4 // Monitor's pikemen.
+                : -1;
+        }
+    }
+
+    /// <summary>Exult <c>Actor::is_goblin</c> (<c>shape_info.txt</c>'s goblin actor flag): Serpent Isle's goblins have their own lines.</summary>
+    static bool IsGoblin(U7Object npc) => (ShapeCatalog.Current[npc.Shape].ActorFlags & (1 << ActorFlags.Goblin)) != 0;
 
     /// <summary>Exult <c>ArrestUsecode</c>: the guard's arrest conversation.</summary>
     public const int ArrestUsecode = 0x625;
@@ -65,9 +87,9 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
         var witness = FindWitness(out var closest, Alignment.Neutral);
         if (witness is null)
         {
-            if (closest is not null && _rng.Next(2) != 0 && combat.CanSpeak(closest))
+            if (closest is not null && _rng.Next(2) != 0)
             {
-                Say(closest, TextMessages.HeardSomething, TextMessages.HeardSomething);
+                SayOr(closest, TextMessages.GoblinHeardSomething, TextMessages.HeardSomething, TextMessages.HeardSomething);
             }
 
             return; // Didn't get caught.
@@ -75,11 +97,7 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
 
         if (avatar.GetFlag(ObjFlag.Invisible) && !combat.CanSeeInvisible(witness))
         {
-            if (combat.CanSpeak(witness))
-            {
-                Say(witness, TextMessages.FirstInvisTheft, TextMessages.LastInvisTheft);
-            }
-
+            SayOr(witness, TextMessages.GoblinInvisTheft, TextMessages.FirstInvisTheft, TextMessages.LastInvisTheft);
             return;
         }
 
@@ -93,10 +111,7 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
         if (_theftWarnings < 2 + _rng.Next(3))
         {
             // Just a warning this time.
-            if (combat.CanSpeak(witness))
-            {
-                Say(witness, TextMessages.FirstTheft, TextMessages.LastTheft);
-            }
+            SayOr(witness, TextMessages.GoblinTheft, TextMessages.FirstTheft, TextMessages.LastTheft);
 
             return;
         }
@@ -117,6 +132,7 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
         var closestDist = 5000;
         U7Object? witness = null;
         var witnessDist = 5000;
+        var gshape = GuardShape;
         foreach (var npc in NearbyActors(12))
         {
             if (party.IsInParty(npc) || !combat.IsSentient(npc) || !CombatSchedule.CanAct(npc))
@@ -125,7 +141,7 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
             }
 
             // Guards only assist neutral (and chaotic) NPCs.
-            if (npc.EffectiveAlignment != align || (npc.Shape == GuardShape && align != Alignment.Neutral))
+            if (npc.EffectiveAlignment != align || (npc.Shape == gshape && align != Alignment.Neutral))
             {
                 continue;
             }
@@ -167,21 +183,51 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
             return;
         }
 
+        var gshape = GuardShape;
         var align = witness?.EffectiveAlignment ?? Alignment.Neutral;
         witness ??= FindWitness(out _, align);
-        if (witness is not null && combat.CanSpeak(witness))
+        if (witness is not null)
         {
-            if (theft)
+            if (IsGoblin(witness))
             {
-                Say(witness, TextMessages.FirstCallGuardsTheft, TextMessages.LastCallGuardsTheft);
+                if (gshape < 0)
+                {
+                    SayOne(witness, TextMessages.GoblinNeedHelp);
+                }
+                else if (theft)
+                {
+                    SayOne(witness, TextMessages.GoblinCallGuardsTheft);
+                }
+                else
+                {
+                    Say(witness, TextMessages.FirstGoblinCallGuards, TextMessages.LastGoblinCallGuards);
+                }
             }
-            else
+            else if (combat.CanSpeak(witness))
             {
-                Say(witness, TextMessages.FirstCallGuards, TextMessages.LastCallGuards);
+                if (gshape < 0)
+                {
+                    Say(witness, TextMessages.FirstNeedHelp, TextMessages.LastNeedHelp);
+                }
+                else if (theft)
+                {
+                    Say(witness, TextMessages.FirstCallGuardsTheft, TextMessages.LastCallGuardsTheft);
+                }
+                else
+                {
+                    Say(witness, TextMessages.FirstCallGuards, TextMessages.LastCallGuards);
+                }
             }
         }
 
-        if (map.FindSpot(Here(avatar), 5, GuardShape, 0, 1) is null)
+        if (gshape < 0)
+        {
+            // No local guards: on to attack_avatar.
+            AttackAvatar(0, align);
+            return;
+        }
+
+        if (map.FindSpot(Here(avatar), 5, gshape, 0, 1) is null)
         {
             return;
         }
@@ -189,11 +235,35 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
         var numGuards = 1 + _rng.Next(3);
         for (var i = 0; i < numGuards; i++)
         {
-            var guard = combat.CreateMonsterAt(GuardShape, Offscreen(), ScheduleType.ArrestAvatar, Alignment.Chaotic);
+            var guard = combat.CreateMonsterAt(gshape, Offscreen(), ScheduleType.ArrestAvatar, Alignment.Chaotic);
             ApproachAnother(guard, avatar);
         }
 
         DangerMusic();
+    }
+
+    /// <summary>
+    /// Exult <c>Game_window::stop_arresting</c> (Serpent Isle's
+    /// <c>stop_arresting</c>): the local guards within 20 tiles arresting the
+    /// avatar wander off, neutral. Not in dungeons, after Armageddon or where
+    /// there are no guards.
+    /// </summary>
+    public void StopArresting()
+    {
+        var gshape = GuardShape;
+        if (combat.Armageddon || InDungeonNow || gshape < 0)
+        {
+            return;
+        }
+
+        foreach (var npc in map.FindNearbyExult(Here(avatar), gshape, 20, 0x28).Where(o => o.IsActor))
+        {
+            if (!party.IsInParty(npc) && npc.ScheduleType == ScheduleType.ArrestAvatar)
+            {
+                schedules.SetScheduleType(npc, ScheduleType.Wander);
+                npc.Alignment = Alignment.Neutral; // Exult: prevent the guard from becoming hostile.
+            }
+        }
     }
 
     /// <summary>
@@ -211,11 +281,12 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
         }
 
         var inDungeon = InDungeonNow;
-        if (!inDungeon)
+        var gshape = GuardShape;
+        if (gshape >= 0 && !inDungeon)
         {
             while (createGuards-- > 0)
             {
-                var guard = combat.CreateMonsterAt(GuardShape, Offscreen(), ScheduleType.Combat, Alignment.Chaotic);
+                var guard = combat.CreateMonsterAt(gshape, Offscreen(), ScheduleType.Combat, Alignment.Chaotic);
                 combat.SetTarget(guard, avatar, true);
                 ApproachAnother(guard, avatar);
             }
@@ -225,7 +296,7 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
         foreach (var npc in NearbyActors(20))
         {
             if (CombatSchedule.CanAct(npc) && !party.IsInParty(npc) && combat.IsSentient(npc) &&
-                ((npc.Shape == GuardShape && !inDungeon) || npc.EffectiveAlignment == align) &&
+                ((npc.Shape == gshape && !inDungeon) || npc.EffectiveAlignment == align) &&
                 FastPathClient.IsGrabable(map, npc, avatar))
             {
                 combat.SetTarget(npc, avatar, true);
@@ -280,13 +351,25 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
         }
 
         var numGuards = 0;
-        if (!InDungeonNow && (witness.Shape == GuardShape || align == Alignment.Neutral))
+        var gshape = GuardShape;
+        if (!InDungeonNow && gshape >= 0 && (witness.Shape == gshape || align == Alignment.Neutral))
         {
             numGuards = 1 + _rng.Next(2);
         }
 
         victim.BarkUntilMsec = 0; // Exult remove_text_effect.
-        if (combat.CanSpeak(witness))
+        if (IsGoblin(witness))
+        {
+            if (numGuards > 0)
+            {
+                Say(witness, TextMessages.FirstGoblinCallGuards, TextMessages.LastGoblinCallGuards);
+            }
+            else
+            {
+                SayOne(witness, TextMessages.GoblinNeedHelp);
+            }
+        }
+        else if (combat.CanSpeak(witness))
         {
             if (numGuards > 0)
             {
@@ -324,6 +407,21 @@ public sealed class Guards(GameMap map, U7Object avatar, CombatEngine combat, Sc
         map.FindNearbyExult(Here(avatar), U7Constants.AnyShape, dist, 0x28).Where(o => o.IsActor);
 
     void Say(U7Object npc, int first, int last) => schedules.Say?.Invoke(npc, TextMessages.Random(first, last));
+
+    void SayOne(U7Object npc, int msg) => Say(npc, msg, msg);
+
+    /// <summary>Exult's pattern: a goblin says its own line, anyone else who can speak one of the others.</summary>
+    void SayOr(U7Object npc, int goblin, int first, int last)
+    {
+        if (IsGoblin(npc))
+        {
+            SayOne(npc, goblin);
+        }
+        else if (combat.CanSpeak(npc))
+        {
+            Say(npc, first, last);
+        }
+    }
 
     static TileCoord Here(U7Object obj) => new(obj.Tx, obj.Ty, obj.Tz);
 }

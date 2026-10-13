@@ -15,7 +15,7 @@ namespace U7.Actors;
 /// </summary>
 public sealed class PatrolSchedule(NpcBrain brain) : Schedule(brain)
 {
-    const int PathShape = 607;
+    public const int PathShape = 607;
     const int BookShape = 642;
     const int HammerShape = 623;
 
@@ -212,9 +212,9 @@ public sealed class PatrolSchedule(NpcBrain brain) : Schedule(brain)
         var qual = path.Quality;
         _seekCombat = (qual & 32) != 0;
         _forever = (qual & 64) != 0;
-        // Exult's fix for the pirate fort at the Isle of the Avatar, which
-        // works "incorrectly" in the original.
-        if (_forever && (qual & 31) == 0)
+        // Exult's fix for the pirate fort at the Isle of the Avatar (Black
+        // Gate), which works "incorrectly" in the original.
+        if (_forever && GameContext.IsBg && (qual & 31) == 0)
         {
             _forever = false;
         }

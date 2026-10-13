@@ -30,8 +30,17 @@ public sealed class XformTables
     ];
 
     readonly byte[] _tables;
+    /// <summary>The day palette (8-bit RGB) the tables' colours are fitted in.</summary>
+    readonly byte[] _day;
+    /// <summary>Per table, the slopes (3x3, row-major) of the affine map that fits it best (<see cref="TurnColour"/>).</summary>
+    readonly float[] _slopes = new float[Count * 9];
 
-    XformTables(byte[] tables) => _tables = tables;
+    XformTables(byte[] tables)
+    {
+        _tables = tables;
+        _day = U7Palette.DayRgb();
+        FitSlopes();
+    }
 
     /// <summary>Exult <c>xforms[index]</c>, the table for colour <c>FirstTranslucent + index</c>.</summary>
     public ReadOnlySpan<byte> this[int index] => _tables.AsSpan(index * 256, 256);
@@ -39,8 +48,62 @@ public sealed class XformTables
     /// <summary>All tables back to back: entry <c>(pix - FirstTranslucent) * 256 + dest</c>.</summary>
     public ReadOnlySpan<byte> All => _tables;
 
+    /// <summary>The day palette (8-bit RGB) the colour slopes are fitted in.</summary>
+    public ReadOnlySpan<byte> Day => _day;
+
+    /// <summary>Per table, the 3x3 slopes (row-major) of <see cref="TurnColour"/>, for a backend doing its math elsewhere.</summary>
+    public ReadOnlySpan<float> Slopes => _slopes;
+
     /// <summary>Exult <c>invis_xform</c>, XFORM.TBL's entry 0: invisible actors are painted through it.</summary>
-    public ReadOnlySpan<byte> Invisible => this[Count - 1];
+    public ReadOnlySpan<byte> Invisible => this[InvisibleTable];
+
+    /// <summary>The table of <see cref="Invisible"/>.</summary>
+    public const int InvisibleTable = Count - 1;
+
+    /// <summary>
+    /// A true-colour pixel (the remake's, <c>ArtLook.TrueColour</c>) seen
+    /// through table <paramref name="table"/>: its anchor <paramref name="from"/>
+    /// turns into <paramref name="to"/> (the table's entry, as an index pixel
+    /// does), and its colour <paramref name="rgb"/> into <c>day[to] + M (rgb - day[from])</c>,
+    /// M the slopes of the affine map fitting the table. A pixel of its
+    /// anchor's own colour becomes exactly the index pixel's colour; the art's
+    /// finer shades carry through as the table changes colours near it.
+    /// (XFORM.TBL's tables aren't Exult's <c>hard_blends</c>: a blend colour
+    /// and alpha miss them by 20 to 80 levels on average.)
+    /// </summary>
+    public void TurnColour(int table, int from, int to, Span<byte> rgb)
+    {
+        var m = _slopes.AsSpan(table * 9, 9);
+        float dr = rgb[0] - _day[from * 3];
+        float dg = rgb[1] - _day[from * 3 + 1];
+        float db = rgb[2] - _day[from * 3 + 2];
+        for (var c = 0; c < 3; c++)
+        {
+            var v = _day[to * 3 + c] + m[c * 3] * dr + m[c * 3 + 1] * dg + m[c * 3 + 2] * db;
+            rgb[c] = (byte)Math.Clamp(v + 0.5f, 0f, 255f);
+        }
+    }
+
+    /// <summary>Each table's slopes, by least squares over the colours that don't cycle (true colour's anchors).</summary>
+    void FitSlopes()
+    {
+        const int anchors = 0xE0;
+        var to = new byte[anchors * 3];
+        var weights = new double[anchors];
+        Array.Fill(weights, 1.0);
+        for (var t = 0; t < Count; t++)
+        {
+            for (var i = 0; i < anchors; i++)
+            {
+                var j = _tables[t * 256 + i];
+                to[i * 3] = _day[j * 3];
+                to[i * 3 + 1] = _day[j * 3 + 1];
+                to[i * 3 + 2] = _day[j * 3 + 2];
+            }
+
+            ColourFit.Slopes(_day, to, weights, anchors, _slopes.AsSpan(t * 9, 9));
+        }
+    }
 
     /// <summary>XFORM.TBL when the game has it, else the tables built from the blends.</summary>
     public static XformTables Load()

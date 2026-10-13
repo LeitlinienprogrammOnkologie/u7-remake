@@ -62,7 +62,7 @@ public sealed class StreetMaintenanceSchedule(
         }
         else
         {
-            act = new ActivateAction(obj, Runner.Activate);
+            act = new ActivateAction(obj, Runner.Activate is { } activate ? o => activate(o, (int)U7.Usecode.UsecodeEvent.DoubleClick) : null);
         }
 
         SetAction(new SequenceAction(100, new FramesAction([standFrame, ActorWalker.DirFrame(dir, 3)]),
@@ -74,6 +74,9 @@ public sealed class StreetMaintenanceSchedule(
             {
                 case 322: // Closing shutters.
                 case 372:
+                    Say(TextMessages.FirstCloseShutters, TextMessages.LastCloseShutters);
+                    break;
+                case 290 or 291 when GameContext.IsSi && _frame > 3: // Serpent Isle's closed by frame.
                     Say(TextMessages.FirstCloseShutters, TextMessages.LastCloseShutters);
                     break;
                 case 290: // Opening shutters.

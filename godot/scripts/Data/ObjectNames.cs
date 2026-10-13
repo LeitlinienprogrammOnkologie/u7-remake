@@ -10,49 +10,8 @@ namespace U7.Data;
 /// </summary>
 public static class ObjectNames
 {
-    const int ShapeName = -255, NoName = -1;
-
-    /// <summary>
-    /// Black Gate's frame names (Exult <c>data/bg/shape_info.txt</c>,
-    /// framenames), by shape and frame (-1: any other frame): a misc name, the
-    /// shape's own name, or none. Food, sextants, desk items, reagents and
-    /// amulets are named by frame; blood has a name in its first four frames only.
-    /// </summary>
-    static readonly Dictionary<(int Shape, int Frame), int> FrameNames = BuildFrameNames();
-
-    static Dictionary<(int, int), int> BuildFrameNames()
-    {
-        var names = new Dictionary<(int, int), int>();
-        for (var f = 0; f < 32; f++)
-        {
-            names[(377, f)] = 11 + f;
-        }
-
-        names[(650, 0)] = 44;
-        names[(650, 1)] = 43;
-        for (var f = 0; f <= 20; f++)
-        {
-            names[(675, f)] = 45 + f;
-        }
-
-        for (var f = 0; f < 8; f++)
-        {
-            names[(842, f)] = f;
-        }
-
-        for (var f = 0; f < 4; f++)
-        {
-            names[(912, f)] = ShapeName;
-        }
-
-        names[(912, -1)] = NoName;
-        for (var f = 0; f < 3; f++)
-        {
-            names[(955, f)] = 8 + f;
-        }
-
-        return names;
-    }
+    /// <summary>The NPC of a number (Exult <c>gwin->get_npc</c>), for the names that are an NPC's (Serpent Isle's corpses and urns).</summary>
+    public static Func<int, U7Object?>? Npc { get; set; }
 
     /// <summary>Exult <c>Actor::get_name</c>: an NPC the avatar has met by its name, anyone else by the shape's.</summary>
     public static string Get(U7Object obj, ShapeCatalog catalog) =>
@@ -62,21 +21,80 @@ public static class ObjectNames
     public static string NpcName(U7Object npc, ShapeCatalog catalog) =>
         npc.NpcName.Length > 0 && !npc.IsMonster ? npc.NpcName : OfThing(npc, catalog);
 
-    /// <summary>Exult <c>Game_object::get_name</c>.</summary>
+    /// <summary>
+    /// Exult <c>Game_object::get_name</c>: the shape's name, unless its
+    /// <c>framenames</c> entry for the frame and quality gives none (a type
+    /// below 0), a misc name (type 0), or for shapes with a quality and
+    /// bodies a misc name with the shape's or another before (odd types) or
+    /// after it; from type 3 that other is the NPC the quality (a body's: its
+    /// own) names, if met, else the entry's default.
+    /// </summary>
     public static string OfThing(U7Object obj, ShapeCatalog catalog)
     {
         var info = catalog[obj.Shape];
-        var name = info.Name;
-        if (FrameNames.TryGetValue((obj.Shape, obj.Frame), out var msg) || FrameNames.TryGetValue((obj.Shape, -1), out msg))
+        var qual = info.HasQuality && !info.IsNpcClass ? obj.Quality : -1;
+        var entry = ShapeInfoText.Find(info.FrameNames, obj.Frame, qual, e => (e.Frame, e.Quality));
+        var shapeName = info.Name;
+        var type = entry?.Type ?? -255;
+        string name;
+        if (type < 0 && type != -255)
         {
-            if (msg == NoName)
+            return "";
+        }
+
+        if (type == -255 || entry!.Value.MsgId >= TextMessages.MiscNameCount)
+        {
+            name = shapeName;
+        }
+        else if (type == 0)
+        {
+            name = TextMessages.MiscName(entry.Value.MsgId);
+        }
+        else if (!info.HasQuality && !info.IsBody)
+        {
+            name = shapeName;
+        }
+        else
+        {
+            var (msgId, otherMsg) = (entry.Value.MsgId, entry.Value.OtherMsg);
+            var defName = false;
+            string msg = "", other = "";
+            if (type >= 3)
+            {
+                var npcNum = !info.IsBody ? obj.Quality : qual == 1 ? obj.LiveNpcNum : -1;
+                if (npcNum >= 0 && Npc?.Invoke(npcNum) is { Unused: false } npc && (!info.IsBody || npc.GetFlag(ObjFlag.Met)))
+                {
+                    other = npc.NpcName;
+                    defName = other.Length == 0;
+                    msg = defName ? "" : TextMessages.MiscName(msgId);
+                }
+                else
+                {
+                    defName = true;
+                }
+            }
+            else
+            {
+                msg = TextMessages.MiscName(msgId);
+                other = otherMsg >= 0 && otherMsg < TextMessages.MiscNameCount ? TextMessages.MiscName(otherMsg) : shapeName;
+            }
+
+            if (!defName)
+            {
+                return (type & 1) != 0 ? other + msg : msg + other;
+            }
+
+            if (otherMsg >= 0 && otherMsg < TextMessages.MiscNameCount)
+            {
+                name = TextMessages.MiscName(otherMsg);
+            }
+            else if (otherMsg < 0 && otherMsg != -255)
             {
                 return "";
             }
-
-            if (msg != ShapeName)
+            else
             {
-                name = TextMessages.MiscName(msg);
+                name = shapeName;
             }
         }
 

@@ -3,13 +3,13 @@ using System.IO;
 namespace U7.Game;
 
 /// <summary>
-/// Exult <c>gamewin.dat</c>: the clock, the music, armageddon and combat.
-/// The view's scroll, ambient light and infravision are written as zero
-/// (the port centres the view on the avatar and has neither of the others).
+/// Exult <c>gamewin.dat</c>: the clock, the music, armageddon, usecode's
+/// ambient light, combat and infravision. The view's scroll is written as
+/// zero (the port centres the view on the avatar).
 /// </summary>
 /// <param name="EggCount">Exult <c>set_egg_count(repeat >> 16)</c>: the continuous jukebox eggs holding the track.</param>
 public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCombat, int Track, bool Repeat, int EggCount,
-    int SpecialLight, bool Armageddon)
+    int SpecialLight, bool Armageddon, bool AmbientLight = false, bool Infravision = false)
 {
     /// <summary>Exult <c>Game_window::write_gwin</c>.</summary>
     public void Write(BinaryWriter w)
@@ -23,9 +23,9 @@ public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCo
         w.Write(unchecked((uint)Track));
         w.Write((Repeat ? 1u : 0u) | ((uint)EggCount << 16));
         w.Write((byte)(Armageddon ? 1 : 0));
-        w.Write((byte)0); // ambient light
+        w.Write((byte)(AmbientLight ? 1 : 0));
         w.Write((byte)(InCombat ? 1 : 0));
-        w.Write((byte)0); // infravision
+        w.Write((byte)(Infravision ? 1 : 0));
     }
 
     /// <summary>
@@ -54,13 +54,11 @@ public readonly record struct GwinState(int Day, int Hour, int Minute, bool InCo
         var track = unchecked((int)r.ReadUInt32());
         var repeat = r.ReadUInt32();
         var armageddon = Has(r, 1) && r.ReadByte() == 1;
-        if (Has(r, 1))
-        {
-            r.ReadByte(); // ambient light
-        }
-
+        var ambient = Has(r, 1) && r.ReadByte() == 1;
         var combat = Has(r, 1) && r.ReadByte() == 1;
-        return new GwinState(day, hour, minute, combat, track, (repeat & 1) != 0, (int)(repeat >> 16), light, armageddon);
+        var infravision = Has(r, 1) && r.ReadByte() == 1;
+        return new GwinState(day, hour, minute, combat, track, (repeat & 1) != 0, (int)(repeat >> 16), light, armageddon,
+            ambient, infravision);
     }
 
     static bool Has(BinaryReader r, int bytes) => r.BaseStream.Length - r.BaseStream.Position >= bytes;

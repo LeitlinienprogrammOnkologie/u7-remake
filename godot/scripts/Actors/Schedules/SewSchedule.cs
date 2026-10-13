@@ -8,7 +8,7 @@ namespace U7.Actors;
 /// (653) and put it back, sit at the spinning wheel (651) and spin, take the
 /// spindle of thread (654), weave at the loom (261) and take the cloth
 /// (851), lay it on the work table (971) and cut and sew it with the shears
-/// (698) into a top or pants (738, 249), then display them on the wares
+/// (698) into a top or pants (738, 249; in Serpent Isle a cloak, 403), then display them on the wares
 /// table (890); with three or more clothes about, one goes again.
 /// </summary>
 public sealed class SewSchedule(NpcBrain brain) : Schedule(brain)
@@ -22,7 +22,8 @@ public sealed class SewSchedule(NpcBrain brain) : Schedule(brain)
     const int WaresTableShape = 890;
     const int ShearsShape = 698;
     const int ChairShape = 873;
-    static readonly int[] ClothesShapes = [738, 249]; // Black Gate's top and pants.
+    /// <summary>What is sewn: Black Gate's top and pants, Serpent Isle's cloak.</summary>
+    static int[] ClothesShapes => GameContext.IsSi ? [403] : [738, 249];
 
     enum State
     {
@@ -234,7 +235,7 @@ public sealed class SewSchedule(NpcBrain brain) : Schedule(brain)
                 else if (_sewClothesCnt == 5)
                 {
                     // A top or pants.
-                    var shape = ClothesShapes[Rng.Next(2)];
+                    var shape = GameContext.IsSi ? 403 : ClothesShapes[Rng.Next(2)];
                     Map.SetShape(cloth, shape);
                     cloth.Frame = Rng.Next(Frames(shape));
                     _state = State.GetClothes;

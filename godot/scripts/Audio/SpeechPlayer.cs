@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Godot;
 using U7.Core;
 using U7.Data;
@@ -15,6 +17,7 @@ public sealed partial class SpeechPlayer : Node
 {
     readonly AudioStreamPlayer _player = new() { Name = "Voice" };
     FlexFile? _speech;
+    List<FlexFile>? _patches;
 
     /// <summary>Exult's <c>speech_enabled</c> (its default: on); the console's games have none, as they have no music.</summary>
     public bool Enabled { get; set; } = true;
@@ -30,12 +33,25 @@ public sealed partial class SpeechPlayer : Node
 
     public override void _Ready() => AddChild(_player);
 
-    /// <summary>Exult <c>start_speech(num)</c>: U7SPEECH.SPC's entry; false if none plays.</summary>
+    /// <summary>
+    /// Exult <c>start_speech(num)</c>: U7SPEECH.SPC's entry, or the patch's
+    /// (Exult's <c>PATCH_U7SPEECH</c> through <c>U7multiobject</c>: a mod's
+    /// <c>u7speech.spc</c> wins where it has the entry); false if none plays.
+    /// </summary>
     public bool PlaySpeech(int num)
     {
         if (!Enabled || num < 0)
         {
             return false;
+        }
+
+        _patches ??= U7Paths.PatchLayers("u7speech.spc").Reverse().Select(p => new FlexFile(p)).ToList();
+        foreach (var patch in _patches)
+        {
+            if (num < patch.Count && patch.Get(num) is var voc && voc.Length > 0)
+            {
+                return Play(voc);
+            }
         }
 
         var path = Path.Combine(U7Paths.StaticDir, "U7SPEECH.SPC");
