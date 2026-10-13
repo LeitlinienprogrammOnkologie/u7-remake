@@ -82,6 +82,8 @@ public sealed class ShapeRecord
     // Exult's shape_info.txt and bodies.txt (ShapeInfoText), per game.
     /// <summary>Exult <c>Explosion_info</c>: the SPRITES.VGA explosion and its sound (-1 none); null for the default (sprite 5).</summary>
     public (int Sprite, int Sfx)? Explosion;
+    /// <summary>Exult <c>SFX_info</c>: the sound the shape makes while shown (<c>shape_sfx</c>), null for none.</summary>
+    public SfxInfo? Sfx;
     /// <summary>Exult <c>Animation_info</c> from <c>shape_info.txt</c>, over TFA.DAT's type; null for TFA's.</summary>
     public AnimationText? AnimationText;
     /// <summary>Exult <c>usecode_events</c>: its usecode is also run on Exult's extra events.</summary>

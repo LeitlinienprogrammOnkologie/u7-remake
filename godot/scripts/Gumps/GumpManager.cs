@@ -182,7 +182,12 @@ public sealed class GumpManager
         }
 
         _stagger = (_stagger + 1) % 8;
+        // Exult Gump_manager::add_gump: "the weird noise".
+        Sfx?.Play(U7.Audio.SoundEffects.GameSfx(14));
     }
+
+    /// <summary>The sound effects (Exult <c>Audio</c>); null headless.</summary>
+    public U7.Audio.SoundEffects? Sfx { get; set; }
 
     public void Raise(Gump gump)
     {
@@ -333,6 +338,12 @@ public sealed class GumpManager
         if (button is not null)
         {
             button.Pushed = true;
+            // Exult Dragging_info: a pushed button makes a noise, but not the checkmark (which sounds when it closes).
+            if (button.Kind != GumpButtonKind.Check)
+            {
+                Sfx?.Play(U7.Audio.SoundEffects.GameSfx(73));
+            }
+
             Drag = new DragState { Button = button, MouseX = mx, MouseY = my, SourceGump = gump };
             return true;
         }
@@ -453,6 +464,11 @@ public sealed class GumpManager
             btn.Pushed = false;
             if (btn.Contains(view, mx, my))
             {
+                if (btn.Kind == GumpButtonKind.Check)
+                {
+                    Sfx?.Play(U7.Audio.SoundEffects.GameSfx(74)); // Exult Checkmark_button::activate.
+                }
+
                 btn.Activate(view);
             }
 

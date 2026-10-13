@@ -153,6 +153,9 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
     taking either look): the glow's spill at 0.35 over 10 world pixels in
     modern mode (`art bloom`); rain and snow brightened in the lights'
     colours where they fall (`WeatherLook.LightCatch`).
+  - **GPU renderer the default** (RENDERER.md 5.3, 2026-10-13): `art
+    renderer auto`, the compute compositor where a rendering device exists
+    (bit-exact to the CPU in classic mode), the CPU headless.
   - **Modern colour** (RENDERER.md 5.5, 2026-10-13): true colour through
     the lookup tables and the remake's lights in linear light, on by
     default; the user saw no discernible difference and took either look.
@@ -245,8 +248,10 @@ godot/scripts/
               many of a stack), SaveLoadView
               (Exult Newfile_gump: the save/load screen), MapView and
               PaintedMap (display_map's painted map, the tile -> pixel warp)
-  Audio/      MusicPlayer (MIDI through the Windows synth), SpeechPlayer
-              (Exult's speech) and VocFile (Exult VocAudioSample)
+  Audio/      MusicPlayer (MIDI through the Windows synth), SoundEffects
+              (Exult's MIDI effects, godot/data/midisfx.flx, through the same
+              synth), SpeechPlayer (Exult's speech) and VocFile (Exult
+              VocAudioSample)
   Core/       GameContext (Exult Game: the game and mode a world loads in,
               docs/SERPENT_ISLE.md), GameShapes (Exult get_shape: gumps by
               name per game), U7Paths (data paths by game, ReadGameDat,

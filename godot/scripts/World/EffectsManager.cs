@@ -43,6 +43,8 @@ public sealed class SpriteEffect
 /// </summary>
 public sealed class EffectsManager
 {
+    /// <summary>The sound effects (Exult <c>Audio</c>), for the thunder; null headless.</summary>
+    public U7.Audio.SoundEffects? Sfx { get; set; }
     readonly List<SpriteEffect> _sprites = new();
     readonly List<WeatherEffect> _weather = new();
     readonly VgaShapeFile _spritesVga;

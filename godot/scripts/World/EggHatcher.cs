@@ -35,6 +35,8 @@ public sealed class EggHatcher
     public Action<TileCoord>? TeleportParty { get; set; }
     public string LastMessage { get; private set; } = "";
     public int JukeboxTrack => Music is { } m ? m.CurrentTrack : _jukeboxTrack;
+    /// <summary>The sound effects, for the sound eggs; null headless.</summary>
+    public U7.Audio.SoundEffects? Sfx { get; set; }
 
     public EggHatcher(GameMap map, GameClock clock)
     {
@@ -500,6 +502,11 @@ public sealed class EggHatcher
             case EggType.Voice:
                 // Exult Voice_egg::hatch_now.
                 Usecode?.DoSpeech(egg.EggData1 & 0xff);
+                break;
+            case EggType.SoundSfx:
+                // Exult Soundsfx_egg::hatch_now: the effect at the egg (its MIDI effects play once, continuous or not).
+                LastMessage = $"sound effect {egg.EggData1 & 0xff}";
+                Sfx?.PlayAt(egg.EggData1 & 0xff, egg);
                 break;
             default:
                 if (_loggedStub.Add(egg.EggType))

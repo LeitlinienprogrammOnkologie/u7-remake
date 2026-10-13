@@ -185,8 +185,8 @@ public sealed class AvatarController
         FollowersCalled?.Invoke();
     }
 
-    /// <summary>Exult <c>Actor::stop</c>: not moving, the resting frame.</summary>
-    void Halt()
+    /// <summary>Exult <c>Actor::stop</c>: not moving, the resting frame (the party not called).</summary>
+    public void Halt()
     {
         if (_walk is { } walk)
         {

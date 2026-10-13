@@ -178,6 +178,8 @@ python scripts/faces/prepare.py          # needs numpy, pillow, scipy
 Without `assets/faces/` the game shows the faces' own art. The console's
 `art faces off` switches back to it (remembered in `saves/settings.cfg`).
 
+Sound effects are Exult's MIDI ones (`godot/data/midisfx.flx`, Exult's data,
+GPL), played through the same synth; the console's `sfx <n>` tries one.
 Music plays through the Windows built-in MIDI synth from the MT-32 export
 in `assets/audio/music_mt32/`, converted to General MIDI at load with
 Exult's patch table; no soundfont or extra software is needed. On other platforms music is silent for now.

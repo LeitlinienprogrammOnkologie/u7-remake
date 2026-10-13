@@ -53,6 +53,8 @@ public partial class U7Game : Node2D
     /// <summary>Exult <c>BG_Game::new_game</c>'s screen while it is shown: the game waits for the avatar's name.</summary>
     NewGameView? _newGame;
     MusicPlayer _music = null!;
+    SoundEffects _sfx = null!;
+    bool _quaking;
     SpeechPlayer _speech = null!;
     PartyManager _party = null!;
     CombatEngine _combat = null!;
@@ -64,6 +66,8 @@ public partial class U7Game : Node2D
     Vector2 _quakeOffset;
     bool _ready;
     bool _debugOn;
+    /// <summary>The status overlay (the clock, the keys, what is under the cursor) shows; F1 toggles it, kept in settings.cfg.</summary>
+    bool _overlayOn = true;
     int _lastSchunk = -1;
     (int Cx, int Cy) _lastChunk = (-1, -1);
     string _statusExtra = "";
@@ -117,9 +121,11 @@ public partial class U7Game : Node2D
             _schedules.AvatarWalk = () => _avatar.Walk;
             _combat = new CombatEngine(_map, avatar, _catalog);
             _music = new MusicPlayer();
+            _sfx = new SoundEffects(_music) { Enabled = Settings.Get("audio", "effects", true).AsBool() };
+            _combat.Sfx = _sfx;
             _speech = new SpeechPlayer { Name = "Speech" };
             AddChild(_speech);
-            _eggs = new EggHatcher(_map, _clock) { Combat = _combat, Music = _music, Party = _party };
+            _eggs = new EggHatcher(_map, _clock) { Combat = _combat, Music = _music, Party = _party, Sfx = _sfx };
             _avatar.WalkStarted = () =>
             {
                 _cameraTile = null;
@@ -178,7 +184,7 @@ public partial class U7Game : Node2D
                 _music.EggCount = g1.EggCount;
             }
 
-            _effects = new EffectsManager(_shapes.SpritesVga, _clock) { InDungeon = () => _lighting.InDungeon };
+            _effects = new EffectsManager(_shapes.SpritesVga, _clock) { InDungeon = () => _lighting.InDungeon, Sfx = _sfx };
             _eggs.Effects = _effects;
             _combat.Effects = _effects;
             _schedules.Effects = _effects;
@@ -193,7 +199,7 @@ public partial class U7Game : Node2D
                 Missiles = _combat.Missiles,
                 HomingMissiles = _combat.HomingMissiles,
                 TextureFilter = TextureFilterEnum.Nearest,
-                Animators = new Animators(_map, _clock),
+                Animators = new Animators(_map, _clock) { Sfx = _sfx },
                 Art = new HiresArt(_shapes)
             };
             ArtLook.RedrawnPaperdolls = Settings.Get("art", "redrawn_paperdolls", false).AsBool();
@@ -219,7 +225,7 @@ public partial class U7Game : Node2D
             // Rain, snow and sparkles over the world, under the gumps and the screen effects.
             AddChild(new WeatherView { Name = "WeatherView", Effects = _effects, Lighting = _lighting });
 
-            _gumps = new GumpManager(_map, avatar);
+            _gumps = new GumpManager(_map, avatar) { Sfx = _sfx };
             _gumps.ActivateUsecode = obj => RunUsecode(obj);
             _gumps.DropOnMap = DropOnMap;
             _gumps.LiftedFromWorld = (obj, drag) =>
@@ -288,10 +294,14 @@ public partial class U7Game : Node2D
             _gumps.FlashMouse = _cursor.Flash;
             _combat.FlashMouse = _cursor.Flash;
 
+            // The status overlay and the usecode lines under it wrap at the window's width (set each frame).
+            _overlayOn = Settings.Get("ui", "overlay", true).AsBool();
             _hud = new Label
             {
                 Name = "Status",
                 Position = new Vector2(12, 8),
+                AutowrapMode = TextServer.AutowrapMode.WordSmart,
+                Visible = _overlayOn,
                 TextureFilter = TextureFilterEnum.Nearest
             };
             _hud.AddThemeColorOverride("font_color", new Color(0.95f, 0.9f, 0.7f));
@@ -301,6 +311,7 @@ public partial class U7Game : Node2D
             {
                 Name = "UsecodeDebug",
                 Position = new Vector2(12, 90),
+                AutowrapMode = TextServer.AutowrapMode.WordSmart,
                 Visible = false,
                 TextureFilter = TextureFilterEnum.Nearest
             };
@@ -309,7 +320,7 @@ public partial class U7Game : Node2D
 
             var usecodeFile = UsecodeFile.Load();
             GD.Print($"USECODE loaded: {usecodeFile.Count} functions.");
-            _usecode = new UsecodeMachine(usecodeFile, _map, avatar);
+            _usecode = new UsecodeMachine(usecodeFile, _map, avatar) { Sfx = _sfx };
             _usecode.Frame8 = _shapes.GetFrame8;
             UsecodeVars.Read(_usecode);
             if (!GameContext.IsBg)
@@ -567,6 +578,7 @@ public partial class U7Game : Node2D
 
     public override void _ExitTree()
     {
+        _sfx?.Dispose();
         _music?.Dispose();
         BgIntrinsics.WriteStubReport();
     }
@@ -649,7 +661,8 @@ public partial class U7Game : Node2D
         }
 
         Vector2I? click = null;
-        var inUsecode = UsecodeRunning;
+        // Target mode holds the game as a usecode wait for a click does (Exult's Get_click pauses the time queue).
+        var inUsecode = UsecodeRunning || _targetMode;
         var virt = _gumpView.MouseVirtual();
         var overGump = _gumps.FindGump(virt.X, virt.Y, _gumpView) is not null;
         var gumpBusy = _gumps.GumpMode || _gumps.IsDragging || overGump || _gumps.Drag is not null;
@@ -725,9 +738,14 @@ public partial class U7Game : Node2D
                 _usecode?.InUsecodeControl(_avatar.Avatar) ?? false);
         }
 
-        _clock.Update(delta);
-        _usecode?.UpdateFade(delta);
-        _usecode?.TickScripts(delta);
+        // Exult's time queue, paused in target mode: the clock and the usecode scripts stand still.
+        if (!_targetMode)
+        {
+            _clock.Update(delta);
+            _usecode?.UpdateFade(delta);
+            _usecode?.TickScripts(delta);
+        }
+
         if (_usecode is { RestartRequested: true })
         {
             _usecode.RestartRequested = false;
@@ -768,7 +786,7 @@ public partial class U7Game : Node2D
         _screenFx.Fade = _usecode?.FadeLevel ?? 1f;
         _world.Frozen = fadedOut;
         // Exult's Get_click (a target, the map, the crystal ball) holds the colours still.
-        _world.RotateColors = !fadedOut && _usecode is not { Wait: UsecodeWait.ClickOnItem or UsecodeWait.Picture };
+        _world.RotateColors = !fadedOut && !_targetMode && _usecode is not { Wait: UsecodeWait.ClickOnItem or UsecodeWait.Picture };
 
         var av = _avatar.Avatar;
         // Exult display_area: the view goes to the area while it is shown (up to lift 4, no dungeon),
@@ -799,6 +817,10 @@ public partial class U7Game : Node2D
             Mathf.CeilToInt(viewSize.X / U7Constants.TileSize), Mathf.CeilToInt(viewSize.Y / U7Constants.TileSize));
         _lighting.Focus = (focus.Tx, focus.Ty);
         _lighting.Update(delta);
+        // The sound effects: their distances from the view's centre, the delayed ones, Exult's background noise.
+        _sfx.ViewCentre = focus;
+        _sfx.Update(delta, outside: !_lighting.Inside && !_lighting.InDungeon, night: _clock.Hour < 6 || _clock.Hour > 20,
+            musicPlaying: _music.CurrentTrack != -1);
 
         var under = WorldView.WorldToTile(camera.GetGlobalMousePosition(), av.Tz);
         var picked = _world.PickObject(camera.GetGlobalMousePosition());
@@ -815,9 +837,14 @@ public partial class U7Game : Node2D
         }
 
         var extra = _usecode is { HudMessage.Length: > 0 } ? "" : _statusExtra;
+        // The overlay wraps inside the window, the usecode lines placed under it.
+        var width = Math.Max(64, GetViewport().GetVisibleRect().Size.X - 2 * hud.Position.X);
+        hud.Size = new Vector2(width, 0);
+        _debug.Position = new Vector2(hud.Position.X, hud.Position.Y + hud.Size.Y + 4);
+        _debug.Size = new Vector2(width, 0);
         hud.Text =
             $"Ultima VII  {_clock.HudText()}  tile {av.Tx},{av.Ty}  lift {av.Tz}  zoom {_zoom:0.#}×\n" +
-            $"WASD/arrows walk · I inventory · C combat · F4 invincible · [ ] hour · right or left button walk · click name · double-click / E · F2 debug · F3 arena · PgUp/PgDn lift · M music · F5/F9 save/load · F6 die · F7 paperdoll art · Home Trinsic\n" +
+            $"WASD/arrows walk · I inventory · C combat · T target · F4 invincible · [ ] hour · right or left button walk · click name · double-click / E · F1 overlay · F2 debug · F3 arena · PgUp/PgDn lift · M music · F5/F9 save/load · F6 die · F7 paperdoll art · Home Trinsic\n" +
             $"hp {av.GetProp(ActorProp.Health)}  {(_combat.InCombat ? "combat" : "peace")}{_party.HudText()}" +
             (av.IsDead ? "  dead" : "") +
             (_combat.AvatarInvincible ? "  invincible" : "") +
@@ -1034,7 +1061,7 @@ public partial class U7Game : Node2D
     /// running or waiting, not held by the opening (<c>dont_move</c>), and
     /// Exult's <c>avatar_can_act</c>: not asleep, paralysed, dead or knocked out.
     /// </summary>
-    bool CanWalk => !UsecodeRunning && !ObjFlag.DontMoveMode(_avatar.Avatar) && CombatSchedule.CanAct(_avatar.Avatar);
+    bool CanWalk => !UsecodeRunning && !_targetMode && !ObjFlag.DontMoveMode(_avatar.Avatar) && CombatSchedule.CanAct(_avatar.Avatar);
 
     /// <summary>A call from the engine (doors, schedules, scripts' actions): only while no usecode runs or waits.</summary>
     bool TryCallUsecode(int fun, U7Object? item, UsecodeEvent ev)
@@ -1171,7 +1198,15 @@ public partial class U7Game : Node2D
         if (_usecode is not { QuakeSteps: > 0 } machine)
         {
             _quakeOffset = Vector2.Zero;
+            _quaking = false;
             return _quakeOffset;
+        }
+
+        if (!_quaking)
+        {
+            // Exult Earthquake::handle_event: the sound once, as the shaking starts.
+            _quaking = true;
+            _sfx.Play(SoundEffects.GameSfx(60));
         }
 
         _quakeTimer -= delta;

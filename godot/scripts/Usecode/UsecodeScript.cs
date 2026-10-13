@@ -377,7 +377,8 @@ public sealed class UsecodeScript
                     ++_i; // no speech playback yet
                     break;
                 case Sfx:
-                    ++_i; // no sound effects yet
+                    // Exult Usecode_script: the effect at the object.
+                    _vm.Sfx?.PlayAt(Int(++_i), Obj);
                     break;
                 case FaceDir:
                 {

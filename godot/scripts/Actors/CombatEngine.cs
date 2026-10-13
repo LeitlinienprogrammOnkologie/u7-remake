@@ -93,6 +93,45 @@ public sealed class CombatEngine
     public string LastMessage { get; private set; } = "";
     public IReadOnlyList<U7Object> Spawned => _spawned;
     public WeaponTable Weapons => _weapons;
+    /// <summary>The sound effects (Exult <c>Audio</c>); null headless.</summary>
+    public U7.Audio.SoundEffects? Sfx { get; set; }
+
+    /// <summary>
+    /// Exult <c>Combat_schedule::start_attack</c>'s sound: the weapon's, else
+    /// the monster's own, part way through the swing (the whole of it for a
+    /// shot), at the attacker.
+    /// </summary>
+    public void PlayAttackSfx(U7Object npc, int weaponShape, bool ranged, int frameCount)
+    {
+        if (Sfx is null)
+        {
+            return;
+        }
+
+        var sfx = weaponShape >= 0 && _weapons[weaponShape] is { } w ? w.Sfx : -1;
+        if (sfx < 0 && _monsters[npc.Shape] is { } m)
+        {
+            sfx = m.HitSfx;
+        }
+
+        if (sfx >= 0)
+        {
+            var delay = ranged ? frameCount : frameCount / 2;
+            Sfx.PlayLater(sfx, npc, delay * U7.Core.U7Constants.StandardDelayMs);
+        }
+    }
+
+    /// <summary>Exult <c>Game_object::play_hit_sfx</c>: a weapon that does damage sounds its hit: a shot (1), the glass sword (37) or a blow (4).</summary>
+    void PlayHitSfx(U7Object target, int weaponShape, bool ranged)
+    {
+        if (Sfx is null || weaponShape < 0 || _weapons[weaponShape] is not { Damage: > 0 })
+        {
+            return;
+        }
+
+        var sfx = ranged ? 1 : weaponShape == 604 ? 37 : 4;
+        Sfx.PlayAt(U7.Audio.SoundEffects.GameSfx(sfx), target);
+    }
     public AmmoTable Ammo => _ammo;
     public bool IsMonsterShape(int shape) => _monsters.Contains(shape);
 
@@ -972,6 +1011,8 @@ public sealed class CombatEngine
         var armor = inf.Armor + Equipment.WornArmor(victim, _armor, out var gearImm);
         if ((gearImm & (1 << type)) != 0)
         {
+            // Exult: armour gives immunity; the metal clang.
+            Sfx?.PlayAt(U7.Audio.SoundEffects.GameSfx(5), victim);
             FlashHit(victim);
             return 0;
         }
@@ -989,6 +1030,8 @@ public sealed class CombatEngine
 
         if (damage <= 0)
         {
+            // Exult: no damage caused; the graze.
+            Sfx?.PlayAt(U7.Audio.SoundEffects.GameSfx(5), victim);
             FlashHit(victim);
             return 0;
         }
@@ -1470,7 +1513,11 @@ public sealed class CombatEngine
         }
 
         var autohit = wpn is { Autohit: true } || ainf is { Autohit: true };
-        if (!autohit && !TryToHit(target, attval))
+        if (autohit || TryToHit(target, attval))
+        {
+            PlayHitSfx(target, weaponShape, false);
+        }
+        else
         {
             if (target.IsActor)
             {
@@ -1522,7 +1569,7 @@ public sealed class CombatEngine
     /// sprite at <paramref name="pos"/>; a quarter of the way through, the
     /// exploding object goes and everything within half the sprite's width is
     /// attacked with the weapon, the attacker answering for it (the avatar if
-    /// none). The explosion's sound is not played.
+    /// none). The explosion's sound is the exploding shape's (<c>get_explosion_sfx</c>).
     /// </summary>
     public void Explode(TileCoord pos, U7Object? exploding, int weapon, int projectile, U7Object? attacker)
     {
@@ -1541,6 +1588,11 @@ public sealed class CombatEngine
         if (attacker is not { IsActor: true })
         {
             attacker = _avatar;
+        }
+
+        if (_catalog[shape].Explosion is { Sfx: >= 0 } ex)
+        {
+            Sfx?.PlayAt(ex.Sfx, pos);
         }
 
         var blast = effects.AddSprite(ExplosionSprite(shape), pos);
@@ -2310,6 +2362,7 @@ public sealed class CombatEngine
             hit = pr.AutoHit || TryToHit(target, pr.AttVal);
             if (hit)
             {
+                PlayHitSfx(target, pr.WeaponShape, true);
                 HitWith(attacker, target, pr.Weapon, pr.Weapon?.Damage ?? 1, ainf, pr.AmmoShape);
             }
             else

@@ -194,8 +194,8 @@ public sealed partial class BgIntrinsics
             0x8e => UsecodeValue.FromInt(_vm.Combat is { InCombat: true } ? 1 : 0),
             0x96 => AOrAn(p),
             0x0c => InputNumericValue(p),
-            0x0f => Zero(), // play_sound_effect: no SFX playback yet
-            0x86 => Zero(), // play_sound_effect2
+            0x0f => PlaySoundEffect(p),
+            0x86 => PlaySoundEffect2(p),
             0x24 => CreateNewObject(p),
             0x25 => SetLastCreated(p),
             0x26 => UpdateLastCreated(p),
@@ -2794,6 +2794,28 @@ public sealed partial class BgIntrinsics
     /// <summary>Exult <c>in_usecode(item)</c>: whether a script is running on the item.</summary>
     UsecodeValue InUsecode(UsecodeValue[] p) =>
         UsecodeValue.FromInt(_vm.GetItem(p[0]) is { } obj && _vm.HasScript(obj) ? 1 : 0);
+
+    /// <summary>Exult <c>UI_play_sound_effect</c>: the effect, wherever the player is.</summary>
+    UsecodeValue PlaySoundEffect(UsecodeValue[] p)
+    {
+        if (p.Length > 0)
+        {
+            _vm.Sfx?.Play((int)p[0].IntValue);
+        }
+
+        return Zero();
+    }
+
+    /// <summary>Exult <c>UI_play_sound_effect2</c>: the effect at an object (<c>Object_sfx::Play</c>).</summary>
+    UsecodeValue PlaySoundEffect2(UsecodeValue[] p)
+    {
+        if (p.Length > 1 && _vm.GetItem(p[1]) is { } obj)
+        {
+            _vm.Sfx?.PlayAt((int)p[0].IntValue, obj);
+        }
+
+        return Zero();
+    }
 
     UsecodeValue GetItemFlag(UsecodeValue[] p)
     {

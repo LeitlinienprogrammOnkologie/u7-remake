@@ -166,6 +166,8 @@ public sealed class UsecodeMachine
     public (int Min, int Max, int Step, int Default) NumericPrompt { get; set; }
     /// <summary>Remaining Exult <c>Earthquake</c> shakes (one per 100 ms); the game consumes it.</summary>
     public int QuakeSteps { get; set; }
+    /// <summary>The sound effects (Exult <c>Audio</c>), for the intrinsics and the scripts; null headless.</summary>
+    public U7.Audio.SoundEffects? Sfx { get; set; }
     public const double StdDelaySeconds = U7.Core.U7Constants.StandardDelayMs / 1000.0;
 
     readonly List<UsecodeScript> _scripts = new();

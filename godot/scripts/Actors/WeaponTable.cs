@@ -30,6 +30,9 @@ public sealed class WeaponRecord
     public int ActorFrames = 2;
     /// <summary>Exult <c>Weapon_info::usecode</c>: run on whatever it hits, with the weapon event (0: none).</summary>
     public int Usecode;
+    /// <summary>Exult <c>Weapon_info::sfx</c> and <c>hitsfx</c>: the sound of using the weapon and of its hit, -1 none (WEAPONS.DAT bytes 13-16, Black Gate's less one).</summary>
+    public int Sfx = -1;
+    public int HitSfx = -1;
     /// <summary>Exult <c>Weapon_data::Powers</c> bits: sleep 1, charm 2, curse 4, poison 8, paralyze 16, magebane 32, no damage 128.</summary>
     public int Powers;
 
@@ -89,6 +92,8 @@ public sealed class WeaponTable
     public static WeaponTable Load()
     {
         var table = new WeaponTable();
+        // Exult Weapon_info::read: Black Gate subtracts one from each sound number.
+        var sfxDelta = U7.Core.GameContext.IsBg ? -1 : 0;
         foreach (var (shape, b) in ShapeDataFile.Read("WEAPONS.DAT", 21))
         {
             if (b is null)
@@ -119,8 +124,15 @@ public sealed class WeaponTable
                 RotationSpeed = (flags1 >> 4) & 15,
                 ActorFrames = flags2 & 15,
                 Powers = b[9],
-                Usecode = BitConverter.ToUInt16(b, 11)
+                Usecode = BitConverter.ToUInt16(b, 11),
+                Sfx = BitConverter.ToInt16(b, 13) + sfxDelta,
+                HitSfx = BitConverter.ToInt16(b, 15) + sfxDelta
             };
+            // Exult: Serpent Isle's 123 "does not sound right"; 61 sounds more like a weapon.
+            if (!U7.Core.GameContext.IsBg && table._byShape[shape].HitSfx == 123)
+            {
+                table._byShape[shape].HitSfx = 61;
+            }
         }
 
         return table;

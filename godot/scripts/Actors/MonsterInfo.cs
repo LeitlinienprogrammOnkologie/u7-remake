@@ -6,6 +6,8 @@ namespace U7.Actors;
 public sealed class MonsterRecord
 {
     public int Shape;
+    /// <summary>Exult <c>Monster_info::hitsfx</c>: the sound of the monster's attack, -1 none (MONSTERS.DAT byte 17, Black Gate's less one).</summary>
+    public int HitSfx = -1;
     public int Strength = 10;
     public int Dexterity = 10;
     public int Intelligence = 10;
@@ -107,6 +109,7 @@ public sealed class MonsterTable
             table._byShape[shape] = new MonsterRecord
             {
                 Shape = shape,
+                HitSfx = (sbyte)b[17] + (U7.Core.GameContext.IsBg ? -1 : 0),
                 SleepSafe = (b[0] & 1) != 0,
                 CharmSafe = (b[0] & 2) != 0,
                 Strength = b[0] >> 2,

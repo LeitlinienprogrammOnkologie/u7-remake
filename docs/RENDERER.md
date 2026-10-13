@@ -4,7 +4,7 @@ Audit of 2026-10-13, revised the same day after an outside review (section 9). T
 
 ## 1. What it is today
 
-- **Rules and order (CPU):** `WorldView.PaintView` walks the chunks as Exult's `Game_render::paint_map` does: the flats, the flat RLE objects, the other objects in dependency order along the diagonals, the dungeon blackness, then missiles, homing missiles and sprites. Since R1 (2026-10-13) it records what it decides as the command stream of 5.1 (`PaintStream`), which the backend replays once the frame is recorded: `IndexBuffer8` on the CPU (the default), or since R2 the compute compositor of 5.2 (`GpuCompositor`, `art renderer gpu`), which writes the same planes as textures.
+- **Rules and order (CPU):** `WorldView.PaintView` walks the chunks as Exult's `Game_render::paint_map` does: the flats, the flat RLE objects, the other objects in dependency order along the diagonals, the dungeon blackness, then missiles, homing missiles and sprites. Since R1 (2026-10-13) it records what it decides as the command stream of 5.1 (`PaintStream`), which the backend replays once the frame is recorded: `IndexBuffer8` on the CPU (the reference; headless and under Compatibility), or since R2 the compute compositor of 5.2 (`GpuCompositor`, `art renderer gpu`; the default where a device exists since 2026-10-13), which writes the same planes as textures.
 - **Pixels (CPU):** `IndexBuffer8` (Exult's `Image_buffer8`) rasterises every frame scan by scan into planes: indices (R8), glow (R8: six bits of glow plus the roof and pane marks), panes (ushort, CPU only), mix (RG8, hi-res art) and colour (RGBA8, hi-res true colour). The whole view is painted and uploaded again every frame (`WorldView.Upload`).
 - **Colour and light (GPU):** one `canvas_item` shader (`WorldView.ShaderCode`, ~270 lines): each index looked up in two palette rows, ambient and lit (`WorldPalette`, cycling included); mixed and true-colour pixels turned through the palettes (`PaletteSlopes`); an optional 4-tap sharp fill; a loop over up to 64 lights in a uniform array (pools, the light spell, four window kinds); cloud shadows and mist from fbm noise.
 - **Hi-res:** `HiresArt` hands over frames at one integer scale (packs are 4x; without a pack, the original blown up). Above 2.5 million buffer pixels (below zoom ~3 at 1280x800) the original art is painted instead.
@@ -45,7 +45,7 @@ The renderer serves two guarantees that must not be confused. Both consume the s
 | Lights (the remake's own: pools, spell, windows) | today's shader math | linear-light HDR, occlusion, shadows |
 | Proof | the planes bit-exact to `IndexBuffer8` | shots the user approves, plus difference images against classic |
 
-Classic is what the game shows today and stays the default until the user has approved the modern look; the CPU backend is classic by construction and stays permanently (headless, the reference, the fallback).
+Classic was the default until the user approved the modern look (R5); the CPU backend is classic by construction and stays permanently (headless, the reference, the fallback). Since 2026-10-13 the GPU backend is the default (`art renderer auto`): the user took it on the strength of its planes being bit-exact to the CPU's in classic mode (R3).
 
 ## 5. The design: Exult decides, a compositor paints
 
@@ -174,7 +174,7 @@ Gumps already decode through `ShapeCache`; the hi-res store serves them the same
 
 ## 6. Milestones
 
-Every step sits behind `art renderer`; the CPU backend stays the default until the user has approved shots of each new look.
+Every step sits behind `art renderer`; the CPU backend stayed the default until the user had approved shots of each new look, and the GPU backend is the default since 2026-10-13 (R3's parity being the ground).
 
 - **R0, baseline** (done 2026-10-13 but for one column): a timing matrix (zoom 2-8 × 1x and 4x × 1280x800 and 2880x1800) recorded in PROGRESS.md; `art dump` (the planes as PNGs); the regression scenes of section 7 saved as slots with their golden planes. The matrix was measured at 1280x800 and 1920x1080, as this PC's screens go no larger; the 2880x1800 column is `art bench` full screen on the other PC. `art bench` (zoom 2-8 at 1 and the art's scale, the scale forced past the 2.5-million-pixel fallback), `art dump <name> [scale]` and `art diff`, `art still on` (the animators held, so a load dumps the same planes in every run) and `scripts/agent/render_suite.py` (section 7) are the tools.
 - **R1, the command stream** (done 2026-10-13): `WorldView` records, `IndexBuffer8` replays. Done when `art check` and the plane dumps are bit-exact before and after on the whole suite. No visible change. Worth doing whatever backend follows. `Rendering/PaintStream`: the eight ops of 5.1 as `PaintOp`, a `PaintCommand` per op (the frame and its identity as `ArtRef`: file, shape, frame; the hotspot in buffer pixels; glow, haze, window, table, colour, scale; the pane mask; the object), the recording methods mirroring the buffer's, and `Replay`, the CPU backend, which calls the buffer's methods with the same arguments in the same order as before. The flats are recorded as raw frames (`ShapeFrame`, top left at the hotspot) like everything else. The suite's 27 dumps and `art check` were the same before and after; the console's `art` line now says how long recording took and how many commands the frame holds.

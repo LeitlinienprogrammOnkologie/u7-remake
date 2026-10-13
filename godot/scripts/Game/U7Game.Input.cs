@@ -70,6 +70,68 @@ public partial class U7Game
     Vector2 _showItemsWorld;
     /// <summary>A walking key is held.</summary>
     bool _keyWalking;
+    /// <summary>
+    /// Exult <c>ActionTarget</c> (T, <c>target_mode</c>): the game stands
+    /// still under the crosshair until a click, which counts as a
+    /// double-click where it lands (<c>Get_click</c> with <c>greenselect</c>,
+    /// the time queue paused, then <c>double_clicked</c>).
+    /// </summary>
+    bool _targetMode;
+
+    /// <summary>
+    /// Exult <c>ActionTarget</c>'s terms: a normal key (not while usecode
+    /// runs or waits, not in <c>dont_move</c> mode, not if the avatar can't
+    /// act). Dragging stops first, as Exult's <c>Get_click</c> starts with none.
+    /// </summary>
+    void StartTargetMode()
+    {
+        if (UsecodeRunning || !CombatSchedule.CanAct(_avatar.Avatar) || _targetMode)
+        {
+            return;
+        }
+
+        if (_gumps.Drag is not null)
+        {
+            _gumps.OnMouseUp(_gumpView, _gumpView.MouseVirtual().X, _gumpView.MouseVirtual().Y);
+        }
+
+        _leftPress = LeftPress.Consumed;
+        _rightWalk = false;
+        _targetMode = true;
+    }
+
+    /// <summary>
+    /// Exult <c>Get_click</c> for a target: the left button let go ends it
+    /// with a double-click there (gumps included); Esc ends it with nothing;
+    /// a right press stops the avatar (not the party, "Don't get
+    /// followers!"); every other key is ignored. Nothing is dragged meanwhile.
+    /// </summary>
+    void TargetModeInput(InputEvent @event)
+    {
+        switch (@event)
+        {
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false }:
+                _targetMode = false;
+                ActivateUnderMouse();
+                GetViewport().SetInputAsHandled();
+                break;
+            case InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true }:
+                _avatar.Halt();
+                GetViewport().SetInputAsHandled();
+                break;
+            case InputEventMouseButton:
+                GetViewport().SetInputAsHandled();
+                break;
+            case InputEventKey { Pressed: true, Echo: false } key:
+                if (key.Keycode == Key.Escape)
+                {
+                    _targetMode = false;
+                }
+
+                GetViewport().SetInputAsHandled();
+                break;
+        }
+    }
 
     public override void _UnhandledInput(InputEvent @event)
     {
@@ -83,6 +145,12 @@ public partial class U7Game
         if (_endgame is { } show)
         {
             show.Input(@event);
+            return;
+        }
+
+        if (_targetMode)
+        {
+            TargetModeInput(@event);
             return;
         }
 
@@ -249,7 +317,7 @@ public partial class U7Game
 
             // Exult restricts key actions in dont_move mode; debug, save, music and zoom stay.
             if (ObjFlag.DontMoveMode(_avatar.Avatar) &&
-                key.Keycode is Key.Home or Key.E or Key.I or Key.C or Key.F3 or Key.F6 or Key.Pageup or Key.Pagedown)
+                key.Keycode is Key.Home or Key.E or Key.I or Key.C or Key.T or Key.F3 or Key.F6 or Key.Pageup or Key.Pagedown)
             {
                 return;
             }
@@ -284,9 +352,15 @@ public partial class U7Game
                 case Key.Bracketright:
                     _clock.SkipHours(1);
                     break;
+                case Key.F1:
+                    SetOverlay(!_overlayOn);
+                    break;
                 case Key.F2:
                     _debugOn = !_debugOn;
-                    _debug.Visible = _debugOn;
+                    _debug.Visible = _overlayOn && _debugOn;
+                    break;
+                case Key.T:
+                    StartTargetMode();
                     break;
                 case Key.F3:
                     _avatar.ClearPath();
@@ -369,6 +443,7 @@ public partial class U7Game
         if (drag.MouseX < 0 || drag.MouseY < 0 || drag.MouseX >= screen.X || drag.MouseY >= screen.Y)
         {
             _cursor.Flash(MouseShape.RedX);
+            _sfx.Play(U7.Audio.SoundEffects.GameSfx(76));
             return MapDrop.Refused;
         }
 
@@ -396,6 +471,11 @@ public partial class U7Game
             else
             {
                 _cursor.Flash(height > maxLift ? MouseShape.RedX : MouseShape.Blocked);
+                if (height > maxLift)
+                {
+                    _sfx.Play(U7.Audio.SoundEffects.GameSfx(76));
+                }
+
                 return MapDrop.Refused;
             }
         }
@@ -409,6 +489,7 @@ public partial class U7Game
         if (dropped <= 0)
         {
             _cursor.Flash(MouseShape.RedX);
+            _sfx.Play(U7.Audio.SoundEffects.GameSfx(76));
             return MapDrop.Refused;
         }
 
@@ -458,6 +539,7 @@ public partial class U7Game
         }
 
         _cursor.Flash(MouseShape.TooHeavy);
+        _sfx.Play(U7.Audio.SoundEffects.GameSfx(76));
         return false;
     }
 
@@ -713,6 +795,11 @@ public partial class U7Game
     /// <summary>The cursor for the mouse at this world (and screen) point; null to leave it (Exult <c>dontchange</c>).</summary>
     int? CursorFor(Vector2 world, Vector2 screen)
     {
+        if (_targetMode)
+        {
+            return MouseShape.GreenSelect;
+        }
+
         switch (_usecode?.Wait)
         {
             case UsecodeWait.Fade or UsecodeWait.Flash:
@@ -1020,6 +1107,15 @@ public partial class U7Game
     /// user's switch, kept in <c>saves/settings.cfg</c>); says which, and when
     /// the pack has none yet, how to make them.
     /// </summary>
+    /// <summary>The status overlay on or off (F1), kept in settings.cfg; the usecode lines (F2) show only with it.</summary>
+    void SetOverlay(bool on)
+    {
+        _overlayOn = on;
+        Settings.Set("ui", "overlay", on);
+        _hud.Visible = on;
+        _debug.Visible = on && _debugOn;
+    }
+
     string ToggleRedrawnPaperdolls() => SetRedrawnPaperdolls(!ArtLook.RedrawnPaperdolls);
 
     string SetRedrawnPaperdolls(bool redrawn)

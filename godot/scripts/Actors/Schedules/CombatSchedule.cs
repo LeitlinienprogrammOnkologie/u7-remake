@@ -502,6 +502,7 @@ public class CombatSchedule : Schedule
         var dir = (Npc.TypeFlags & MoveFlags.All) == 0 ? 0 : ObjectGeometry.Direction(Npc, opponent);
         var frames = CombatEngine.AttackFrames(Map.Catalog, Combat.Weapons, Npc, WeaponShape, ranged, dir);
         StartAction(new FramesAction(frames, Std), 250, 0);
+        Combat.PlayAttackSfx(Npc, WeaponShape, ranged, frames.Length);
         _dexPoints -= DexToAttack;
     }
 

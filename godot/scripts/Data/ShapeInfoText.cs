@@ -19,6 +19,14 @@ public readonly record struct ContentRule(int Shape, bool Accept);
 public readonly record struct AnimationText(int Type, int FrameCount, int FrameDelay, int SfxDelay, int FreezeFirst, int Recycle);
 
 /// <summary>
+/// Exult <c>SFX_info</c> (<c>shape_sfx</c>): the sound a shape makes while
+/// shown: its number, the chance (%) of playing when its turn comes, a run
+/// of <c>Range</c> numbers from it (random or in turn), an extra sound the
+/// grandfather clock strikes the hour with, and its volume (%).
+/// </summary>
+public readonly record struct SfxInfo(int Num, int Chance, int Range, bool Random, int Extra, int Volume);
+
+/// <summary>
 /// Exult <c>Shapes_vga_file::Read_Shapeinf_text_data_file</c> and
 /// <c>Read_Bodies_text_data_file</c>: the game's <c>shape_info.txt</c> and
 /// <c>bodies.txt</c> (Exult's own, in <c>godot/data/bg</c> or <c>si</c>),
@@ -39,7 +47,7 @@ public static class ShapeInfoText
     static readonly (string Name, SectionReader Read)[] ShapeInfoSections =
     [
         ("explosions", Explosion),
-        ("shape_sfx", (_, _, _) => { }), // The remake plays no sound effects.
+        ("shape_sfx", ShapeSfx),
         ("animation", Animation),
         ("usecode_events", (r, e, _) => r.UsecodeEvents = Bit(e)),
         ("mountain_tops", (r, e, _) => r.MountainTop = e.Int()),
@@ -150,6 +158,29 @@ public static class ShapeInfoText
     };
 
     /// <summary>Exult <c>Explosion_info::read</c>: the sprite (-0xff deletes) and sound (255 none).</summary>
+    /// <summary>Exult <c>SFX_info::read</c>: <c>:shape/sfx/chance/range/rand/extra/volume</c>, the first two required.</summary>
+    static void ShapeSfx(ShapeRecord r, EntryReader e, int _)
+    {
+        var num = e.Int();
+        if (num == -0xff)
+        {
+            r.Sfx = null;
+            return;
+        }
+
+        var chance = e.Int(100);
+        if (chance < 1 || chance > 100)
+        {
+            chance = 100;
+        }
+
+        var range = Math.Max(1, e.Int(1));
+        var random = e.Int() != 0;
+        var extra = e.Int(-1);
+        var volume = e.Int(100);
+        r.Sfx = new SfxInfo(num, chance, range, random, extra, volume);
+    }
+
     static void Explosion(ShapeRecord r, EntryReader e, int version)
     {
         var sprite = e.Int();
@@ -179,6 +210,7 @@ public static class ShapeInfoText
         }
 
         var a = new AnimationText(type, e.Int(), 1, 0, 100, 0);
+        // (The animation entry's own sfx_delay is read below; FA_HOURLY has none.)
         if (type != 1) // FA_HOURLY reads nothing more.
         {
             a = a with { FrameDelay = e.Int(), SfxDelay = e.Int() };

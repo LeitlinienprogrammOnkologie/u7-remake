@@ -140,6 +140,39 @@ public sealed class MusicPlayer : IDisposable
         return true;
     }
 
+    /// <summary>The MIDI device open (the sound effects play through it too); false where there is none.</summary>
+    public bool EnsureDevice()
+    {
+        if (!Available)
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            if (_device == IntPtr.Zero && midiOutOpen(out _device, MidiMapper, IntPtr.Zero, IntPtr.Zero, 0) != 0)
+            {
+                _device = IntPtr.Zero;
+                LastError = "music: midiOutOpen failed";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>A MIDI message to the device (the sound effects' notes beside the music's).</summary>
+    public void Send(uint message)
+    {
+        lock (_gate)
+        {
+            if (_device != IntPtr.Zero)
+            {
+                midiOutShortMsg(_device, message);
+            }
+        }
+    }
+
     /// <summary>Exult <c>MyMidiPlayer::stop_music</c>.</summary>
     public void Stop()
     {

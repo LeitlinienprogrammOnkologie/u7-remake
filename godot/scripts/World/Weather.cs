@@ -412,7 +412,8 @@ public sealed class LightningEffect : WeatherEffect
         }
         else if ((FromUsecode || !Effects.InDungeon()) && !Effects.LightningActive)
         {
-            // (Exult also plays thunder, sfx 62.)
+            // Exult: the thunder.
+            Effects.Sfx?.Play(U7.Audio.SoundEffects.GameSfx(62));
             Effects.LightningActive = true;
             Flashing = true;
             Effects.Flashes++;

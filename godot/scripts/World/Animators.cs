@@ -40,6 +40,18 @@ public sealed class Animators(GameMap map, GameClock clock)
 
     readonly Dictionary<U7Object, Animator> _animators = new();
     readonly HashSet<U7Object> _painted = new();
+    /// <summary>Exult <c>Shape_sfx</c>: per sounding object, when its sound ends, its last of a run, and the hour it last struck.</summary>
+    sealed class Sound
+    {
+        public double Until;
+        public int Last = -1;
+        public int StruckHour = -1;
+    }
+
+    readonly Dictionary<U7Object, Sound> _sounds = new();
+    readonly Random _rng = new();
+    /// <summary>The sound effects (Exult <c>Audio</c>); null headless.</summary>
+    public U7.Audio.SoundEffects? Sfx { get; set; }
     readonly List<U7Object> _beat = new();
     ulong _nextBeat;
 
@@ -47,10 +59,13 @@ public sealed class Animators(GameMap map, GameClock clock)
     public bool IsAnimated(U7Object obj) =>
         !obj.IsActor && map.Catalog[obj.Shape] is { Animated: true, FrameCount: > 1 };
 
-    /// <summary>The painter drew an animated object this frame (Exult <c>want_animation</c>).</summary>
+    /// <summary>Exult <c>Animator::create</c>'s other case: a shape with a sound of its own (<c>shape_sfx</c>), animated or not (<c>Sfx_animator</c>).</summary>
+    bool Sounds(U7Object obj) => !obj.IsActor && Sfx is not null && map.Catalog[obj.Shape].Sfx is not null;
+
+    /// <summary>The painter drew an animated or sounding object this frame (Exult <c>want_animation</c>).</summary>
     public void Painted(U7Object obj)
     {
-        if (IsAnimated(obj))
+        if (IsAnimated(obj) || Sounds(obj))
         {
             _painted.Add(obj);
         }
@@ -73,24 +88,113 @@ public sealed class Animators(GameMap map, GameClock clock)
         _painted.Clear();
         foreach (var obj in _beat)
         {
-            if (obj.Removed || !IsAnimated(obj))
+            var animated = !obj.Removed && IsAnimated(obj);
+            if (!animated)
             {
                 _animators.Remove(obj);
+            }
+
+            if (obj.Removed || !animated && !Sounds(obj))
+            {
+                _sounds.Remove(obj);
                 continue;
             }
 
-            if (!_animators.TryGetValue(obj, out var anim))
+            Animator? anim = null;
+            var advanced = false;
+            if (animated)
             {
-                anim = new Animator();
-                Initialize(obj, anim);
-                _animators[obj] = anim;
+                if (!_animators.TryGetValue(obj, out anim))
+                {
+                    anim = new Animator();
+                    Initialize(obj, anim);
+                    _animators[obj] = anim;
+                }
+
+                // Exult Frame_animator::handle_event.
+                if (--anim.FrameCounter <= 0)
+                {
+                    anim.FrameCounter = anim.Info.FrameDelay;
+                    map.SetFrame(obj, NextFrame(obj, anim, nowMs));
+                    advanced = true;
+                }
             }
 
-            // Exult Frame_animator::handle_event.
-            if (--anim.FrameCounter <= 0)
+            if (Sounds(obj))
             {
-                anim.FrameCounter = anim.Info.FrameDelay;
-                map.SetFrame(obj, NextFrame(obj, anim, nowMs));
+                UpdateSound(obj, anim, advanced, nowMs);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Exult <c>Frame_animator::handle_event</c>'s sound: an animated
+    /// object's plays as its frames turn (at the cycle's start, or every
+    /// <c>sfx_delay</c> frames, or every frame), a merely sounding one's
+    /// every beat; <c>Shape_sfx::update</c> then starts it again once the
+    /// last has ended, by its chance, the next of its run; and the
+    /// grandfather clock strikes its extra sound as many times as the hour
+    /// when the hour turns.
+    /// </summary>
+    void UpdateSound(U7Object obj, Animator? anim, bool advanced, ulong nowMs)
+    {
+        var info = map.Catalog[obj.Shape].Sfx!.Value;
+        bool play;
+        if (anim is null)
+        {
+            play = true;
+        }
+        else if (!advanced)
+        {
+            play = false;
+        }
+        else
+        {
+            var sfxDelay = map.Catalog[obj.Shape].AnimationText?.SfxDelay ?? -1;
+            play = sfxDelay < 0 ? anim.CurrPos == (anim.Info.FreezeFirst < 100 ? 1 : 0)
+                : sfxDelay > 1 ? anim.CurrPos % sfxDelay == 0
+                : true;
+        }
+
+        if (!_sounds.TryGetValue(obj, out var sound))
+        {
+            sound = new Sound();
+            _sounds[obj] = sound;
+        }
+
+        var now = nowMs / 1000.0;
+        if (play && now >= sound.Until && _rng.Next(100) < info.Chance)
+        {
+            int num;
+            if (info.Range > 1)
+            {
+                if (info.Random)
+                {
+                    num = info.Num + _rng.Next(info.Range);
+                }
+                else
+                {
+                    sound.Last = (sound.Last + 1) % info.Range;
+                    num = info.Num + sound.Last;
+                }
+            }
+            else
+            {
+                num = info.Num;
+            }
+
+            var length = Sfx!.PlayAt(num, obj, info.Volume / 100f);
+            sound.Until = now + Math.Max(length, 100) / 1000.0;
+        }
+
+        if (info.Extra >= 0 && clock.Minute == 0 && clock.Hour != sound.StruckHour)
+        {
+            sound.StruckHour = clock.Hour;
+            var strikes = clock.Hour % 12;
+            strikes = strikes == 0 ? 12 : strikes;
+            for (var i = 0; i < strikes; i++)
+            {
+                Sfx!.PlayLater(info.Extra, obj, i * 700);
             }
         }
     }

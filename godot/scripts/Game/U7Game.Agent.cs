@@ -23,7 +23,7 @@ public partial class U7Game
         "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | create <shape> [frame] [qual] [at <x> <y> <z>] | esc | saveload [choose <row>|name <text>|save|load|delete|cancel|quit|yes|no] | menu [journey|new|intro|credits|quotes|endgame|quit|up|down|key|esc] | speech <n>|intro|endgame <7-9>|play <n>|state | prop <npc|id> <name|n> <value> | quantity <n>|cancel | spells <book> <n>... | key <name> | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | art [pack <name>|original | scale <n> | mix on|off | truecolour on|off | sharp on|off | renderer cpu|gpu|auto | resolve reference|skip | store <MB> | modern on|off | lut [32|64] | occlusion on|off | bloom <strength> [radius] | gumps on|off | paperdolls on|off | faces on|off | check | dump <name> [scale] | diff <a> <b> | still on|off | bench [frames]] | zoom [z] | window <w> <h>|full | quit | die [restart] | " +
-        "game [bg|si|saga] | save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] [x y z] | damage <n> [type] | arena [shape] | combat [off] | attack <id> | drag <id> | cursor <x> <y> | avatar <name> [male|female] | name <id>|gump | rmouse <x> <y> <sec>|double | rclose | endgame [won|lost] | close";
+        "game [bg|si|saga] | save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] [x y z] | sfx <n>|on|off | damage <n> [type] | arena [shape] | combat [off] | attack <id> | drag <id> | cursor <x> <y> | avatar <name> [male|female] | name <id>|gump | rmouse <x> <y> <sec>|double | rclose | endgame [won|lost] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
     static bool _agentStarted;
@@ -61,6 +61,7 @@ public partial class U7Game
             _agentLines = File.Exists(cmd) ? File.ReadAllLines(cmd).Length : 0;
         }
         _music.Enabled = false;
+        _sfx.Enabled = false;
         _speech.Enabled = false;
         _music.Stop();
         _agentFlags0 = (byte[])_usecode.GFlags.Clone();
@@ -284,6 +285,39 @@ public partial class U7Game
                 var spot = _map.FindSpot(new TileCoord(target.Tx, target.Ty, target.Tz), 2, av) ??
                            new TileCoord(target.Tx + 1, target.Ty + 1, target.Tz);
                 AgentWalk(spot.Tx, spot.Ty);
+                break;
+            }
+            case "target":
+            {
+                // The T key: target mode entered (the game held under the crosshair), and with a thing
+                // named, the click on it; `target esc` is the Esc key that ends it with nothing.
+                if (!_targetMode)
+                {
+                    _UnhandledInput(new InputEventKey { Keycode = Key.T, Pressed = true });
+                }
+
+                if (!_targetMode)
+                {
+                    AgentLog("target mode refused (usecode running, dont_move, or the avatar can't act)");
+                    break;
+                }
+
+                if (arg.Length == 0)
+                {
+                    AgentLog("target mode: the game holds, the crosshair waits for a click");
+                    break;
+                }
+
+                if (arg == "esc")
+                {
+                    _UnhandledInput(new InputEventKey { Keycode = Key.Escape, Pressed = true });
+                    AgentLog(_targetMode ? "still in target mode" : "target mode ended by Esc");
+                    break;
+                }
+
+                var aimed = AgentTarget(arg) ?? throw new ArgumentException("no such object/npc");
+                _targetMode = false;
+                AgentUse(aimed);
                 break;
             }
             case "tp":
@@ -1029,6 +1063,23 @@ public partial class U7Game
                          $"gumps {(U7.Rendering.ArtLook.GumpPalette ? "under the palette" : "by day")}, " +
                          $"sharp {(U7.Rendering.ArtLook.Sharp ? "on" : "off")}, " +
                          $"renderer {U7.Rendering.ArtLook.Renderer}; {_world.Timing()}");
+                break;
+            case "sfx":
+                // The sound effects: a number played (the game's numbering), on, off, or the state.
+                if (parts.Length > 1 && int.TryParse(parts[1], out var sfxNum))
+                {
+                    AgentLog(_sfx.Play(sfxNum) ? $"sfx {sfxNum} playing: {_sfx.Last}" : $"sfx {sfxNum}: not played ({_sfx.LastError})");
+                    break;
+                }
+
+                if (parts.Length > 1 && parts[1] is "on" or "off")
+                {
+                    _sfx.Enabled = parts[1] == "on";
+                    Settings.Set("audio", "effects", _sfx.Enabled);
+                }
+
+                AgentLog($"sfx {(_sfx.Enabled ? "on" : "off")}, {(_sfx.Available ? "MIDI effects ready" : "unavailable")}, " +
+                         $"{_sfx.Started} played, last {_sfx.Last}, {_sfx.Busy} channels busy, last error: {_sfx.LastError}");
                 break;
             case "vsync":
                 // For art bench: without vsync the frame time is the work's own.

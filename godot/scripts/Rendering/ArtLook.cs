@@ -60,10 +60,11 @@ public static class ArtLook
     /// <c>cpu</c> (<see cref="IndexBuffer8"/>, the reference), <c>gpu</c>
     /// (<see cref="GpuCompositor"/>, where a rendering device exists) or
     /// <c>auto</c> (gpu where it exists). The console's <c>art renderer</c>,
-    /// kept in <c>saves/settings.cfg</c>. The CPU stays the default until
-    /// the user has approved the GPU's picture.
+    /// kept in <c>saves/settings.cfg</c>. The GPU is the default since the
+    /// user's word of 2026-10-13, its planes being bit-exact to the CPU's in
+    /// classic mode (R3); headless and under Compatibility the CPU paints.
     /// </summary>
-    public static string Renderer = "cpu";
+    public static string Renderer = "auto";
 
     /// <summary>
     /// Modern colour (docs/RENDERER.md 5.5, R5): a true-colour pixel takes
