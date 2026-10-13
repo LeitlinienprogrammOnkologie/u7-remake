@@ -329,7 +329,8 @@ docs/         BRIDGE.md (the adventure from Black Gate to Serpent Isle),
      `drag <id>` starts a real drag (Exult's checks) and puts it back,
      `name <id>` is a left click naming a thing, `rmouse <x> <y> <sec>|double`
      holds or double-clicks the right button over a tile, `rclose`
-     right-clicks the top gump.
+     right-clicks the top gump, `target [id|esc]` is the T key (target mode,
+     the click on a thing, or Esc).
    - Object ids (`#231108`) are only usable after `look` or `find` has listed them;
      pass them without the `#` (`use 231108`). A load renumbers them.
    - `save <slot>` / `load <slot>` keep progress across restarts; `timer`
