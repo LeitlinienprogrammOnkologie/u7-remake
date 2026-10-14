@@ -23,7 +23,7 @@ public partial class U7Game
         "look [r] | find <text> | npc <num|name> | state | inv [npcnum|id] | flags [<hex> <0|1>] | create <shape> [frame] [qual] [at <x> <y> <z>] | esc | saveload [choose <row>|name <text>|save|load|delete|cancel|quit|yes|no] | menu [journey|new|intro|credits|quotes|endgame|quit|up|down|key|esc] | speech <n>|intro|endgame <7-9>|play <n>|state | prop <npc|id> <name|n> <value> | quantity <n>|cancel | spells <book> <n>... | key <name> | setflag <npc|id> <flag> [0|1] | timer [n] [hours-ago] | stubs | " +
         "walk <x> <y> | walkto <id|npc:num> | steer <dir> <sec> [ms] | tp <x> <y> [z] | talk <npcnum|name> | use <id> | take <id> | put <id> <container-id> | sail <x> <y> | book [page] | cast <spell> | " +
         "cont [n|all] | choose <answer|#n> | num <n> | click <id>|<x> <y> [z] | wait <sec> | hour <h> [m] | light | shot <name> | art [pack <name>|original | scale <n> | mix on|off | truecolour on|off | sharp on|off | renderer cpu|gpu|auto | resolve reference|skip | store <MB> | modern on|off | lut [32|64] | occlusion on|off | bloom <strength> [radius] | gumps on|off | paperdolls on|off | faces on|off | check | dump <name> [scale] | diff <a> <b> | still on|off | bench [frames]] | zoom [z] | window <w> <h>|full | quit | die [restart] | " +
-        "game [bg|si|saga] | save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] [x y z] | sfx <n>|on|off | damage <n> [type] | arena [shape] | combat [off] | attack <id> | drag <id> | cursor <x> <y> | avatar <name> [male|female] | name <id>|gump | rmouse <x> <y> <sec>|double | rclose | endgame [won|lost] | close";
+        "game [bg|si|saga] | save <slot> | load <slot> | tile <x> <y> [z] | eggs [type] [radius] | weather [<n> [min] | lightning | eggs [radius]] | sprite <n> [frame] [x y z] | sfx <n>|on|off|pack [auto|roland|blaster|midi] | damage <n> [type] | arena [shape] | combat [off] | attack <id> | drag <id> | cursor <x> <y> | avatar <name> [male|female] | name <id>|gump | rmouse <x> <y> <sec>|double | rclose | endgame [won|lost] | close";
 
     /// <summary>Set once the console has started; a load reloads the scene and the console carries on.</summary>
     static bool _agentStarted;
@@ -1066,7 +1066,7 @@ public partial class U7Game
                          $"renderer {U7.Rendering.ArtLook.Renderer}; {_world.Timing()}");
                 break;
             case "sfx":
-                // The sound effects: a number played (the game's numbering), on, off, or the state.
+                // The sound effects: a number played (the game's numbering), on, off, the pack (auto, roland, blaster, midi), or the state.
                 if (parts.Length > 1 && int.TryParse(parts[1], out var sfxNum))
                 {
                     AgentLog(_sfx.Play(sfxNum) ? $"sfx {sfxNum} playing: {_sfx.Last}" : $"sfx {sfxNum}: not played ({_sfx.LastError})");
@@ -1079,8 +1079,14 @@ public partial class U7Game
                     Settings.Set("audio", "effects", _sfx.Enabled);
                 }
 
-                AgentLog($"sfx {(_sfx.Enabled ? "on" : "off")}, {(_sfx.Available ? "MIDI effects ready" : "unavailable")}, " +
-                         $"{_sfx.Started} played, last {_sfx.Last}, {_sfx.Busy} channels busy, last error: {_sfx.LastError}");
+                if (parts.Length > 2 && parts[1] == "pack")
+                {
+                    _sfx.Choose(parts[2]);
+                    Settings.Set("audio", "sfx_pack", _sfx.Choice);
+                }
+
+                AgentLog($"sfx {(_sfx.Enabled ? "on" : "off")}, pack {_sfx.Pack} (chosen {_sfx.Choice}), {(_sfx.Available ? "ready" : "unavailable")}, " +
+                         $"{_sfx.Started} played, last {_sfx.Last}, {_sfx.Busy} channels busy, mixer {_sfx.MixerState}, last error: {_sfx.LastError}");
                 break;
             case "vsync":
                 // For art bench: without vsync the frame time is the work's own.

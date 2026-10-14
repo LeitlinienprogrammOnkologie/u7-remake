@@ -504,9 +504,9 @@ public sealed class EggHatcher
                 Usecode?.DoSpeech(egg.EggData1 & 0xff);
                 break;
             case EggType.SoundSfx:
-                // Exult Soundsfx_egg::hatch_now: the effect at the egg (its MIDI effects play once, continuous or not).
+                // Exult Soundsfx_egg::hatch_now: the effect at the egg, its continuous bit the repeat (so it plays twice).
                 LastMessage = $"sound effect {egg.EggData1 & 0xff}";
-                Sfx?.PlayAt(egg.EggData1 & 0xff, egg);
+                Sfx?.PlayAt(egg.EggData1 & 0xff, egg, 1f, (egg.EggData1 >> 8) & 1);
                 break;
             default:
                 if (_loggedStub.Add(egg.EggType))

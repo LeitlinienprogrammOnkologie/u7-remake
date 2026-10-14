@@ -121,7 +121,12 @@ public partial class U7Game : Node2D
             _schedules.AvatarWalk = () => _avatar.Walk;
             _combat = new CombatEngine(_map, avatar, _catalog);
             _music = new MusicPlayer();
-            _sfx = new SoundEffects(_music) { Enabled = Settings.Get("audio", "effects", true).AsBool() };
+            var sfxMixer = new SfxMixer { Name = "SfxMixer" };
+            AddChild(sfxMixer);
+            _sfx = new SoundEffects(_music, sfxMixer, Settings.Get("audio", "sfx_pack", "auto").AsString())
+            {
+                Enabled = Settings.Get("audio", "effects", true).AsBool()
+            };
             _combat.Sfx = _sfx;
             _speech = new SpeechPlayer { Name = "Speech" };
             AddChild(_speech);

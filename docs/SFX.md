@@ -12,10 +12,14 @@ is used, for replacing the MIDI effects with recorded ones (WAV or MP3).
   (`SoundEffects.BgConv`, `MidiIndex`). A replacement set should be made by
   **BG number**, one file each (`000.wav` ... `116.wav`), so the engine
   needs no table.
-- Exult's own digital packs for Black Gate, `jmsfx.flx` (Joseph Morris) and
-  `sqsfxbg.flx` (Simon Quinn), are flex files of WAVs indexed by these BG
-  numbers and are freely downloadable from exult.info. They are the
-  quickest alternative: 117 entries in the right order.
+- Exult's own digital packs for Black Gate, `sqsfxbg.flx` (Simon Quinn,
+  recorded from a Roland MT-32, 117 entries) and `jmsfx.flx` (Joseph Morris,
+  from a SoundBlaster, 115 entries: 115 and 116 are out of range), are flex
+  files of WAVs indexed by these BG numbers. They are recordings of the
+  originals' sounds, so Exult doesn't put them on its download page; its
+  all-in-one `exult_audio.zip` on SourceForge carries them, and
+  `scripts/get_sfx_packs.py` puts them in `assets/sfx`, where the game plays
+  them (Roland first, Exult's order; `sfx pack` in the console).
 - Numbers mapped to SI entry 135 (`???` in Exult's table) are silent today.
 - Each effect is used from one of four places: **Engine** (Exult's C++,
   ported in `godot/scripts`), **Weapons** (WEAPONS.DAT: a swing sound
@@ -235,11 +239,10 @@ The rest need a small hook where the thing happens:
 | 41, 42 | Creeeeaack | No obvious home: chests or carts |
 | 51 | Waterfall | No home: Black Gate has no waterfall shape |
 
-The order to do it in: first a loader for a recorded set (one file per
-Black Gate number, `assets/sfx/bg/NNN.wav` or `.mp3`, falling back to the
-MIDI effect where a file is missing; today `SoundEffects` reads only
-`midisfx.flx`), then the additions, so they are judged with real sounds
-rather than the MIDI ones.
+Exult's digital packs now play (2026-10-14), so the additions can be judged
+with real sounds. A set of one's own recordings (one file per Black Gate
+number, `assets/sfx/bg/NNN.wav`, falling back to the pack where a file is
+missing) would need a small loader beside the packs' in `SoundEffects`.
 
 ## Sources
 

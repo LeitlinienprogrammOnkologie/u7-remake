@@ -178,8 +178,23 @@ python scripts/faces/prepare.py          # needs numpy, pillow, scipy
 Without `assets/faces/` the game shows the faces' own art. The console's
 `art faces off` switches back to it (remembered in `saves/settings.cfg`).
 
-Sound effects are Exult's MIDI ones (`godot/data/midisfx.flx`, Exult's data,
-GPL), played through the same synth; the console's `sfx <n>` tries one.
+### Sound effect packs (optional): `assets/sfx/`
+
+Exult's digital sound effects, recordings of the originals' own (Simon
+Quinn's from a Roland MT-32, Joseph Morris's from a SoundBlaster), come in
+Exult's all-in-one audio pack. Fetch it (checked against the SHA-256
+Exult's installer uses) and put the four packs in place with
+
+```bash
+python scripts/get_sfx_packs.py          # or --zip <exult_audio.zip> for a copy at hand
+```
+
+The game picks them as Exult does: Roland first, then SoundBlaster. Without
+them the sound effects are Exult's MIDI ones (`godot/data/midisfx.flx`,
+Exult's data, GPL), played through the music's synth. The console's
+`sfx <n>` tries one, `sfx pack auto|roland|blaster|midi` chooses
+(remembered in `saves/settings.cfg`).
+
 Music plays through the Windows built-in MIDI synth from the MT-32 export
 in `assets/audio/music_mt32/`, converted to General MIDI at load with
 Exult's patch table; no soundfont or extra software is needed. On other platforms music is silent for now.

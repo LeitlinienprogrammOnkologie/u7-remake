@@ -2811,7 +2811,7 @@ public sealed partial class BgIntrinsics
     {
         if (p.Length > 1 && _vm.GetItem(p[1]) is { } obj)
         {
-            _vm.Sfx?.PlayAt((int)p[0].IntValue, obj);
+            _vm.Sfx?.PlayOn((int)p[0].IntValue, obj, 0);
         }
 
         return Zero();

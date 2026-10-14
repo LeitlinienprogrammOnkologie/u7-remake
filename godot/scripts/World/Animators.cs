@@ -40,11 +40,12 @@ public sealed class Animators(GameMap map, GameClock clock)
 
     readonly Dictionary<U7Object, Animator> _animators = new();
     readonly HashSet<U7Object> _painted = new();
-    /// <summary>Exult <c>Shape_sfx</c>: per sounding object, when its sound ends, its last of a run, and the hour it last struck.</summary>
+    /// <summary>Exult <c>Shape_sfx</c>: per sounding object, its two channels (its sound, the clock's strikes), its last of a run, and the hour it last struck.</summary>
     sealed class Sound
     {
-        public double Until;
-        public int Last = -1;
+        public int Channel = -1;
+        public int Strikes = -1;
+        public int Last;
         public int StruckHour = -1;
     }
 
@@ -85,6 +86,20 @@ public sealed class Animators(GameMap map, GameClock clock)
         _nextBeat = nowMs + BeatMs - nowMs % BeatMs;
         _beat.Clear();
         _beat.AddRange(_painted);
+        // Exult: an animator whose object is no longer on screen stops its sound (Shape_sfx::stop), one gone takes it along.
+        foreach (var (obj, sound) in _sounds)
+        {
+            if (!_painted.Contains(obj) || obj.Removed)
+            {
+                StopSound(sound);
+            }
+
+            if (obj.Removed)
+            {
+                _sounds.Remove(obj);
+            }
+        }
+
         _painted.Clear();
         foreach (var obj in _beat)
         {
@@ -96,7 +111,11 @@ public sealed class Animators(GameMap map, GameClock clock)
 
             if (obj.Removed || !animated && !Sounds(obj))
             {
-                _sounds.Remove(obj);
+                if (_sounds.Remove(obj, out var sound))
+                {
+                    StopSound(sound);
+                }
+
                 continue;
             }
 
@@ -122,7 +141,7 @@ public sealed class Animators(GameMap map, GameClock clock)
 
             if (Sounds(obj))
             {
-                UpdateSound(obj, anim, advanced, nowMs);
+                UpdateSound(obj, anim, advanced);
             }
         }
     }
@@ -132,11 +151,14 @@ public sealed class Animators(GameMap map, GameClock clock)
     /// object's plays as its frames turn (at the cycle's start, or every
     /// <c>sfx_delay</c> frames, or every frame), a merely sounding one's
     /// every beat; <c>Shape_sfx::update</c> then starts it again once the
-    /// last has ended, by its chance, the next of its run; and the
+    /// last has ended, by its chance, the next of its run (a single sound
+    /// always played, with no strikes, loops until stopped), keeps the
+    /// playing ones' positions up and stops them out of range; and the
     /// grandfather clock strikes its extra sound as many times as the hour
-    /// when the hour turns.
+    /// when the hour turns (once an hour: Exult strikes again while the
+    /// minute is still 0).
     /// </summary>
-    void UpdateSound(U7Object obj, Animator? anim, bool advanced, ulong nowMs)
+    void UpdateSound(U7Object obj, Animator? anim, bool advanced)
     {
         var info = map.Catalog[obj.Shape].Sfx!.Value;
         bool play;
@@ -162,41 +184,55 @@ public sealed class Animators(GameMap map, GameClock clock)
             _sounds[obj] = sound;
         }
 
-        var now = nowMs / 1000.0;
-        if (play && now >= sound.Until && _rng.Next(100) < info.Chance)
+        var sfx = Sfx!;
+        var looping = info.Range == 1 && info.Chance == 100 && info.Extra < 0;
+        play |= looping;
+        sound.Channel = sfx.IsPlaying(sound.Channel) ? sound.Channel : -1;
+        sound.Strikes = sfx.IsPlaying(sound.Strikes) ? sound.Strikes : -1;
+        if (!play && sound.Channel == -1 && sound.Strikes == -1)
         {
-            int num;
-            if (info.Range > 1)
-            {
-                if (info.Random)
-                {
-                    num = info.Num + _rng.Next(info.Range);
-                }
-                else
-                {
-                    sound.Last = (sound.Last + 1) % info.Range;
-                    num = info.Num + sound.Last;
-                }
-            }
-            else
-            {
-                num = info.Num;
-            }
-
-            var length = Sfx!.PlayAt(num, obj, info.Volume / 100f);
-            sound.Until = now + Math.Max(length, 100) / 1000.0;
+            return;
         }
 
-        if (info.Extra >= 0 && clock.Minute == 0 && clock.Hour != sound.StruckHour)
+        var num = -1;
+        if (play && sound.Channel == -1)
+        {
+            // Exult SFX_info::time_to_play and get_next_sfx.
+            if (_rng.Next(100) >= info.Chance)
+            {
+                return;
+            }
+
+            num = info.Range <= 1 ? info.Num
+                : info.Random ? info.Num + _rng.Next(info.Range)
+                : info.Num + (sound.Last = (sound.Last + 1) % info.Range);
+        }
+
+        // Exult Get_sfx_out_of_range: nothing starts out of range (the hour is struck once in range).
+        play &= !sfx.OutOfRange(obj);
+        var strikes = 0;
+        var extra = -1;
+        if (play && sound.Strikes == -1 && info.Extra >= 0 && clock.Minute == 0 && clock.Hour != sound.StruckHour)
         {
             sound.StruckHour = clock.Hour;
-            var strikes = clock.Hour % 12;
-            strikes = strikes == 0 ? 12 : strikes;
-            for (var i = 0; i < strikes; i++)
-            {
-                Sfx!.PlayLater(info.Extra, obj, i * 700);
-            }
+            var hour = clock.Hour % 12;
+            strikes = (hour == 0 ? 12 : hour) - 1;
+            extra = info.Extra;
         }
+
+        var volume = info.Volume / 100f;
+        sound.Channel = play && sound.Channel == -1 && num >= 0 ? sfx.PlayAt(num, obj, volume, looping ? -1 : 0)
+            : sound.Channel != -1 ? sfx.Reposition(sound.Channel, obj) : -1;
+        sound.Strikes = play && sound.Strikes == -1 && extra >= 0 ? sfx.PlayAt(extra, obj, volume, strikes)
+            : sound.Strikes != -1 ? sfx.Reposition(sound.Strikes, obj) : -1;
+    }
+
+    /// <summary>Exult <c>Shape_sfx::stop</c>.</summary>
+    void StopSound(Sound sound)
+    {
+        Sfx?.Stop(sound.Channel);
+        Sfx?.Stop(sound.Strikes);
+        sound.Channel = sound.Strikes = -1;
     }
 
     /// <summary>Exult <c>Animation_info::create_from_tfa</c>; types it doesn't know get <c>get_animation_info_safe</c>'s type 0.</summary>

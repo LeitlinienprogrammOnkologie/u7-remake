@@ -117,7 +117,7 @@ public sealed class CombatEngine
         if (sfx >= 0)
         {
             var delay = ranged ? frameCount : frameCount / 2;
-            Sfx.PlayLater(sfx, npc, delay * U7.Core.U7Constants.StandardDelayMs);
+            Sfx.PlayOn(sfx, npc, delay * U7.Core.U7Constants.StandardDelayMs);
         }
     }
 
@@ -130,7 +130,7 @@ public sealed class CombatEngine
         }
 
         var sfx = ranged ? 1 : weaponShape == 604 ? 37 : 4;
-        Sfx.PlayAt(U7.Audio.SoundEffects.GameSfx(sfx), target);
+        Sfx.PlayOn(U7.Audio.SoundEffects.GameSfx(sfx), target);
     }
     public AmmoTable Ammo => _ammo;
     public bool IsMonsterShape(int shape) => _monsters.Contains(shape);
@@ -1012,7 +1012,7 @@ public sealed class CombatEngine
         if ((gearImm & (1 << type)) != 0)
         {
             // Exult: armour gives immunity; the metal clang.
-            Sfx?.PlayAt(U7.Audio.SoundEffects.GameSfx(5), victim);
+            Sfx?.PlayOn(U7.Audio.SoundEffects.GameSfx(5), victim);
             FlashHit(victim);
             return 0;
         }
@@ -1031,7 +1031,7 @@ public sealed class CombatEngine
         if (damage <= 0)
         {
             // Exult: no damage caused; the graze.
-            Sfx?.PlayAt(U7.Audio.SoundEffects.GameSfx(5), victim);
+            Sfx?.PlayOn(U7.Audio.SoundEffects.GameSfx(5), victim);
             FlashHit(victim);
             return 0;
         }

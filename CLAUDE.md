@@ -248,15 +248,19 @@ godot/scripts/
               (Exult Newfile_gump: the save/load screen), MapView and
               PaintedMap (display_map's painted map, the tile -> pixel warp)
   Audio/      MusicPlayer (MIDI through the Windows synth), SoundEffects
-              (Exult's MIDI effects, godot/data/midisfx.flx, through the same
-              synth), SpeechPlayer (Exult's speech) and VocFile (Exult
-              VocAudioSample)
+              (Exult Audio's effects: its digital packs in assets/sfx,
+              scripts/get_sfx_packs.py, else its MIDI effects,
+              godot/data/midisfx.flx, through the same synth; Object_sfx),
+              SfxMixer (Exult AudioMixer: 32 channels, distance and
+              balance), WavFile (Exult WavAudioSample), SpeechPlayer
+              (Exult's speech) and VocFile (Exult VocAudioSample)
   Core/       GameContext (Exult Game: the game and mode a world loads in,
               docs/SERPENT_ISLE.md), GameShapes (Exult get_shape: gumps by
               name per game), U7Paths (data paths by game, ReadGameDat,
               the mod's patch folder, Serpent Isle's files), U7Constants, TileCoord, Settings (saves/settings.cfg),
               Directions (Exult dir.cc: the 8 directions, steps, frame rotation)
-scripts/      extract_assets.py, usecode_stub_report.py, agent/ (console helpers;
+scripts/      extract_assets.py, usecode_stub_report.py, get_sfx_packs.py
+              (Exult's sound effect packs into assets/sfx), agent/ (console helpers;
               render_suite.py: the renderer's regression suite, RENDERER.md 7;
               cycling_check.py: does a dump's water cycle at the art's resolution;
               shot_diff.py: two shots compared, a heat map of the difference),
