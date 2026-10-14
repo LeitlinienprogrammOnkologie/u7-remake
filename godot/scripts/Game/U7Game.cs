@@ -205,6 +205,7 @@ public partial class U7Game : Node2D
             ArtLook.RedrawnPaperdolls = Settings.Get("art", "redrawn_paperdolls", false).AsBool();
             ArtLook.PaintedFaces = Settings.Get("art", "painted_faces", true).AsBool();
             ArtLook.TrueColour = Settings.Get("art", "true_colour", ArtLook.TrueColour).AsBool();
+            ArtLook.Pack = Settings.Get("art", "pack", ArtLook.Pack ?? "original").AsString() is var pack && pack != "original" ? pack : null;
             ArtLook.Renderer = Settings.Get("art", "renderer", ArtLook.Renderer).AsString();
             ArtLook.StoreMb = Settings.Get("art", "store_mb", ArtLook.StoreMb).AsInt32();
             ArtLook.Modern = Settings.Get("art", "modern", ArtLook.Modern).AsBool();

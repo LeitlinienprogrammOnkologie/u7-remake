@@ -11,9 +11,12 @@ public static class ArtLook
     /// <summary>
     /// The redrawn art (a pack under assets/hires, made by scripts/upscale),
     /// or null for the original art, which is also what shows while the pack
-    /// hasn't been made.
+    /// hasn't been made. The original is the default (the user's word,
+    /// 2026-10-13: the upscaled packs look bad; the painted faces,
+    /// <see cref="PaintedFaces"/>, stay). The console's <c>art pack</c>,
+    /// kept in <c>saves/settings.cfg</c>.
     /// </summary>
-    public static string? Pack = "nxbrz";
+    public static string? Pack;
 
     /// <summary>Buffer pixels a world pixel is painted as, each way, without a pack (1: the original resolution).</summary>
     public static int Scale = 1;

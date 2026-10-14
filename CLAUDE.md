@@ -91,12 +91,11 @@ how each system maps to Exult) and [README.md](README.md) (data setup).
     Load / Delete / Cancel and Quit below, dark wood & gold. Opened by Esc
     when no gumps are open (Exult's Esc opens its menu) and by the
     paperdoll's disk; F5/F9 stay the quick save and load.
-  - **Hi-res art** (`ArtLook`, 2026-10-10): the art redrawn at 4x by the
-    4x-NXbrz model everywhere (world, gumps, items, portraits), from the
-    original and five models side by side (`scripts/upscale/compare.py`);
-    turned back into palette art, its colours mixed between two entries,
-    the sharp fill on. Made locally into `assets/hires/` (README); without
-    it the original art shows.
+  - **Original pixel art** (`ArtLook.Pack`, 2026-10-13): the world, gumps
+    and items in the original art; the AI-upscaled packs (4x-NXbrz was the
+    pick of 2026-10-10, made locally into `assets/hires/`, README) look bad
+    and are off by default (`art pack nxbrz` for a look, kept in
+    `saves/settings.cfg`). The painted faces stay: they are very good.
   - **Painted ground** (2026-10-12): an outside AI paints each ground
     material once (sea, calm sea, grass, mud, sand, swamp, cave floor and
     rock: seamless 512x512 textures), and `scripts/upscale/ground.py`

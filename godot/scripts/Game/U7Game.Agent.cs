@@ -895,6 +895,7 @@ public partial class U7Game
                 else if (parts.Length > 2 && parts[1] == "pack")
                 {
                     U7.Rendering.ArtLook.Pack = parts[2] == "original" ? null : parts[2];
+                    Settings.Set("art", "pack", parts[2]);
                     _world.Art?.UsePack(U7.Rendering.ArtLook.Pack, U7.Rendering.ArtLook.Scale);
                     _conversation.Refresh(); // its faces, fetched as the talk changes
                 }
